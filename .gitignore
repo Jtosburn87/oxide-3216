@@ -1,0 +1,13 @@
+# build output
+/build/
+/out/
+/dist/
+*.zip
+
+# Steinberg ASIO SDK: licensed separately, never commit it
+/sdk/
+
+# editor / OS
+.vs/
+.vscode/
+Thumbs.db
