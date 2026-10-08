@@ -958,8 +958,17 @@ namespace
 
         std::vector<float> got (48000);
         tape.readTrack (0, 0, got.data(), 48000);
-        check (got[9999] == 0.5f && got[10000] == 0.25f && got[19999] == 0.25f && got[20000] == 0.5f && got[47999] == 0.5f,
-               "only the In..Out region was replaced, to the sample");
+        check (got[9999] == 0.5f && got[20000] == 0.5f && got[47999] == 0.5f, "nothing outside In..Out was touched");
+        check (got[10480] == 0.25f && got[15000] == 0.25f && got[19519] == 0.25f, "the new take fills the region between the fades");
+        constexpr int fade = 480;   // 10 ms at 48 kHz
+        std::printf ("      punch-in fade: %.3f at the In point, %.3f halfway, %.3f after 10 ms\n",
+                     got[10000], got[10000 + fade / 2], got[10000 + fade]);
+        check (near (got[10000], 0.5f, 1.0e-3f) && near (got[10000 + fade / 2], 0.375f, 0.01f) && near (got[19999], 0.5f, 1.0e-3f),
+               "10 ms crossfades at punch-in and punch-out");
+        float maxStep = 0.0f;
+        for (int i = 9990; i < 20010; ++i)
+            maxStep = juce::jmax (maxStep, std::abs (got[(size_t) i + 1] - got[(size_t) i]));
+        check (maxStep < 0.002f, "no jumps at the punch points (smooth)");
         check (near (heardBefore, 0.5f) && near (heardDuring, 0.25f), "armed track plays the old take before the punch, the input during it");
 
         // Loop: a ramp on track 2, In 1000, Out 3000.

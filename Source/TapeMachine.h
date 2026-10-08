@@ -75,6 +75,9 @@ public:
     juce::int64 getInPoint() const noexcept  { return inPoint.load(); }
     juce::int64 getOutPoint() const noexcept { return outPoint.load(); }
     std::atomic<bool> loopOn { false }, punchOn { false };
+
+    /** Crossfade at each end of a punch, so punching in and out is smooth. */
+    static constexpr double punchFadeMs = 10.0;
     bool hasRegion() const noexcept { return outPoint.load() > inPoint.load(); }
 
     /** Replaces a track with new audio (session loading). Message thread, transport stopped. */
@@ -144,6 +147,8 @@ private:
     double wowPhase = 0.0, flutterPhase1 = 0.0, flutterPhase2 = 0.0;
     std::array<float, Config::maxBlock> wowDelay {};
     std::array<float, Config::maxBlock> playScratch {};
+    std::array<float, Config::maxBlock> fadeScratch {};
+    float punchGain (juce::int64 position, juce::int64 punchIn, juce::int64 punchOut) const noexcept;
     int wowBase (const Speed&) const noexcept;
     void processSegment (float* const* tapeOut, int offset, int count,
                          bool isPlay, bool rec, bool character, const Speed& sp, int delay) noexcept;

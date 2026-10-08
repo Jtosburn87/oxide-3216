@@ -407,11 +407,12 @@ void TapeMachine::processSegment (float* const* tapeOut, int offset, int count,
         }
         else if (punch)
         {
-            // Auto-input: hear the old take until the punch-in point, the input inside the region.
+            // Auto-input: hear the old take until the punch-in point, the input inside the region,
+            // crossfading at both ends exactly as the recording does.
             for (int i = 0; i < count; ++i)
             {
-                const auto heard = pos + i;
-                out[i] = (heard >= punchIn && heard < punchOut) ? input[i] : play[i];
+                const float g = punchGain (pos + i, punchIn, punchOut);
+                out[i] = input[i] * g + play[i] * (1.0f - g);
             }
         }
         else
@@ -428,7 +429,24 @@ void TapeMachine::processSegment (float* const* tapeOut, int offset, int count,
                 a = juce::jmax (a, punchIn);
                 b = juce::jmin (b, punchOut);
             }
-            if (b > a)
+            if (b > a && punch)
+            {
+                // Smooth punch: crossfade from the old take into the new one after the In point,
+                // and back to the old take before the Out point.
+                const int len = (int) (b - a);
+                float* mixed = fadeScratch.data();
+                readTrack (t, a, mixed, len);
+                const float* fresh = input + (a - w0);
+                for (int i = 0; i < len; ++i)
+                {
+                    const float g = punchGain (a + i, punchIn, punchOut);
+                    mixed[i] = fresh[i] * g + mixed[i] * (1.0f - g);
+                }
+                write (t, a, mixed, len);
+                trackRevision[(size_t) t].fetch_add (1, std::memory_order_relaxed);
+                recordedEnd = juce::jmax (recordedEnd, b);
+            }
+            else if (b > a)
             {
                 write (t, a, input + (a - w0), (int) (b - a));
                 trackRevision[(size_t) t].fetch_add (1, std::memory_order_relaxed);
@@ -469,4 +487,23 @@ void TapeMachine::writeTrack (int track, juce::int64 start, const float* data, i
     ensureChunks (track, start, start + n - 1);
     write (track, start, data, n);
     trackRevision[(size_t) track].fetch_add (1);
+}
+
+float TapeMachine::punchGain (juce::int64 p, juce::int64 punchIn, juce::int64 punchOut) const noexcept
+{
+    if (p < punchIn || p >= punchOut)
+        return 0.0f;
+
+    // Fade length: punchFadeMs, but never more than half the region.
+    const auto fade = juce::jmin ((juce::int64) std::round (punchFadeMs * 0.001 * sampleRate), (punchOut - punchIn) / 2);
+    if (fade <= 0)
+        return 1.0f;
+
+    const auto edge = juce::jmin (p - punchIn, punchOut - 1 - p);   // samples from the nearer end of the region
+    if (edge >= fade)
+        return 1.0f;
+
+    // Raised cosine: the old and new gains always add up to one.
+    const float x = ((float) edge + 0.5f) / (float) fade;
+    return 0.5f - 0.5f * std::cos (x * juce::MathConstants<float>::pi);
 }
