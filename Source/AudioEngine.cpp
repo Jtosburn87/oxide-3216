@@ -47,6 +47,13 @@ AudioEngine::AudioEngine()
     }
 
     mainFader = &params.add ("main.fader", "Main fader", 0.0f, 100.0f, 80.0f);
+    resetBusNames();
+}
+
+void AudioEngine::resetBusNames()
+{
+    for (int k = 0; k < Config::numSubs; ++k) subNames[(size_t) k] = defaultSubName (k);
+    for (int k = 0; k < Config::numAux; ++k)  auxNames[(size_t) k] = defaultAuxName (k);
 }
 
 AudioEngine::~AudioEngine()

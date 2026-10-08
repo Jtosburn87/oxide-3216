@@ -84,6 +84,8 @@ std::uint64_t SessionController::fingerprint() const
         h = mix (h, engine.getPatch (d));
     for (auto* s : engine.inputStrips)  h = mix (h, s->name);
     for (auto* s : engine.returnStrips) h = mix (h, s->name);
+    for (auto& n : engine.subNames) h = mix (h, n);
+    for (auto& n : engine.auxNames) h = mix (h, n);
     h = mix (h, engine.projectName.toString());
 
     const auto chain = [&h] (const InsertChain& c)

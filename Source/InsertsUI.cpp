@@ -229,7 +229,11 @@ void InsertsSection::paint (juce::Graphics& g)
     {
         const auto cell = juce::Rectangle<int> ((int) i * cellW, 0, cellW, getHeight());
         g.setColour (legend);
-        g.drawText (cells[i].title, cell.withHeight (14), juce::Justification::centred, false);
+        const int k = (int) i;
+        const auto title = k < Config::numSubs ? engine.subNames[(size_t) k]
+                         : k < Config::numSubs + Config::numAux ? engine.auxNames[(size_t) (k - Config::numSubs)]
+                         : cells[i].title;
+        g.drawFittedText (title, cell.withHeight (14).reduced (2, 0), juce::Justification::centred, 1, 0.7f);
         if (i == (size_t) Config::numSubs || i == cells.size() - 1)
         {
             g.setColour (juce::Colour (0xff8e9598).withAlpha (0.6f));

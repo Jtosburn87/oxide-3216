@@ -94,6 +94,11 @@ Session::Result Session::save (AudioEngine& e, const juce::File& folder, TrackRe
     forEachStrip (e, [&] (ChannelStrip& s) { names->setProperty (s.idPrefix, s.name); });
     root->setProperty ("stripNames", juce::var (names));
 
+    auto* busNames = new juce::DynamicObject();
+    for (int k = 0; k < Config::numSubs; ++k) busNames->setProperty ("sub" + juce::String (k + 1), e.subNames[(size_t) k]);
+    for (int k = 0; k < Config::numAux; ++k)  busNames->setProperty ("aux" + juce::String (k + 1), e.auxNames[(size_t) k]);
+    root->setProperty ("busNames", juce::var (busNames));
+
     juce::Array<juce::var> cables;
     for (int d = 0; d < AudioEngine::Patch::numDestinations; ++d)
         for (int s = 0; s < AudioEngine::Patch::numSources; ++s)
@@ -169,6 +174,7 @@ void Session::reset (AudioEngine& e)
     for (auto* p : e.params.all())
         p->reset();
     forEachStrip (e, [] (ChannelStrip& s) { s.name = defaultStripName (s); });
+    e.resetBusNames();
     e.clearPatch();
     forEachChain (e, [] (InsertChain& c) { c.clearAll(); });
     e.tape.eraseAll();
@@ -204,6 +210,16 @@ Session::Result Session::load (AudioEngine& e, PluginManager* plugins, const juc
             if (names->hasProperty (s.idPrefix))
                 s.name = names->getProperty (s.idPrefix).toString();
         });
+
+    if (auto* busNames = json["busNames"].getDynamicObject())
+    {
+        for (int k = 0; k < Config::numSubs; ++k)
+            if (busNames->hasProperty ("sub" + juce::String (k + 1)))
+                e.subNames[(size_t) k] = busNames->getProperty ("sub" + juce::String (k + 1)).toString();
+        for (int k = 0; k < Config::numAux; ++k)
+            if (busNames->hasProperty ("aux" + juce::String (k + 1)))
+                e.auxNames[(size_t) k] = busNames->getProperty ("aux" + juce::String (k + 1)).toString();
+    }
 
     if (auto* cables = json["patch"].getArray())
         for (auto& c : *cables)

@@ -88,6 +88,13 @@ public:
     InsertChain masterInserts { "Master" };
     std::array<Param*, Config::numAux> auxReturnPan {};   // -1..1: balance of the stereo return (it comes back at unity)
 
+    // Scribble-strip names of the subs and the aux masters (message thread; saved with the session).
+    std::array<juce::String, Config::numSubs> subNames;
+    std::array<juce::String, Config::numAux> auxNames;
+    static juce::String defaultSubName (int k) { return "Sub " + juce::String (k + 1); }
+    static juce::String defaultAuxName (int k) { return "A" + juce::String (k + 1); }
+    void resetBusNames();
+
     /** Extra delay added by plugins (latency compensation + master inserts), in samples. */
     int getPluginLatency() const noexcept { return pluginLatency.load (std::memory_order_relaxed); }
     Param* mainFader = nullptr;

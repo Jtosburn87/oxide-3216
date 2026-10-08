@@ -439,7 +439,7 @@ CentreSection::CentreSection (AudioEngine& e, PluginContext* plugins)
     for (int i = 0; i < Config::numSubs + Config::numAux; ++i)
     {
         const bool isSub = i < Config::numSubs;
-        const auto name = isSub ? "Sub " + juce::String (i + 1) : "A" + juce::String (i - Config::numSubs + 1);
+        const auto name = isSub ? AudioEngine::defaultSubName (i) : AudioEngine::defaultAuxName (i - Config::numSubs);
         auto* f = busFaders.add (new Fader (isSub ? *engine.subFader[(size_t) i] : *engine.auxMaster[(size_t) (i - Config::numSubs)], 16));
         f->slider.getProperties().set ("capWidth", 30);
         f->slider.setTitle (name + (isSub ? " fader" : " master"));
@@ -447,6 +447,17 @@ CentreSection::CentreSection (AudioEngine& e, PluginContext* plugins)
         auto* l = busScribbles.add (new juce::Label());
         setupScribble (*l, name);
         l->setFont (ConsoleLookAndFeel::uiFont (12.0f, true));
+        l->setEditable (false, true, false);   // double-click to rename
+        l->setTooltip ("Double-click to rename");
+        l->onTextChange = [this, l, i]
+        {
+            auto& stored = i < Config::numSubs ? engine.subNames[(size_t) i] : engine.auxNames[(size_t) (i - Config::numSubs)];
+            const auto text = l->getText().trim();
+            stored = text.isNotEmpty() ? text : (i < Config::numSubs ? AudioEngine::defaultSubName (i) : AudioEngine::defaultAuxName (i - Config::numSubs));
+            l->setText (stored, juce::dontSendNotification);
+            repaint();
+            inserts.repaint();
+        };
         addAndMakeVisible (l);
     }
 
@@ -641,7 +652,7 @@ void CentreSection::paint (juce::Graphics& g)
     {
         const int x0 = groupEqBox.getX() + 4 + k * colWidth;
         g.setColour (legend);
-        g.drawText ("Sub " + juce::String (k + 1), juce::Rectangle<int> (x0, groupEqBox.getY() + 7, colWidth, 12), juce::Justification::centred, false);
+        g.drawFittedText (engine.subNames[(size_t) k], juce::Rectangle<int> (x0 + 2, groupEqBox.getY() + 7, colWidth - 4, 12), juce::Justification::centred, 1, 0.7f);
         if (k > 0)
         {
             g.setColour (juce::Colour (0xff8e9598).withAlpha (0.5f));
@@ -663,6 +674,23 @@ void CentreSection::paint (juce::Graphics& g)
 void CentreSection::update()
 {
     busPanel.update();
+
+    // Names can change underneath (a session was opened).
+    bool renamed = false;
+    for (int i = 0; i < busScribbles.size(); ++i)
+    {
+        const auto& name = i < Config::numSubs ? engine.subNames[(size_t) i] : engine.auxNames[(size_t) (i - Config::numSubs)];
+        if (! busScribbles[i]->isBeingEdited() && busScribbles[i]->getText() != name)
+        {
+            busScribbles[i]->setText (name, juce::dontSendNotification);
+            renamed = true;
+        }
+    }
+    if (renamed)
+    {
+        repaint();
+        inserts.repaint();
+    }
 
     const int holdBefore = limitHold;
     if (engine.takeLimiting())

@@ -1074,6 +1074,8 @@ namespace
             a.busComp.ratio->set (4.0f);
             a.tape.speed->set (0.0f);
             a.inputStrips[0]->name = "Kick";
+            a.subNames[1] = "Drums";
+            a.auxNames[0] = "Plate";
             a.setPatch (AudioEngine::Patch::returnIn + 3, std::uint64_t (1) << (AudioEngine::Patch::auxOut + 1));
             a.tape.writeTrack (4, 0, take.data(), (int) take.size());
             a.tape.setLength ((juce::int64) take.size());
@@ -1101,6 +1103,7 @@ namespace
                    && b.returnStrips[5]->controls.fader->get() == 64.0f && b.busComp.ratio->get() == 4.0f && b.tape.speed->get() == 0.0f,
                    "controls restored");
             check (b.inputStrips[0]->name == "Kick" && b.inputStrips[1]->name == "Input 2", "strip names restored");
+            check (b.subNames[1] == "Drums" && b.subNames[0] == "Sub 1" && b.auxNames[0] == "Plate" && b.auxNames[1] == "A2", "sub and aux names restored");
             check (b.getPatch (AudioEngine::Patch::returnIn + 3) == (std::uint64_t (1) << (AudioEngine::Patch::auxOut + 1)), "patch cables restored");
             check (b.tape.getLength() == (juce::int64) take.size() && b.tape.getInPoint() == 1000 && b.tape.getOutPoint() == 5000 && b.tape.loopOn,
                    "tape length and locators restored");
