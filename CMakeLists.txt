@@ -28,7 +28,10 @@ endif()
 # Code shared by the app and the tests. JUCE modules are compiled once, into this
 # library (linked PRIVATE); their include paths and defines are re-exported below.
 add_library(ConsoleTapeCore STATIC
-    Source/AudioEngine.cpp)
+    Source/AudioEngine.cpp
+    Source/ChannelStrip.cpp
+    Source/Params.cpp
+    Source/TapeMachine.cpp)
 target_include_directories(ConsoleTapeCore PUBLIC Source "${ASIO_SDK_DIR}/common")
 target_compile_definitions(ConsoleTapeCore PUBLIC
     JUCE_ASIO=1
@@ -59,7 +62,9 @@ target_sources(ConsoleTape PRIVATE
     Source/Main.cpp
     Source/MainComponent.cpp
     Source/AudioSettingsComponent.cpp
-    Source/ConsoleLookAndFeel.cpp)
+    Source/ConsoleLookAndFeel.cpp
+    Source/Desk.cpp
+    Source/Widgets.cpp)
 
 target_link_libraries(ConsoleTape PRIVATE
     ConsoleTapeCore

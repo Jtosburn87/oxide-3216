@@ -3,19 +3,9 @@
 #include <juce_gui_extra/juce_gui_extra.h>
 #include "AudioEngine.h"
 #include "ConsoleLookAndFeel.h"
+#include "Desk.h"
 
-/** Vertical LED peak meter, -60 to 0 dBFS, with a short peak hold. */
-class LedMeter : public juce::Component
-{
-public:
-    void setLevel (float linearPeak);
-    void paint (juce::Graphics&) override;
-
-private:
-    float shownDb = -100.0f, holdDb = -100.0f;
-    int holdFrames = 0;
-};
-
+/** Top bar (name plate, audio device, zoom, Fit, status) above the zoomable desk. */
 class MainComponent : public juce::Component,
                       private juce::Timer,
                       private juce::ChangeListener
@@ -31,25 +21,24 @@ private:
     AudioEngine& engine;
     std::function<void()> saveSettings;
 
-    juce::TextButton audioButton { "Audio device" }, toneButton { "Test tone" };
-    juce::Label statusLabel;
+    juce::TextButton audioButton { "Audio device" }, toneButton { "Test tone" }, fitButton { "Fit" };
+    juce::Slider zoomSlider;
+    juce::Label zoomLabel, statusLabel;
 
-    std::array<LedMeter, AudioEngine::numConsoleInputs> inputMeters;
-    std::array<juce::Label, AudioEngine::numConsoleInputs> inputNames, inputSources;
-    std::array<LedMeter, 2> mainMeters;
-    juce::Slider mainFader;
-    juce::Label mainLabel;
+    Desk desk;
+    juce::Component deskHolder;   // sized to the zoomed desk, so the viewport scrolls correctly
+    juce::Viewport viewport;
+    bool fittedOnce = false;
 
     juce::Component::SafePointer<juce::DialogWindow> settingsWindow;
 
     juce::String deviceText;
     std::uint64_t lastCallbackCount = 0;
-    int timerTicks = 0;
 
     void timerCallback() override;
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
     void openAudioSettings();
-    void refreshLabels();
-
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
+    void refreshDeviceText();
+    void applyZoom();
+    void fitToWindow();
 };

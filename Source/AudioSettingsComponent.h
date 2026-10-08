@@ -26,6 +26,8 @@ private:
     juce::Label mainLabels[2];
     juce::ComboBox mainBoxes[2];
     juce::TextButton autoMapButton { "Map 1 to 1" };
+    juce::Label offsetTitle, offsetHelp;
+    juce::Slider offsetSlider;
 
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
     void refreshChannelLists();

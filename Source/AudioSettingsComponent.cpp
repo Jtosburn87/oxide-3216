@@ -77,6 +77,28 @@ AudioSettingsComponent::AudioSettingsComponent (AudioEngine& e, std::function<vo
     autoMapButton.onClick = [this] { autoMap(); };
     addAndMakeVisible (autoMapButton);
 
+    offsetTitle.setText ("Recording offset", juce::dontSendNotification);
+    offsetTitle.setFont (ConsoleLookAndFeel::uiFont (15.0f, true));
+    addAndMakeVisible (offsetTitle);
+    offsetHelp.setText ("Overdubs are shifted by the latency the driver reports. If they still land early or late, "
+                        "correct it here (samples, + moves recordings earlier).", juce::dontSendNotification);
+    offsetHelp.setFont (ConsoleLookAndFeel::uiFont (13.0f));
+    offsetHelp.setColour (juce::Label::textColourId, ConsoleColours::legend.withAlpha (0.75f));
+    offsetHelp.setJustificationType (juce::Justification::topLeft);
+    addAndMakeVisible (offsetHelp);
+    offsetSlider.setSliderStyle (juce::Slider::IncDecButtons);
+    offsetSlider.setTextBoxStyle (juce::Slider::TextBoxLeft, false, 70, 24);
+    offsetSlider.setRange (-4800.0, 4800.0, 1.0);
+    offsetSlider.setValue (engine.getRecordOffset(), juce::dontSendNotification);
+    offsetSlider.setTitle ("Recording offset in samples");
+    offsetSlider.onValueChange = [this]
+    {
+        engine.setRecordOffset ((int) offsetSlider.getValue());
+        refreshChannelLists();
+        if (onChanged) onChanged();
+    };
+    addAndMakeVisible (offsetSlider);
+
     engine.getDeviceManager().addChangeListener (this);
     refreshChannelLists();
 
@@ -115,6 +137,8 @@ void AudioSettingsComponent::refreshChannelLists()
                + juce::String ((int) sr) + " Hz, " + juce::String (buffer) + " samples.  Reported latency in "
                + juce::String (inLat) + " + out " + juce::String (outLat) + " samples ("
                + juce::String (sr > 0 ? 1000.0 * (inLat + outLat) / sr : 0.0, 1) + " ms round trip).";
+        if (engine.getRecordOffset() != 0)
+            status << "  Recording compensation: " << (inLat + outLat + engine.getRecordOffset()) << " samples.";
     }
 
     latencyLabel.setText (status, juce::dontSendNotification);
@@ -174,4 +198,10 @@ void AudioSettingsComponent::resized()
         mainLabels[side].setBounds (row.removeFromLeft (64));
         mainBoxes[side].setBounds (row);
     }
+
+    area.removeFromTop (18);
+    offsetTitle.setBounds (area.removeFromTop (26));
+    offsetSlider.setBounds (area.removeFromTop (28).removeFromLeft (160));
+    area.removeFromTop (4);
+    offsetHelp.setBounds (area.removeFromTop (40));
 }

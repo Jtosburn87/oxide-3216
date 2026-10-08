@@ -33,6 +33,56 @@ juce::Font ConsoleLookAndFeel::uiFont (float height, bool bold)
     return juce::Font (juce::FontOptions ("Bahnschrift", height, bold ? juce::Font::bold : juce::Font::plain));
 }
 
+void ConsoleLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int width, int height, float pos,
+                                           float startAngle, float endAngle, juce::Slider& slider)
+{
+    // Small console knob: printed ticks around a dark skirt, white pointer line, coloured centre cap.
+    const auto bounds = juce::Rectangle<int> (x, y, width, height).toFloat();
+    const auto c = bounds.getCentre();
+    const float outer = juce::jmin (bounds.getWidth(), bounds.getHeight()) * 0.5f;
+    const float skirt = outer - 5.0f;
+
+    // Printed tick marks.
+    g.setColour (juce::Colour (0xffc3c8ca));
+    constexpr int ticks = 11;
+    for (int i = 0; i < ticks; ++i)
+    {
+        const float a = startAngle + (endAngle - startAngle) * (float) i / (ticks - 1);
+        const auto p1 = c.getPointOnCircumference (outer - 0.5f, a), p2 = c.getPointOnCircumference (outer - 3.5f, a);
+        g.drawLine ({ p1, p2 }, 1.2f);
+    }
+
+    // Shadow and skirt.
+    g.setColour (juce::Colours::black.withAlpha (0.6f));
+    g.fillEllipse (juce::Rectangle<float> (skirt * 2, skirt * 2).withCentre (c.translated (0.0f, 1.5f)));
+    juce::ColourGradient grad (juce::Colour (0xff53585b), c.x - skirt * 0.2f, c.y - skirt * 0.45f,
+                               juce::Colour (0xff1b1d1f), c.x + skirt, c.y + skirt, true);
+    g.setGradientFill (grad);
+    g.fillEllipse (juce::Rectangle<float> (skirt * 2, skirt * 2).withCentre (c));
+    g.setColour (juce::Colours::black);
+    g.drawEllipse (juce::Rectangle<float> (skirt * 2, skirt * 2).withCentre (c), 1.0f);
+
+    // Coloured cap.
+    const auto capColour = juce::Colour ((juce::uint32) (juce::int64) slider.getProperties().getWithDefault ("cap", (juce::int64) 0xff7b8185));
+    const float capR = skirt * 0.52f;
+    g.setGradientFill (juce::ColourGradient (capColour.brighter (0.15f), c.x, c.y - capR,
+                                             capColour.darker (0.25f), c.x, c.y + capR, false));
+    g.fillEllipse (juce::Rectangle<float> (capR * 2, capR * 2).withCentre (c));
+    g.setColour (juce::Colours::black.withAlpha (0.7f));
+    g.drawEllipse (juce::Rectangle<float> (capR * 2, capR * 2).withCentre (c), 0.8f);
+
+    // Pointer on the skirt.
+    const float angle = startAngle + pos * (endAngle - startAngle);
+    g.setColour (juce::Colour (0xfff2f2ee));
+    g.drawLine ({ c.getPointOnCircumference (skirt - 0.5f, angle), c.getPointOnCircumference (capR + 0.5f, angle) }, 2.0f);
+
+    if (slider.hasKeyboardFocus (false))
+    {
+        g.setColour (focus);
+        g.drawEllipse (bounds.reduced (0.5f), 1.6f);
+    }
+}
+
 int ConsoleLookAndFeel::getSliderThumbRadius (juce::Slider& slider)
 {
     return slider.getSliderStyle() == juce::Slider::LinearVertical ? 15 : LookAndFeel_V4::getSliderThumbRadius (slider);

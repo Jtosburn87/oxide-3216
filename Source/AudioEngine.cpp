@@ -2,24 +2,27 @@
 
 namespace
 {
-    constexpr float centrePan = 0.70710678f;   // -3 dB per side for a centred mono source
-    constexpr float testToneLevel = 0.125893f; // -18 dBFS
-    constexpr int   maxBlock = 512;            // larger device blocks are processed in chunks
+    constexpr float testToneLevel = 0.125893f;   // -18 dBFS
+    constexpr int maxBlock = Config::maxBlock;
 }
 
 AudioEngine::AudioEngine()
 {
     for (int c = 0; c < numConsoleInputs; ++c)
-    {
         inputSource[(size_t) c].store (c);
-        inputPeak[(size_t) c].store (0.0f);
-    }
     mainOutput[0].store (0);
     mainOutput[1].store (1);
     mainPeak[0].store (0.0f);
     mainPeak[1].store (0.0f);
     inputSlot.fill (-1);
     outputSlot.fill (-1);
+
+    for (int i = 0; i < Config::numInputStrips; ++i)
+        inputStrips.add (new ChannelStrip (params, "ch" + juce::String (i + 1), "Input " + juce::String (i + 1)));
+    for (int i = 0; i < Config::numReturnStrips; ++i)
+        returnStrips.add (new ChannelStrip (params, "rt" + juce::String (i + 1), "Return " + juce::String (i + 1)));
+
+    mainFader = &params.add ("main.fader", "Main fader", 0.0f, 100.0f, 80.0f);
 }
 
 AudioEngine::~AudioEngine()
@@ -55,6 +58,7 @@ void AudioEngine::initialise (const juce::XmlElement* savedState)
             setInputSource (c, routing->getIntAttribute ("in" + juce::String (c + 1), c));
         setMainOutput (0, routing->getIntAttribute ("mainL", 0));
         setMainOutput (1, routing->getIntAttribute ("mainR", 1));
+        setRecordOffset (routing->getIntAttribute ("recordOffset", 0));
     }
 
     deviceManager.addAudioCallback (this);
@@ -72,7 +76,24 @@ std::unique_ptr<juce::XmlElement> AudioEngine::createStateXml() const
         routing->setAttribute ("in" + juce::String (c + 1), getInputSource (c));
     routing->setAttribute ("mainL", getMainOutput (0));
     routing->setAttribute ("mainR", getMainOutput (1));
+    routing->setAttribute ("recordOffset", getRecordOffset());
     return xml;
+}
+
+void AudioEngine::setPower (bool on)
+{
+    if (on == isPowered())
+        return;
+
+    if (on)
+    {
+        deviceManager.restartLastAudioDevice();
+    }
+    else
+    {
+        tape.stop();
+        deviceManager.closeAudioDevice();
+    }
 }
 
 void AudioEngine::setInputSource (int consoleChannel, int deviceInput)
@@ -97,9 +118,16 @@ int AudioEngine::getMainOutput (int side) const
     return (side == 0 || side == 1) ? mainOutput[(size_t) side].load() : -1;
 }
 
-float AudioEngine::takeInputPeak (int consoleChannel)
+void AudioEngine::setRecordOffset (int samples)
 {
-    return juce::isPositiveAndBelow (consoleChannel, numConsoleInputs) ? inputPeak[(size_t) consoleChannel].exchange (0.0f) : 0.0f;
+    recordOffset.store (juce::jlimit (-4800, 4800, samples));
+
+    tape.setLatency (reportedLatency.load() + recordOffset.load());   // takes effect for the next take
+}
+
+float AudioEngine::takeInputPeak (int strip)
+{
+    return juce::isPositiveAndBelow (strip, inputStrips.size()) ? inputStrips[strip]->takePeak() : 0.0f;
 }
 
 float AudioEngine::takeMainPeak (int side)
@@ -110,12 +138,11 @@ float AudioEngine::takeMainPeak (int side)
 void AudioEngine::raisePeak (std::atomic<float>& peak, float value) noexcept
 {
     auto current = peak.load (std::memory_order_relaxed);
-    while (value > current && ! peak.compare_exchange_weak (current, value, std::memory_order_relaxed))
-    {
-    }
+    while (value > current && ! peak.compare_exchange_weak (current, value, std::memory_order_relaxed)) {}
 }
 
-void AudioEngine::prepare (double sampleRate, const juce::BigInteger& activeInputs, const juce::BigInteger& activeOutputs)
+void AudioEngine::prepare (double sampleRate, const juce::BigInteger& activeInputs, const juce::BigInteger& activeOutputs,
+                           int reportedRoundTripLatency)
 {
     currentSampleRate = sampleRate > 0 ? sampleRate : 48000.0;
     tonePhase = 0.0;
@@ -131,11 +158,18 @@ void AudioEngine::prepare (double sampleRate, const juce::BigInteger& activeInpu
     for (int ch = 0; ch < maxDeviceChannels; ++ch)
         if (activeOutputs[ch])
             outputSlot[(size_t) ch] = slot++;
+
+    for (auto* s : inputStrips)  s->prepare (currentSampleRate);
+    for (auto* s : returnStrips) s->prepare (currentSampleRate);
+    reportedLatency.store (reportedRoundTripLatency);
+    tape.prepare (currentSampleRate, reportedRoundTripLatency + recordOffset.load());
+    mainGainL.prepare (currentSampleRate, Dsp::faderGain (mainFader->get()));
 }
 
 void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
 {
-    prepare (device->getCurrentSampleRate(), device->getActiveInputChannels(), device->getActiveOutputChannels());
+    prepare (device->getCurrentSampleRate(), device->getActiveInputChannels(), device->getActiveOutputChannels(),
+             device->getInputLatencyInSamples() + device->getOutputLatencyInSamples());
 }
 
 void AudioEngine::audioDeviceStopped() {}
@@ -153,8 +187,8 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputs, 
             juce::FloatVectorOperations::clear (outputs[o], numSamples);
 
     // Resolve routing once per callback.
-    const float* sources[numConsoleInputs] {};
-    for (int c = 0; c < numConsoleInputs; ++c)
+    const float* sources[Config::numInputStrips] {};
+    for (int c = 0; c < Config::numInputStrips; ++c)
     {
         const int dev = inputSource[(size_t) c].load (std::memory_order_relaxed);
         const int slot = juce::isPositiveAndBelow (dev, maxDeviceChannels) ? inputSlot[(size_t) dev] : -1;
@@ -169,45 +203,71 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputs, 
         mainOut[side] = juce::isPositiveAndBelow (slot, numOutputs) ? outputs[slot] : nullptr;
     }
 
-    const float gain = mainGain.load (std::memory_order_relaxed);
+    bool anySolo = false;
+    for (auto* s : inputStrips)  anySolo = anySolo || s->controls.solo->on();
+    for (auto* s : returnStrips) anySolo = anySolo || s->controls.solo->on();
+
     const bool tone = testToneOn.load (std::memory_order_relaxed);
     const double toneInc = juce::MathConstants<double>::twoPi * 440.0 / currentSampleRate;
+    const float mainT = Dsp::faderGain (mainFader->get());
 
-    float mix[2][maxBlock];
+    const float* tapeInPtrs[Config::numTracks];
+    float* tapeOutPtrs[Config::numTracks];
 
     for (int start = 0; start < numSamples; start += maxBlock)
     {
         const int n = juce::jmin (maxBlock, numSamples - start);
-        juce::FloatVectorOperations::clear (mix[0], n);
-        juce::FloatVectorOperations::clear (mix[1], n);
+        juce::FloatVectorOperations::clear (mixL.data(), n);
+        juce::FloatVectorOperations::clear (mixR.data(), n);
 
-        for (int c = 0; c < numConsoleInputs; ++c)
+        // Input bank.
+        for (int c = 0; c < Config::numInputStrips; ++c)
+            inputStrips[c]->process (sources[c] != nullptr ? sources[c] + start : nullptr,
+                                     inputDirect[(size_t) c].data(), mixL.data(), mixR.data(), n, anySolo);
+
+        // Tape: channel direct outs are normalled to tape ins.
+        for (int t = 0; t < Config::numTracks; ++t)
         {
-            if (sources[c] == nullptr)
-                continue;
-
-            const float* in = sources[c] + start;
-            const auto range = juce::FloatVectorOperations::findMinAndMax (in, n);
-            raisePeak (inputPeak[(size_t) c], juce::jmax (range.getEnd(), -range.getStart()));
-            juce::FloatVectorOperations::addWithMultiply (mix[0], in, centrePan, n);
-            juce::FloatVectorOperations::addWithMultiply (mix[1], in, centrePan, n);
+            tapeInPtrs[t] = t < Config::numInputStrips ? inputDirect[(size_t) t].data() : nullptr;
+            tapeOutPtrs[t] = tapeOut[(size_t) t].data();
         }
+        tape.process (tapeInPtrs, tapeOutPtrs, n);
+
+        // Return bank: tape outs are normalled to return strip ins.
+        for (int r = 0; r < Config::numReturnStrips; ++r)
+            returnStrips[r]->process (tapeOut[(size_t) r].data(), returnDirect[(size_t) r].data(), mixL.data(), mixR.data(), n, anySolo);
 
         if (tone)
         {
             for (int i = 0; i < n; ++i)
             {
                 const float s = testToneLevel * (float) std::sin (tonePhase);
-                mix[0][i] += s;
-                mix[1][i] += s;
+                mixL[(size_t) i] += s;
+                mixR[(size_t) i] += s;
                 tonePhase += toneInc;
             }
             tonePhase = std::fmod (tonePhase, juce::MathConstants<double>::twoPi);
         }
 
+        // Main fader (one smoothed gain for both sides).
+        if (mainGainL.settled (mainT))
+        {
+            juce::FloatVectorOperations::multiply (mixL.data(), mainT, n);
+            juce::FloatVectorOperations::multiply (mixR.data(), mainT, n);
+        }
+        else
+        {
+            for (int i = 0; i < n; ++i)
+            {
+                const float g = mainGainL.next (mainT);
+                mixL[(size_t) i] *= g;
+                mixR[(size_t) i] *= g;
+            }
+        }
+
+        float* mix[2] = { mixL.data(), mixR.data() };
         for (int side = 0; side < 2; ++side)
         {
-            juce::FloatVectorOperations::multiply (mix[side], gain, n);
             const auto range = juce::FloatVectorOperations::findMinAndMax (mix[side], n);
             raisePeak (mainPeak[(size_t) side], juce::jmax (range.getEnd(), -range.getStart()));
 
