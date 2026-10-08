@@ -19,7 +19,10 @@ First time:
 
 THE CONSOLE
 -----------
-Left bank: 16 input channels. Right bank: 16 tape-return channels. Centre: tape machine,
+Left bank: 16 input channels. Right bank: 16 tape-return channels. Each strip's fader has a column
+beside it (after the reference console): Mute, Main and S1-S4 assigns, the channel meter, and Solo with
+its LED. Pan sits at the foot of the knob area.
+ Centre: tape machine,
 group EQs, bus compressor, inserts and aux returns, bus faders and the main fader.
 Zoom with the slider; "Fit" shows the whole console.
 The small "-" on the Equaliser, Gate, Compressor and Aux sends titles minimises that section on

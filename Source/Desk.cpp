@@ -59,7 +59,11 @@ namespace
         b.setColour (juce::TextButton::textColourOnId, juce::Colours::white);
     }
 
-    void paintColumn (juce::Graphics& g, juce::Rectangle<int> r)
+    // Channel strips have a taller fader section than the centre: the assign buttons and the meter sit in a
+    // column beside the fader (as on the reference console), and the knob area no longer holds them.
+    constexpr int stripFaderH = faderH + 84;
+
+    void paintColumn (juce::Graphics& g, juce::Rectangle<int> r, int faderHeight = faderH)
     {
         // Bridge cell.
         g.setColour (juce::Colour (0xff09090a));
@@ -70,7 +74,7 @@ namespace
         g.fillRect (r.getX(), bridgeH - 3, r.getWidth(), 1);
 
         // Mid-grey knob area (shorter when sections are minimised).
-        const int knobs = r.getHeight() - bridgeH - faderH;
+        const int knobs = r.getHeight() - bridgeH - faderHeight;
         g.setColour (stripGrey);
         g.fillRect (r.getX(), bridgeH, r.getWidth(), knobs);
         g.setColour (juce::Colours::white.withAlpha (0.14f));
@@ -78,7 +82,7 @@ namespace
 
         // Black fader area.
         g.setColour (faderArea);
-        g.fillRect (r.getX(), bridgeH + knobs, r.getWidth(), faderH);
+        g.fillRect (r.getX(), bridgeH + knobs, r.getWidth(), faderHeight);
         g.setColour (juce::Colours::black);
         g.fillRect (r.getX(), bridgeH + knobs, r.getWidth(), 1);
     }
@@ -181,6 +185,8 @@ StripComponent::StripComponent (ChannelStrip& s)
     redButton (mute);
     add (mute);
     add (solo);
+    solo.onStateChange = [this] { repaint (solo.getBounds().expanded (0, 14)); };   // the LED above it
+    fader.slider.getProperties().set ("capWidth", 30);
     add (fader);
     add (scribble);
 
@@ -339,8 +345,6 @@ std::vector<juce::Component*> StripComponent::sectionComponents (int bit)
 
 void StripComponent::resized()
 {
-    meter.setBounds (juce::Rectangle<int> (10, 64).withCentre ({ stripW / 2, bridgeH / 2 }));
-
     sections.clear();
     const int bx = 5, bw = stripW - 10;
     const int left = bx + 2, right = bx + bw - 2 - Knob::preferredWidth;
@@ -439,35 +443,57 @@ void StripComponent::resized()
         }
     });
 
-    box = { bx, y, bw, 12 + 20 + 4 + 20 + 2 + 50 + 2 };
-    sections.push_back ({ "Routing", box });
-    mainButton.setBounds (bx + 6, box.getY() + 10, bw - 12, 20);
-    {
-        auto row = juce::Rectangle<int> (bx + 4, box.getY() + 34, bw - 8, 20);
-        const int w = row.getWidth() / Config::numSubs;
-        for (auto* b : subButtons)
-            b->setBounds (row.removeFromLeft (w).reduced (1, 0));
-    }
-    pan.setBounds (juce::Rectangle<int> (Knob::preferredWidth, Knob::preferredHeight).withCentre ({ stripW / 2, box.getY() + 82 }));
+    // Pan, at the foot of the knob area. The assign buttons are in the fader column, as on the reference console.
+    box = { bx, y, bw, 10 + Knob::preferredHeight + 6 };
+    sections.push_back ({ "Pan", box });
+    pan.setBounds (juce::Rectangle<int> (Knob::preferredWidth, Knob::preferredHeight).withCentre ({ stripW / 2, box.getY() + 10 + Knob::preferredHeight / 2 }));
 
-    const int f = getHeight() - faderH;   // the fader area is always at the bottom
-    mute.setBounds (8, f + 8, 45, 20);
-    solo.setBounds (stripW - 8 - 45, f + 8, 45, 20);
+    // Fader section: the fader on the left; down the right, mute, main and sub assigns, the meter, then solo.
+    const int f = getHeight() - stripFaderH;   // the fader area is always at the bottom
     scribble.setBounds (4, getHeight() - 28, stripW - 8, 22);
-    fader.setBounds (8, f + 36, stripW - 16, scribble.getY() - 6 - (f + 36));
+    const int colX = 62, columnW = stripW - colX - 6;
+    fader.setBounds (2, f + 8, colX - 6, scribble.getY() - 6 - (f + 8));
+
+    int cy = f + 10;
+    mute.setBounds (colX, cy, columnW, 20);
+    cy += 28;
+    mainButton.setBounds (colX, cy, columnW, 20);
+    cy += 24;
+    for (auto* b : subButtons)
+    {
+        b->setBounds (colX, cy, columnW, 18);
+        cy += 20;
+    }
+    cy += 8;
+    solo.setBounds (colX, scribble.getY() - 8 - 20, columnW, 20);
+    // The meter fills the column down to just above the solo LED; its scale is printed to the left (paint).
+    meter.setBounds (colX + columnW - 12, cy, 10, solo.getY() - 30 - cy);
 }
 
 void StripComponent::paint (juce::Graphics& g)
 {
-    paintColumn (g, getLocalBounds());
+    paintColumn (g, getLocalBounds(), stripFaderH);
 
     for (auto& s : sections)
         paintSection (g, s.title, s.box, stripGrey);
 
-    // What the bridge meter shows.
+    // The meter's scale, printed to its left, and what it shows (input or output) underneath.
+    const auto m = meter.getBounds();
+    g.setFont (ConsoleLookAndFeel::uiFont (8.5f));
+    g.setColour (bridgeText.withAlpha (0.75f));
+    for (const int db : { 0, -10, -20, -40 })
+    {
+        const float yy = (float) m.getBottom() - (float) m.getHeight() * (float) (db + 60) / 60.0f;
+        g.drawText (juce::String (db), juce::Rectangle<float> ((float) m.getX() - 24.0f, yy - 5.0f, 21.0f, 10.0f), juce::Justification::centredRight, false);
+    }
     g.setFont (ConsoleLookAndFeel::uiFont (9.0f));
     g.setColour (meterInput ? amber : bridgeText.withAlpha (0.6f));
-    g.drawText (meterInput ? "in" : "out", juce::Rectangle<int> (0, meter.getBottom() + 1, getWidth(), 9), juce::Justification::centred, false);
+    g.drawText (meterInput ? "in" : "out", juce::Rectangle<int> (m.getX() - 10, m.getBottom() + 2, m.getWidth() + 20, 9), juce::Justification::centred, false);
+
+    // Solo LED above the solo button, lit while soloed.
+    const auto led = juce::Rectangle<float> (7.0f, 7.0f).withCentre (solo.getBounds().toFloat().getCentre().withY ((float) solo.getY() - 8.0f));
+    g.setColour (solo.getToggleState() ? juce::Colour (0xffff3b2f) : juce::Colour (0xff4a1512));
+    g.fillEllipse (led);
 
     g.setColour (juce::Colour (0xff2c2f31));
     g.fillRect (0, 0, 1, getHeight());
