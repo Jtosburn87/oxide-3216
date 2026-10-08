@@ -67,8 +67,9 @@ Locate: "Set In" / "Set Out" mark a region at the current position.
 
 Click the cassette label to rename the project; it is the default session and export name.
 
-Keyboard: Space play/stop, Home rewind to the start, Ctrl+N new, Ctrl+O open, Ctrl+S save,
-Ctrl+Shift+S save as, Ctrl+E export.
+Keyboard: Space play/stop, Home rewind, End fast forward, Ctrl+N new, Ctrl+O open, Ctrl+S save,
+Ctrl+Shift+S save as, Ctrl+E export. Options > "Keyboard shortcuts" changes any of these and adds
+keys for Play, Stop, Record and Return to zero.
 
 
 PATCH BAY

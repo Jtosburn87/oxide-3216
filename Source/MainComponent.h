@@ -13,6 +13,7 @@
 
 /** Top bar (name plate, audio device, zoom, Fit, status) above the zoomable desk. */
 class MainComponent : public juce::Component,
+                      public juce::ApplicationCommandTarget,
                       private juce::Timer,
                       private juce::ChangeListener
 {
@@ -25,7 +26,21 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
 
+    // Commands, each with keys the user can change (Options > Keyboard shortcuts).
+    juce::ApplicationCommandTarget* getNextCommandTarget() override { return nullptr; }
+    void getAllCommands (juce::Array<juce::CommandID>&) override;
+    void getCommandInfo (juce::CommandID, juce::ApplicationCommandInfo&) override;
+    bool perform (const InvocationInfo&) override;
+
 private:
+    enum CommandIDs
+    {
+        playStop = 1, play, stop, record, rewind, fastForward, returnToZero,
+        newSession, openSession, saveSession, saveSessionAs, exportMix
+    };
+    juce::ApplicationCommandManager commands;
+    juce::Component::SafePointer<juce::DialogWindow> keysWindow;
+    void openKeyMappings();
     AudioEngine& engine;
     std::function<void()> saveSettings;
     juce::PropertiesFile& settings;

@@ -79,6 +79,13 @@ MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionControll
     addAndMakeVisible (viewport);
     applyZoom();
 
+    // Keyboard shortcuts: the defaults, then whatever the user changed.
+    commands.registerAllCommandsForTarget (this);
+    commands.setFirstCommandTarget (this);
+    if (auto xml = settings.getXmlValue ("keyMappings"))
+        commands.getKeyMappings()->restoreFromXml (*xml);
+    commands.getKeyMappings()->addChangeListener (this);
+
     engine.getDeviceManager().addChangeListener (this);
     refreshDeviceText();
     startTimerHz (2);
@@ -91,6 +98,9 @@ MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionControll
 
 MainComponent::~MainComponent()
 {
+    commands.getKeyMappings()->removeChangeListener (this);
+    if (keysWindow != nullptr)
+        delete keysWindow.getComponent();
     saveSections();
     for (auto& w : sectionWindows)
         w = nullptr;
@@ -135,8 +145,16 @@ void MainComponent::openAudioSettings()
     settingsWindow = o.launchAsync();
 }
 
-void MainComponent::changeListenerCallback (juce::ChangeBroadcaster*)
+void MainComponent::changeListenerCallback (juce::ChangeBroadcaster* source)
 {
+    if (source == commands.getKeyMappings())
+    {
+        // Only the keys that differ from the defaults are stored.
+        if (auto xml = commands.getKeyMappings()->createXml (true))
+            settings.setValue ("keyMappings", xml.get());
+        if (saveSettings) saveSettings();
+        return;
+    }
     refreshDeviceText();
 }
 
@@ -273,54 +291,101 @@ void MainComponent::parentHierarchyChanged()
 
 void MainComponent::showSessionMenu()
 {
+    // Command items show whatever keys are currently assigned.
     juce::PopupMenu m;
-    m.addItem (1, "New session", true, false);
-    m.addItem (2, "Open session...   (Ctrl+O)");
+    m.addCommandItem (&commands, newSession);
+    m.addCommandItem (&commands, openSession, "Open session...");
     m.addSeparator();
-    m.addItem (3, "Save   (Ctrl+S)");
-    m.addItem (4, "Save as...   (Ctrl+Shift+S)");
+    m.addCommandItem (&commands, saveSession);
+    m.addCommandItem (&commands, saveSessionAs, "Save as...");
     m.addSeparator();
-    m.addItem (5, "Export mix to WAV...   (Ctrl+E)");
-    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (sessionButton), [this] (int r)
-    {
-        switch (r)
-        {
-            case 1: sessions.newSession(); break;
-            case 2: sessions.openSession(); break;
-            case 3: sessions.save(); break;
-            case 4: sessions.saveAs(); break;
-            case 5: sessions.exportMix(); break;
-            default: break;
-        }
-    });
+    m.addCommandItem (&commands, exportMix, "Export mix to WAV...");
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (sessionButton));
 }
 
 bool MainComponent::keyPressed (const juce::KeyPress& k)
 {
-    const auto mods = k.getModifiers();
-    const int code = k.getKeyCode();
+    // Every shortcut is a command with keys the user can change (Options > Keyboard shortcuts).
+    // Text fields that have the keyboard get their keys first.
+    return commands.getKeyMappings()->keyPressed (k, this);
+}
 
-    if (mods.isCommandDown())
+void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
+{
+    ids.addArray ({ playStop, play, stop, record, rewind, fastForward, returnToZero,
+                    newSession, openSession, saveSession, saveSessionAs, exportMix });
+}
+
+void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommandInfo& info)
+{
+    const auto cmd = juce::ModifierKeys::commandModifier;
+    switch (id)
     {
-        if (code == 'N') { sessions.newSession(); return true; }
-        if (code == 'O') { sessions.openSession(); return true; }
-        if (code == 'S') { if (mods.isShiftDown()) sessions.saveAs(); else sessions.save(); return true; }
-        if (code == 'E') { sessions.exportMix(); return true; }
-        return false;
+        case playStop:      info.setInfo ("Play / stop", "Plays the tape, or stops it if it is playing", "Transport", 0);
+                            info.addDefaultKeypress (juce::KeyPress::spaceKey, 0); break;
+        case play:          info.setInfo ("Play", "Plays the tape", "Transport", 0); break;
+        case stop:          info.setInfo ("Stop", "Stops the tape (a wind brakes to a stop)", "Transport", 0); break;
+        case record:        info.setInfo ("Record", "Record enable on / off", "Transport", 0); break;
+        case rewind:        info.setInfo ("Rewind", "Winds back to the start", "Transport", 0);
+                            info.addDefaultKeypress (juce::KeyPress::homeKey, 0); break;
+        case fastForward:   info.setInfo ("Fast forward", "Winds on to the end of the recording", "Transport", 0);
+                            info.addDefaultKeypress (juce::KeyPress::endKey, 0); break;
+        case returnToZero:  info.setInfo ("Return to zero", "Jumps straight back to the start, without winding", "Transport", 0); break;
+        case newSession:    info.setInfo ("New session", "Starts a new, empty session", "Session", 0);
+                            info.addDefaultKeypress ('n', cmd); break;
+        case openSession:   info.setInfo ("Open session", "Opens a saved session", "Session", 0);
+                            info.addDefaultKeypress ('o', cmd); break;
+        case saveSession:   info.setInfo ("Save", "Saves the session", "Session", 0);
+                            info.addDefaultKeypress ('s', cmd); break;
+        case saveSessionAs: info.setInfo ("Save as", "Saves the session in a new folder", "Session", 0);
+                            info.addDefaultKeypress ('s', cmd | juce::ModifierKeys::shiftModifier); break;
+        case exportMix:     info.setInfo ("Export mix", "Exports the mix to a WAV file", "Session", 0);
+                            info.addDefaultKeypress ('e', cmd); break;
+        default: break;
+    }
+}
+
+bool MainComponent::perform (const InvocationInfo& info)
+{
+    auto& tape = engine.tape;
+    switch (info.commandID)
+    {
+        case playStop:      if (tape.isPlaying()) tape.stop(); else tape.play(); return true;
+        case play:          tape.play(); return true;
+        case stop:          tape.stop(); return true;
+        case record:        tape.setRecordEnabled (! tape.isRecordEnabled()); return true;
+        case rewind:        tape.rewind(); return true;
+        case fastForward:   tape.fastForward(); return true;
+        case returnToZero:  tape.stop(); tape.locate (0); return true;
+        case newSession:    sessions.newSession(); return true;
+        case openSession:   sessions.openSession(); return true;
+        case saveSession:   sessions.save(); return true;
+        case saveSessionAs: sessions.saveAs(); return true;
+        case exportMix:     sessions.exportMix(); return true;
+        default:            return false;
+    }
+}
+
+void MainComponent::openKeyMappings()
+{
+    if (keysWindow != nullptr)
+    {
+        keysWindow->toFront (true);
+        return;
     }
 
-    // Transport: Space plays / stops, Home rewinds to the start (when no text field has the keyboard).
-    if (code == juce::KeyPress::spaceKey)
-    {
-        if (engine.tape.isPlaying()) engine.tape.stop(); else engine.tape.play();
-        return true;
-    }
-    if (code == juce::KeyPress::homeKey)
-    {
-        engine.tape.rewind();
-        return true;
-    }
-    return false;
+    auto editor = std::make_unique<juce::KeyMappingEditorComponent> (*commands.getKeyMappings(), true);
+    editor->setColours (juce::Colour (0xff2a2d30), bridgeText);
+    editor->setSize (560, 460);
+
+    juce::DialogWindow::LaunchOptions o;
+    o.content.setOwned (editor.release());
+    o.dialogTitle = "Keyboard shortcuts  -  click + to add a key, click a key to change or remove it";
+    o.dialogBackgroundColour = room;
+    o.escapeKeyTriggersCloseButton = true;
+    o.useNativeTitleBar = true;
+    o.resizable = true;
+    keysWindow = o.launchAsync();
 }
 
 //==============================================================================
@@ -353,6 +418,8 @@ void MainComponent::showSectionsMenu()
     });
     m.addSeparator();
     const bool unlocked = settings.getBoolValue ("chainUnlocked");
+    m.addItem ("Keyboard shortcuts...", [this] { openKeyMappings(); });
+    m.addSeparator();
     m.addItem ("Unlock chain order (EQ, gate, compressor per channel)", true, unlocked, [this, unlocked]
     {
         settings.setValue ("chainUnlocked", ! unlocked);
