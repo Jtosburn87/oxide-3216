@@ -33,6 +33,15 @@ MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionControll
     sessionButton.onClick = [this] { showSessionMenu(); };
     sectionsButton.setTooltip ("Take sections of the console out into windows of their own, or put them back");
     sectionsButton.onClick = [this] { showSectionsMenu(); };
+    // Minimised strip sections are remembered between launches.
+    desk.setCollapsed (Desk::inputSection, settings.getIntValue ("collapsed.input"));
+    desk.setCollapsed (Desk::returnSection, settings.getIntValue ("collapsed.return"));
+    desk.onCollapseChanged = [this]
+    {
+        settings.setValue ("collapsed.input", desk.getCollapsed (Desk::inputSection));
+        settings.setValue ("collapsed.return", desk.getCollapsed (Desk::returnSection));
+        if (saveSettings) saveSettings();
+    };
     desk.onSizeChanged = [this] { if (viewport.getWidth() > 0) fitToWindow(); else applyZoom(); };
     sessions.onTitleChanged = [this] { if (auto* w = getTopLevelComponent()) w->setName (sessions.windowTitle()); };
     setWantsKeyboardFocus (true);

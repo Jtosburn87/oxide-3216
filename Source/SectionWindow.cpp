@@ -78,6 +78,7 @@ public:
                                     (juce::Component*) &fitButton, (juce::Component*) &putBackButton, (juce::Component*) &view })
             addAndMakeVisible (c);
 
+        frame.onSizeChanged = [this] { view.contentSizeChanged(); };
         view.setContent (&frame);
         // First time out: most of the screen height, in the section's proportions.
         const auto screen = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay()->userArea;

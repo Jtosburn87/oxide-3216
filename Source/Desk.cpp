@@ -69,17 +69,18 @@ namespace
         g.setColour (juce::Colour (0xff2a2d2f));
         g.fillRect (r.getX(), bridgeH - 3, r.getWidth(), 1);
 
-        // Mid-grey knob area.
+        // Mid-grey knob area (shorter when sections are minimised).
+        const int knobs = r.getHeight() - bridgeH - faderH;
         g.setColour (stripGrey);
-        g.fillRect (r.getX(), bridgeH, r.getWidth(), knobH);
+        g.fillRect (r.getX(), bridgeH, r.getWidth(), knobs);
         g.setColour (juce::Colours::white.withAlpha (0.14f));
         g.fillRect (r.getX(), bridgeH, r.getWidth(), 1);
 
         // Black fader area.
         g.setColour (faderArea);
-        g.fillRect (r.getX(), bridgeH + knobH, r.getWidth(), faderH);
+        g.fillRect (r.getX(), bridgeH + knobs, r.getWidth(), faderH);
         g.setColour (juce::Colours::black);
-        g.fillRect (r.getX(), bridgeH + knobH, r.getWidth(), 1);
+        g.fillRect (r.getX(), bridgeH + knobs, r.getWidth(), 1);
     }
 
     juce::Rectangle<int> knobAt (int x, int y)      { return { x, y, Knob::preferredWidth, Knob::preferredHeight }; }
@@ -188,10 +189,78 @@ StripComponent::StripComponent (ChannelStrip& s)
     scribble.setTooltip ("Double-click to rename");
     scribble.onTextChange = [this] { strip.name = scribble.getText(); };
 
+    // Minimise buttons on the section titles; each one acts on the whole bank.
+    const char* const foldNames[] = { "Equaliser", "Gate", "Compressor", "Aux sends" };
+    for (int i = 0; i < (int) foldButtons.size(); ++i)
+    {
+        auto& b = foldButtons[(size_t) i];
+        b.setButtonText (juce::CharPointer_UTF8 ("\xe2\x80\x93"));   // en dash
+        b.setTitle ("Minimise " + juce::String (foldNames[i]));
+        b.setTooltip ("Minimise the " + juce::String (foldNames[i]).toLowerCase() + " on this whole bank");
+        b.onClick = [this, bit = 1 << i] { if (onToggleSection) onToggleSection (bit); };
+        add (b);
+    }
+
     fader.slider.setTitle (strip.name + " fader");
     setTitle (strip.name);
     setFocusContainerType (FocusContainerType::focusContainer);
     lastPops = s.gate.popCount.load();
+}
+
+namespace
+{
+    // Expanded heights of the sections that can be minimised (in Collapsible bit order), and the
+    // height a minimised one keeps: just its title line.
+    constexpr int expandedH[] = { 10 + 4 * 52 + 4, 10 + 50 + 4 + 18 + 6, 10 + 2 * 52 + 2 + 17 + 4 + 16 + 6, 10 + 4 * 44 + 4 };
+    constexpr int collapsedH = 8;
+}
+
+int StripComponent::heightFor (int mask)
+{
+    int h = totalH;
+    for (int i = 0; i < 4; ++i)
+        if (mask & (1 << i))
+            h -= expandedH[i] - collapsedH;
+    return h;
+}
+
+void StripComponent::setCollapsed (int mask)
+{
+    if (mask == collapsed)
+        return;
+    collapsed = mask;
+    for (int i = 0; i < 4; ++i)
+    {
+        const bool folded = (mask & (1 << i)) != 0;
+        for (auto* c : sectionComponents (1 << i))
+            c->setVisible (! folded);
+        auto& b = foldButtons[(size_t) i];
+        b.setButtonText (folded ? "+" : juce::String (juce::CharPointer_UTF8 ("\xe2\x80\x93")));
+        b.setTitle ((folded ? "Restore " : "Minimise ") + b.getTitle().fromFirstOccurrenceOf (" ", false, false));
+        b.setTooltip (folded ? "Show this section again on the whole bank" : "Minimise this section on the whole bank");
+    }
+    resized();
+    repaint();
+}
+
+std::vector<juce::Component*> StripComponent::sectionComponents (int bit)
+{
+    std::vector<juce::Component*> list;
+    if (bit == eqSection)
+        for (auto* k : eqKnobs) list.push_back (k);
+    if (bit == gateSection)
+        list = { &gateThr, &gateRange, &gateFast };
+    if (bit == compSection)
+    {
+        list = { &compInput, &compOutput, &compAttack, &compRelease, &compAll, &compIn, &grMeter };
+        for (auto* b : ratioButtons) list.push_back (b);
+    }
+    if (bit == auxSection)
+    {
+        for (auto* k : auxKnobs) list.push_back (k);
+        for (auto* b : auxPre) list.push_back (b);
+    }
+    return list;
 }
 
 void StripComponent::resized()
@@ -209,52 +278,63 @@ void StripComponent::resized()
     hpf.setBounds (knobAt (right, box.getY() + 10));
     y = box.getBottom() + 14;
 
-    box = { bx, y, bw, 10 + 4 * 52 + 4 };
-    sections.push_back ({ "Equaliser", box });
-    for (int b = 0; b < FourBandEq::numBands; ++b)
+    // The sections that can be minimised: a minimised one keeps only its title line (and its button).
+    const auto foldable = [&] (int i, const char* title, const std::function<void (juce::Rectangle<int>)>& layout)
     {
-        eqKnobs[b * 2]->setBounds (knobAt (left, box.getY() + 10 + b * 52));
-        eqKnobs[b * 2 + 1]->setBounds (knobAt (right, box.getY() + 10 + b * 52));
-    }
-    y = box.getBottom() + 14;
+        const bool folded = (collapsed & (1 << i)) != 0;
+        box = { bx, y, bw, folded ? collapsedH : expandedH[i] };
+        sections.push_back ({ title, box });
+        foldButtons[(size_t) i].setBounds (bx + bw - 20, box.getY() - 7, 18, 14);
+        if (! folded)
+            layout (box);
+        y = box.getBottom() + 14;
+    };
 
-    box = { bx, y, bw, 10 + 50 + 4 + 18 + 6 };
-    sections.push_back ({ "Gate", box });
-    gateThr.setBounds (knobAt (left, box.getY() + 10));
-    gateRange.setBounds (knobAt (right, box.getY() + 10));
-    gateFast.setBounds (bx + 5, box.getY() + 64, bw - 10, 18);
-    y = box.getBottom() + 14;
-
-    box = { bx, y, bw, 10 + 2 * 52 + 2 + 17 + 4 + 16 + 6 };
-    sections.push_back ({ "Compressor", box });
-    compInput.setBounds (knobAt (left, box.getY() + 10));
-    compOutput.setBounds (knobAt (right, box.getY() + 10));
-    compAttack.setBounds (knobAt (left, box.getY() + 62));
-    compRelease.setBounds (knobAt (right, box.getY() + 62));
+    foldable (0, "Equaliser", [&] (juce::Rectangle<int> b)
     {
-        auto row = juce::Rectangle<int> (bx + 4, box.getY() + 116, bw - 8, 17);
+        for (int band = 0; band < FourBandEq::numBands; ++band)
+        {
+            eqKnobs[band * 2]->setBounds (knobAt (left, b.getY() + 10 + band * 52));
+            eqKnobs[band * 2 + 1]->setBounds (knobAt (right, b.getY() + 10 + band * 52));
+        }
+    });
+
+    foldable (1, "Gate", [&] (juce::Rectangle<int> b)
+    {
+        gateThr.setBounds (knobAt (left, b.getY() + 10));
+        gateRange.setBounds (knobAt (right, b.getY() + 10));
+        gateFast.setBounds (bx + 5, b.getY() + 64, bw - 10, 18);
+    });
+
+    foldable (2, "Compressor", [&] (juce::Rectangle<int> b)
+    {
+        compInput.setBounds (knobAt (left, b.getY() + 10));
+        compOutput.setBounds (knobAt (right, b.getY() + 10));
+        compAttack.setBounds (knobAt (left, b.getY() + 62));
+        compRelease.setBounds (knobAt (right, b.getY() + 62));
+
+        auto row = juce::Rectangle<int> (bx + 4, b.getY() + 116, bw - 8, 17);
         const int w = row.getWidth() / 5;
-        for (auto* b : ratioButtons)
-            b->setBounds (row.removeFromLeft (w).reduced (1, 0));
+        for (auto* r : ratioButtons)
+            r->setBounds (row.removeFromLeft (w).reduced (1, 0));
         compAll.setBounds (row.reduced (1, 0));
 
-        auto row2 = juce::Rectangle<int> (bx + 4, box.getY() + 137, bw - 8, 16);
+        auto row2 = juce::Rectangle<int> (bx + 4, b.getY() + 137, bw - 8, 16);
         compIn.setBounds (row2.removeFromLeft (30));
         row2.removeFromLeft (4);
         grMeter.setBounds (row2.withSizeKeepingCentre (row2.getWidth(), 8));
-    }
-    y = box.getBottom() + 14;
+    });
 
-    box = { bx, y, bw, 10 + 4 * 44 + 4 };
-    sections.push_back ({ "Aux sends", box });
-    for (int k = 0; k < Config::numAux; ++k)
+    foldable (3, "Aux sends", [&] (juce::Rectangle<int> b)
     {
-        const int col = k % 2, row = k / 2;
-        const int x = bx + 2 + col * 48, ky = box.getY() + 8 + row * 44;
-        auxKnobs[k]->setBounds (smallKnobAt (x, ky));
-        auxPre[k]->setBounds (x + Knob::smallWidth - 1, ky + 7, 12, 15);
-    }
-    y = box.getBottom() + 14;
+        for (int k = 0; k < Config::numAux; ++k)
+        {
+            const int col = k % 2, row = k / 2;
+            const int x = bx + 2 + col * 48, ky = b.getY() + 8 + row * 44;
+            auxKnobs[k]->setBounds (smallKnobAt (x, ky));
+            auxPre[k]->setBounds (x + Knob::smallWidth - 1, ky + 7, 12, 15);
+        }
+    });
 
     box = { bx, y, bw, 12 + 20 + 4 + 20 + 2 + 50 + 2 };
     sections.push_back ({ "Routing", box });
@@ -267,7 +347,7 @@ void StripComponent::resized()
     }
     pan.setBounds (juce::Rectangle<int> (Knob::preferredWidth, Knob::preferredHeight).withCentre ({ stripW / 2, box.getY() + 82 }));
 
-    const int f = bridgeH + knobH;
+    const int f = getHeight() - faderH;   // the fader area is always at the bottom
     mute.setBounds (8, f + 8, 45, 20);
     solo.setBounds (stripW - 8 - 45, f + 8, 45, 20);
     scribble.setBounds (4, getHeight() - 28, stripW - 8, 22);
@@ -762,7 +842,15 @@ void CentreSection::update()
 StripBank::StripBank (const juce::OwnedArray<ChannelStrip>& channelStrips)
 {
     for (auto* s : channelStrips)
-        addAndMakeVisible (strips.add (new StripComponent (*s)));
+    {
+        auto* strip = strips.add (new StripComponent (*s));
+        strip->onToggleSection = [this] (int bit)
+        {
+            setCollapsed (collapsed ^ bit);
+            if (onCollapseChanged) onCollapseChanged();
+        };
+        addAndMakeVisible (strip);
+    }
 
     meterButton.setTooltip ("Meters show each channel's output (after the fader). Click to show the input (after the trim) instead");
     meterButton.setColour (juce::TextButton::buttonOnColourId, amber);
@@ -781,12 +869,20 @@ StripBank::StripBank (const juce::OwnedArray<ChannelStrip>& channelStrips)
     setSize (strips.size() * stripW, totalH);
 }
 
+void StripBank::setCollapsed (int mask)
+{
+    collapsed = mask & 15;
+    for (auto* s : strips)
+        s->setCollapsed (collapsed);
+    setSize (getWidth(), StripComponent::heightFor (collapsed));
+}
+
 void StripBank::resized()
 {
     int x = 0;
     for (auto* s : strips)
     {
-        s->setBounds (x, 0, stripW, totalH);
+        s->setBounds (x, 0, stripW, getHeight());
         x += stripW;
     }
     meterButton.setBounds (6, 8, 38, 20);   // in the first strip's bridge, left of its meter
@@ -809,8 +905,38 @@ Desk::Desk (AudioEngine& e, PluginContext* plugins)
     returns.setTitle ("Return bank");
     for (int s = 0; s < numSections; ++s)
         addAndMakeVisible (getSection ((Section) s));
+
+    // A bank gets shorter or taller when sections are minimised or restored.
+    for (auto* bank : { &inputs, &returns })
+    {
+        bank->addComponentListener (this);
+        bank->onCollapseChanged = [this] { if (onCollapseChanged) onCollapseChanged(); };
+    }
     relayout();
     startTimerHz (30);
+}
+
+Desk::~Desk()
+{
+    inputs.removeComponentListener (this);
+    returns.removeComponentListener (this);
+}
+
+void Desk::componentMovedOrResized (juce::Component&, bool, bool wasResized)
+{
+    if (wasResized)
+        relayout();
+}
+
+int Desk::getCollapsed (Section s) const
+{
+    return s == inputSection ? inputs.getCollapsed() : s == returnSection ? returns.getCollapsed() : 0;
+}
+
+void Desk::setCollapsed (Section s, int mask)
+{
+    if (s == inputSection)  inputs.setCollapsed (mask);
+    if (s == returnSection) returns.setCollapsed (mask);
 }
 
 juce::Component& Desk::getSection (Section s)
@@ -850,7 +976,13 @@ void Desk::relayout()
     if (width == 2 * cheekW)
         width += 600;   // everything is out: room for a short message
 
-    setSize (width, totalH);
+    // As tall as the tallest docked section; the others sit at the bottom, so all the faders line up.
+    int height = 0;
+    for (int s = 0; s < numSections; ++s)
+        if (docked[(size_t) s])
+            height = juce::jmax (height, getSection ((Section) s).getHeight());
+
+    setSize (width, height > 0 ? height : totalH);
     resized();
     if (onSizeChanged)
         onSizeChanged();
@@ -864,7 +996,7 @@ void Desk::resized()
         if (! docked[(size_t) s])
             continue;
         auto& c = getSection ((Section) s);
-        c.setBounds (x, 0, c.getWidth(), totalH);
+        c.setBounds (x, getHeight() - c.getHeight(), c.getWidth(), c.getHeight());
         x += c.getWidth();
     }
 }
@@ -909,11 +1041,22 @@ void Desk::timerCallback()
 SectionFrame::SectionFrame (juce::Component& s) : section (s)
 {
     addAndMakeVisible (section);   // takes it from the console
-    setSize (section.getWidth() + 2 * cheekW, totalH);
+    setSize (section.getWidth() + 2 * cheekW, section.getHeight());
+    section.addComponentListener (this);
+}
+
+void SectionFrame::componentMovedOrResized (juce::Component&, bool, bool wasResized)
+{
+    if (! wasResized)
+        return;
+    setSize (section.getWidth() + 2 * cheekW, section.getHeight());
+    if (onSizeChanged)
+        onSizeChanged();
 }
 
 SectionFrame::~SectionFrame()
 {
+    section.removeComponentListener (this);
     removeChildComponent (&section);   // the console owns the section, not the window
 }
 
@@ -925,5 +1068,5 @@ void SectionFrame::paint (juce::Graphics& g)
 
 void SectionFrame::resized()
 {
-    section.setBounds (cheekW, 0, section.getWidth(), totalH);
+    section.setBounds (cheekW, 0, section.getWidth(), section.getHeight());
 }

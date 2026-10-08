@@ -22,6 +22,10 @@ THE CONSOLE
 Left bank: 16 input channels. Right bank: 16 tape-return channels. Centre: tape machine,
 group EQs, bus compressor, inserts and aux returns, bus faders and the main fader.
 Zoom with the slider; "Fit" shows the whole console.
+The small "-" on the Equaliser, Gate, Compressor and Aux sends titles minimises that section on
+the whole bank ("+" brings it back); the bank gets shorter and its faders stay in line.
+The IN/OUT button above each bank switches its meters between the input (after the trim) and
+the output (after the fader).
 "Sections" moves the input bank, centre section or return bank into a window of its own (for a
 second monitor). Close that window, or press "Put back", to return it to the console. Windows
 that are out stay out, in the same place, the next time ConsoleTape starts.
