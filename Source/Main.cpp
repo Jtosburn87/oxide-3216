@@ -6,6 +6,8 @@
 #include "PluginManager.h"
 #include "PluginWindows.h"
 #include "InsertsUI.h"
+#include "SessionController.h"
+#include "Cassette.h"
 
 class ConsoleTapeApplication : public juce::JUCEApplication
 {
@@ -58,22 +60,32 @@ public:
         auto saved = properties.getUserSettings()->getXmlValue ("audio");
         engine = std::make_unique<AudioEngine>();
         engine->initialise (saved.get());
-        engine->projectName = properties.getUserSettings()->getValue ("projectName", "Untitled song");
+        sessions = std::make_unique<SessionController> (*engine, *plugins, *properties.getUserSettings());
 
-        mainWindow = std::make_unique<MainWindow> (getApplicationName(), *engine, *plugins, [this] { saveSettings(); });
-        restoreInserts();
+        mainWindow = std::make_unique<MainWindow> (getApplicationName(), *engine, *plugins, *sessions, [this] { saveSettings(); });
+        sessions->startUp();   // recover after a crash, or reopen the last session
     }
 
     void shutdown() override
     {
         saveSettings();
+        if (sessions != nullptr)
+            sessions->shutDown();
         mainWindow = nullptr;   // closes plugin windows first
+        sessions = nullptr;
         engine = nullptr;       // then the plugins themselves
         plugins = nullptr;
         juce::LookAndFeel::setDefaultLookAndFeel (nullptr);
     }
 
-    void systemRequestedQuit() override { quit(); }
+    void systemRequestedQuit() override
+    {
+        // Ask before closing with unsaved changes.
+        if (sessions == nullptr)
+            quit();
+        else
+            sessions->confirmDiscard ([] (bool ok) { if (ok) JUCEApplication::quit(); });
+    }
     void anotherInstanceStarted (const juce::String&) override {}
 
     void scanFolderReport()
@@ -106,6 +118,28 @@ public:
         const int i = args.indexOf ("--snapshot");
         const juce::File out (args[i + 1]);
         const float zoom = args.size() > i + 2 ? args[i + 2].getFloatValue() : 1.0f;
+
+        if (args.contains ("icon"))
+        {
+            // The app icon: the cassette, centred on a transparent square.
+            Cassette cassette;
+            cassette.projectName() = "Console Tape";
+            cassette.update (0.0, false, 1.0f, 0.3f, "15 ips");
+            const int size = 512;
+            const float scale = (float) size / (float) Cassette::width;
+            const auto shot = cassette.createComponentSnapshot (cassette.getLocalBounds(), true, scale);
+            juce::Image icon (juce::Image::ARGB, size, size, true);
+            {
+                juce::Graphics g (icon);
+                g.drawImageAt (shot, 0, (size - shot.getHeight()) / 2);
+            }
+            out.deleteFile();
+            juce::FileOutputStream stream (out);
+            juce::PNGImageFormat().writeImageToStream (icon, stream);
+            juce::LookAndFeel::setDefaultLookAndFeel (nullptr);
+            quit();
+            return;
+        }
 
         AudioEngine e;
         {
@@ -171,11 +205,11 @@ private:
     class MainWindow : public juce::DocumentWindow
     {
     public:
-        MainWindow (const juce::String& name, AudioEngine& engine, PluginManager& pm, std::function<void()> save)
+        MainWindow (const juce::String& name, AudioEngine& engine, PluginManager& pm, SessionController& sc, std::function<void()> save)
             : DocumentWindow (name, ConsoleColours::room, DocumentWindow::allButtons)
         {
             setUsingNativeTitleBar (true);
-            setContentOwned (new MainComponent (engine, pm, std::move (save)), true);
+            setContentOwned (new MainComponent (engine, pm, sc, std::move (save)), true);
             setResizable (true, true);
             setResizeLimits (800, 480, 10000, 10000);
             centreWithSize (getWidth(), getHeight());
@@ -195,45 +229,19 @@ private:
         fn (engine->masterInserts);
     }
 
-    /** Reloads the plugins saved last time; says clearly which ones could not be found. */
-    void restoreInserts()
-    {
-        auto xml = properties.getUserSettings()->getXmlValue ("inserts");
-        if (xml == nullptr)
-            return;
-
-        auto* device = engine->getDeviceManager().getCurrentAudioDevice();
-        const double sr = device != nullptr ? device->getCurrentSampleRate() : 48000.0;
-        juce::StringArray missing;
-        forEachChain ([&] (InsertChain& c)
-        {
-            for (auto* e : xml->getChildWithTagNameIterator ("INSERTS"))
-                if (e->getStringAttribute ("name") == c.name)
-                    missing.addArray (plugins->restore (c, *e, sr, Config::maxBlock));
-        });
-
-        if (! missing.isEmpty())
-            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Missing plugins",
-                "These plugins could not be loaded, so their slots are empty:\n\n" + missing.joinIntoString ("\n")
-                + "\n\nIf they are installed somewhere else, add that folder in Plugins and scan again.");
-    }
-
     void saveSettings()
     {
         if (engine == nullptr)
             return;
         if (auto xml = engine->createStateXml())
             properties.getUserSettings()->setValue ("audio", xml.get());
-        properties.getUserSettings()->setValue ("projectName", engine->projectName.toString());
-        juce::XmlElement inserts ("ALL_INSERTS");
-        forEachChain ([&] (InsertChain& c) { inserts.addChildElement (c.toXml().release()); });
-        properties.getUserSettings()->setValue ("inserts", &inserts);
         properties.saveIfNeeded();
     }
 
     ConsoleLookAndFeel lookAndFeel;
     juce::ApplicationProperties properties;
     std::unique_ptr<PluginManager> plugins;
+    std::unique_ptr<SessionController> sessions;
     std::unique_ptr<AudioEngine> engine;
     std::unique_ptr<MainWindow> mainWindow;
 };

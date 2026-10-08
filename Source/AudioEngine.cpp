@@ -90,10 +90,6 @@ void AudioEngine::initialise (const juce::XmlElement* savedState)
                 setSubOutput (k, side, routing->getIntAttribute ("sub" + juce::String (k + 1) + (side == 0 ? "L" : "R"), -1));
     }
 
-    if (auto* p = savedState != nullptr ? savedState->getChildByName ("PATCH") : nullptr)
-        for (int d = 0; d < Patch::numDestinations; ++d)
-            setPatch (d, (std::uint64_t) p->getStringAttribute ("d" + juce::String (d), "0").getHexValue64());
-
     deviceManager.addAudioCallback (this);
 }
 
@@ -115,10 +111,6 @@ std::unique_ptr<juce::XmlElement> AudioEngine::createStateXml() const
     for (int k = 0; k < Config::numSubs; ++k)
         for (int side = 0; side < 2; ++side)
             routing->setAttribute ("sub" + juce::String (k + 1) + (side == 0 ? "L" : "R"), getSubOutput (k, side));
-    auto* p = xml->createNewChildElement ("PATCH");
-    for (int d = 0; d < Patch::numDestinations; ++d)
-        if (const auto m = getPatch (d); m != 0)
-            p->setAttribute ("d" + juce::String (d), juce::String::toHexString ((juce::int64) m));
     return xml;
 }
 
@@ -268,8 +260,22 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputs, 
                                                     int numSamples,
                                                     const juce::AudioIODeviceCallbackContext&)
 {
-    juce::ScopedNoDenormals noDenormals;
     callbackCount.fetch_add (1, std::memory_order_relaxed);
+    render (inputs, numInputs, outputs, numOutputs, numSamples, nullptr, nullptr);
+}
+
+void AudioEngine::renderOffline (float* left, float* right, int numSamples)
+{
+    render (nullptr, 0, nullptr, 0, numSamples, left, right);
+}
+
+void AudioEngine::render (const float* const* inputs, int numInputs, float* const* outputs, int numOutputs,
+                          int numSamples, float* mainLeft, float* mainRight) noexcept
+{
+    juce::ScopedNoDenormals noDenormals;
+
+    if (mainLeft != nullptr)  juce::FloatVectorOperations::clear (mainLeft, numSamples);
+    if (mainRight != nullptr) juce::FloatVectorOperations::clear (mainRight, numSamples);
 
     for (int o = 0; o < numOutputs; ++o)
         if (outputs[o] != nullptr)
@@ -290,6 +296,11 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputs, 
         const int dev = mainOutput[(size_t) side].load (std::memory_order_relaxed);
         const int slot = juce::isPositiveAndBelow (dev, maxDeviceChannels) ? outputSlot[(size_t) dev] : -1;
         mainOut[side] = juce::isPositiveAndBelow (slot, numOutputs) ? outputs[slot] : nullptr;
+    }
+    if (mainLeft != nullptr || mainRight != nullptr)
+    {
+        mainOut[0] = mainLeft;   // offline render (export)
+        mainOut[1] = mainRight;
     }
 
     // Optional extra outputs: aux masters and subs.

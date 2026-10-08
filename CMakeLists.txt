@@ -1,6 +1,6 @@
 ﻿cmake_minimum_required(VERSION 3.22)
 
-project(ConsoleTape VERSION 0.1.0 LANGUAGES C CXX)
+project(ConsoleTape VERSION 1.0.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -34,6 +34,7 @@ add_library(ConsoleTapeCore STATIC
     Source/Dynamics.cpp
     Source/InsertChain.cpp
     Source/PluginManager.cpp
+    Source/Session.cpp
     Source/Params.cpp
     Source/TapeMachine.cpp)
 target_include_directories(ConsoleTapeCore PUBLIC Source "${ASIO_SDK_DIR}/common")
@@ -64,6 +65,7 @@ target_compile_definitions(ConsoleTapeCore INTERFACE
 juce_add_gui_app(ConsoleTape
     PRODUCT_NAME "ConsoleTape"
     COMPANY_NAME "ConsoleTape"
+    ICON_BIG "${CMAKE_SOURCE_DIR}/Resources/icon.png"
     VERSION ${PROJECT_VERSION})
 
 target_sources(ConsoleTape PRIVATE
@@ -71,6 +73,7 @@ target_sources(ConsoleTape PRIVATE
     Source/MainComponent.cpp
     Source/PatchBay.cpp
     Source/PluginWindows.cpp
+    Source/SessionController.cpp
     Source/InsertsUI.cpp
     Source/AudioSettingsComponent.cpp
     Source/BusCompPanel.cpp

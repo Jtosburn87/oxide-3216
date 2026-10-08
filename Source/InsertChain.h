@@ -12,7 +12,7 @@
     Mono / stereo / multichannel: each plugin is offered stereo in/out, then mono in -> stereo out,
     then mono in/out. A mono input gets (L+R)/2; a mono output feeds both sides; extra channels of a
     multichannel plugin are fed silence and their outputs ignored. */
-class InsertChain
+class InsertChain : private juce::AudioProcessorListener
 {
 public:
     static constexpr int numSlots = 4;
@@ -43,6 +43,9 @@ public:
     /** Called after any change, for the UI. */
     std::function<void()> onChange;
 
+    /** Goes up when a hosted plugin reports a parameter or state change (unsaved-changes detection). */
+    std::uint32_t getPluginChangeCount() const noexcept { return pluginChanges.load(); }
+
     // Audio thread.
     /** Processes left/right in place. Returns true if any plugin ran. */
     bool process (float* left, float* right, int numSamples) noexcept;
@@ -68,6 +71,10 @@ private:
     int blockSize = Config::maxBlock;
     std::atomic<int> latency { 0 };
     std::atomic<bool> active { false };
+    std::atomic<std::uint32_t> pluginChanges { 0 };
+
+    void audioProcessorParameterChanged (juce::AudioProcessor*, int, float) override { pluginChanges.fetch_add (1); }
+    void audioProcessorChanged (juce::AudioProcessor*, const ChangeDetails& d) override { if (d.parameterInfoChanged || d.programChanged || d.nonParameterStateChanged) pluginChanges.fetch_add (1); }
 
     static void negotiateLayout (juce::AudioProcessor&);
     void sizeBuffer();

@@ -8,8 +8,8 @@ namespace
     constexpr int topBarH = 48;
 }
 
-MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, std::function<void()> save)
-    : engine (e), saveSettings (std::move (save)), pluginManager (pm),
+MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionController& sc, std::function<void()> save)
+    : engine (e), saveSettings (std::move (save)), pluginManager (pm), sessions (sc),
       pluginContext { pm, pluginWindows,
                       [this] { auto* d = engine.getDeviceManager().getCurrentAudioDevice(); return d != nullptr ? d->getCurrentSampleRate() : 48000.0; },
                       [this] { if (saveSettings) saveSettings(); } },
@@ -29,6 +29,10 @@ MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, std::function<v
 
     pluginsButton.setTooltip ("Scan for VST3 plugins and see the ones that failed");
     pluginsButton.onClick = [this] { openPluginList(); };
+    sessionButton.setTooltip ("New, open, save, save as, export the mix");
+    sessionButton.onClick = [this] { showSessionMenu(); };
+    sessions.onTitleChanged = [this] { if (auto* w = getTopLevelComponent()) w->setName (sessions.windowTitle()); };
+    setWantsKeyboardFocus (true);
     // A plugin window must close before its plugin is deleted.
     forEachChain ([this] (InsertChain& c) { c.beforeDelete = [this] (juce::AudioProcessor* p) { pluginWindows.close (p); }; });
 
@@ -52,7 +56,7 @@ MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, std::function<v
     statusLabel.setColour (juce::Label::textColourId, bridgeText);
     statusLabel.setJustificationType (juce::Justification::centredRight);
 
-    for (juce::Component* c : { (juce::Component*) &audioButton, (juce::Component*) &toneButton, (juce::Component*) &zoomLabel,
+    for (juce::Component* c : { (juce::Component*) &sessionButton, (juce::Component*) &audioButton, (juce::Component*) &toneButton, (juce::Component*) &zoomLabel,
                                 (juce::Component*) &zoomSlider, (juce::Component*) &fitButton, (juce::Component*) &patchButton, (juce::Component*) &pluginsButton, (juce::Component*) &statusLabel })
         addAndMakeVisible (c);
 
@@ -181,6 +185,8 @@ void MainComponent::resized()
 {
     auto bar = getLocalBounds().removeFromTop (topBarH).reduced (14, 9);
     bar.removeFromLeft (214);
+    sessionButton.setBounds (bar.removeFromLeft (90));
+    bar.removeFromLeft (8);
     audioButton.setBounds (bar.removeFromLeft (120));
     bar.removeFromLeft (8);
     toneButton.setBounds (bar.removeFromLeft (100));
@@ -236,4 +242,63 @@ void MainComponent::openPluginList()
     o.useNativeTitleBar = true;
     o.resizable = true;
     pluginListWindow = o.launchAsync();
+}
+
+void MainComponent::parentHierarchyChanged()
+{
+    if (auto* w = getTopLevelComponent(); w != nullptr && w != this)
+        w->setName (sessions.windowTitle());
+}
+
+void MainComponent::showSessionMenu()
+{
+    juce::PopupMenu m;
+    m.addItem (1, "New session", true, false);
+    m.addItem (2, "Open session...   (Ctrl+O)");
+    m.addSeparator();
+    m.addItem (3, "Save   (Ctrl+S)");
+    m.addItem (4, "Save as...   (Ctrl+Shift+S)");
+    m.addSeparator();
+    m.addItem (5, "Export mix to WAV...   (Ctrl+E)");
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (sessionButton), [this] (int r)
+    {
+        switch (r)
+        {
+            case 1: sessions.newSession(); break;
+            case 2: sessions.openSession(); break;
+            case 3: sessions.save(); break;
+            case 4: sessions.saveAs(); break;
+            case 5: sessions.exportMix(); break;
+            default: break;
+        }
+    });
+}
+
+bool MainComponent::keyPressed (const juce::KeyPress& k)
+{
+    const auto mods = k.getModifiers();
+    const int code = k.getKeyCode();
+
+    if (mods.isCommandDown())
+    {
+        if (code == 'N') { sessions.newSession(); return true; }
+        if (code == 'O') { sessions.openSession(); return true; }
+        if (code == 'S') { if (mods.isShiftDown()) sessions.saveAs(); else sessions.save(); return true; }
+        if (code == 'E') { sessions.exportMix(); return true; }
+        return false;
+    }
+
+    // Transport: Space plays / stops, Home rewinds (when no text field has the keyboard).
+    if (code == juce::KeyPress::spaceKey)
+    {
+        if (engine.tape.isPlaying()) engine.tape.stop(); else engine.tape.play();
+        return true;
+    }
+    if (code == juce::KeyPress::homeKey)
+    {
+        engine.tape.stop();
+        engine.tape.locate (0);
+        return true;
+    }
+    return false;
 }

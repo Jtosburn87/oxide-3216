@@ -5,6 +5,7 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "AudioEngine.h"
 #include "PluginManager.h"
+#include "Session.h"
 #include <cstdio>
 #include <deque>
 #include <vector>
@@ -243,6 +244,7 @@ namespace
         constexpr int L = 300;
         LoopbackRig rig (L);
         auto& tape = rig.e.tape;
+        tape.wowFlutter->set (0.0f);   // wow and flutter move playback by a few samples, like real tape
 
         // Take 1: a click arriving on input 1 at stream time 10000 is recorded to track 1.
         tape.arm[0]->set (1.0f);
@@ -917,6 +919,213 @@ namespace
         }
     }
 
+    void testPunchAndLoop()
+    {
+        std::puts ("Tape: auto-punch and loop");
+        AudioEngine e;
+        e.inputStrips[0]->controls.main->set (0.0f);   // hear tape (return 1) only
+        e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }), 0);
+        mapOnly (e, 0, 0);
+        auto& tape = e.tape;
+        tape.characterOn = false;
+
+        // An old take on track 1: 0.5 everywhere.
+        std::vector<float> old (48000, 0.5f);
+        tape.loadTrack (0, old.data(), (juce::int64) old.size());
+        tape.setLength ((juce::int64) old.size());
+
+        // Punch in at 10000, out at 20000, playing a new take of 0.25 from the start.
+        tape.setInPoint (10000);
+        tape.setOutPoint (20000);
+        tape.punchOn = true;
+        tape.arm[0]->set (1.0f);
+        tape.setRecordEnabled (true);
+        tape.service();
+        tape.play();
+        Buffers b (1, 2, 500);
+        std::fill (b.in[0].begin(), b.in[0].end(), 0.25f);
+        float heardBefore = 0.0f, heardDuring = 0.0f;
+        for (int k = 0; k < 96; ++k)   // 48000 samples
+        {
+            tape.service();
+            b.run (e);
+            if (k == 10) heardBefore = b.out[0][250] / pan;   // around sample 5250
+            if (k == 30) heardDuring = b.out[0][250] / pan;   // around sample 15250
+        }
+        tape.stop();
+        tape.setRecordEnabled (false);
+        tape.arm[0]->set (0.0f);
+
+        std::vector<float> got (48000);
+        tape.readTrack (0, 0, got.data(), 48000);
+        check (got[9999] == 0.5f && got[10000] == 0.25f && got[19999] == 0.25f && got[20000] == 0.5f && got[47999] == 0.5f,
+               "only the In..Out region was replaced, to the sample");
+        check (near (heardBefore, 0.5f) && near (heardDuring, 0.25f), "armed track plays the old take before the punch, the input during it");
+
+        // Loop: a ramp on track 2, In 1000, Out 3000.
+        std::vector<float> ramp (8000);
+        for (size_t i = 0; i < ramp.size(); ++i)
+            ramp[i] = (float) i / 8000.0f;
+        tape.loadTrack (1, ramp.data(), (juce::int64) ramp.size());
+        tape.setLength (48000);
+        for (int r = 0; r < Config::numReturnStrips; ++r)
+            e.returnStrips[r]->controls.main->set (r == 1 ? 1.0f : 0.0f);
+        tape.punchOn = false;
+        tape.setInPoint (1000);
+        tape.setOutPoint (3000);
+        tape.loopOn = true;
+        tape.locate (0);
+        std::fill (b.in[0].begin(), b.in[0].end(), 0.0f);
+        settle (e, b);   // let the return strip mutes settle (tape not rolling yet)
+        tape.locate (0);
+        tape.play();
+        std::vector<float> stream;
+        for (int k = 0; k < 12; ++k)   // 6000 samples
+        {
+            b.run (e);
+            stream.insert (stream.end(), b.out[0].begin(), b.out[0].end());
+        }
+        tape.stop();
+        check (near (stream[2999] / pan, ramp[2999]) && near (stream[3000] / pan, ramp[1000]) && near (stream[5000] / pan, ramp[1000]),
+               "loop jumps from Out back to In on the exact sample");
+        check (tape.getPosition() == 1000 + (6000 - 3000) % 2000, "position after looping");
+        tape.loopOn = false;
+    }
+
+    /** Clicks every 4800 samples on track 1, played back: how much the click positions wander. */
+    int wowWander (int speedIndex, bool wowOn)
+    {
+        AudioEngine e;
+        e.inputStrips[0]->controls.main->set (0.0f);
+        e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }), 0);
+        mapOnly (e, 0, 0);
+        e.tape.speed->set ((float) speedIndex);
+        e.tape.wowFlutter->set (wowOn ? 1.0f : 0.0f);
+        std::vector<float> clicks (48000 * 4, 0.0f);
+        for (size_t i = 2400; i < clicks.size(); i += 4800)
+            clicks[i] = 0.5f;
+        e.tape.loadTrack (0, clicks.data(), (juce::int64) clicks.size());
+        e.tape.setLength ((juce::int64) clicks.size());
+        e.tape.play();
+
+        Buffers b (1, 2, 480);
+        std::vector<float> stream;
+        for (int k = 0; k < 400; ++k)
+        {
+            b.run (e);
+            stream.insert (stream.end(), b.out[0].begin(), b.out[0].end());
+        }
+
+        int lo = 1 << 30, hi = -(1 << 30);
+        for (size_t c = 2400; c + 4800 < stream.size(); c += 4800)
+        {
+            size_t best = c;
+            for (size_t i = c; i < c + 200; ++i)
+                if (std::abs (stream[i]) > std::abs (stream[best]))
+                    best = i;
+            lo = juce::jmin (lo, (int) (best - c));
+            hi = juce::jmax (hi, (int) (best - c));
+        }
+        return hi - lo;
+    }
+
+    void testWowFlutter()
+    {
+        std::puts ("Tape: wow and flutter");
+        const int off = wowWander (0, false), slow = wowWander (0, true), fast = wowWander (2, true);
+        std::printf ("      click timing wander over 4 s: W&F off %d samples, 7.5 ips %d, 30 ips %d\n", off, slow, fast);
+        check (off == 0, "off: perfectly steady");
+        check (slow >= 6 && slow <= 22, "7.5 ips: subtle wander (about +/-0.2 ms)");
+        check (fast < slow && fast >= 1, "30 ips: steadier than 7.5 ips");
+    }
+
+    void testSessions()
+    {
+        std::puts ("Sessions: save, load, export");
+        const auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("ConsoleTapeTestSession");
+        folder.deleteRecursively();
+
+        std::vector<float> take (100000);
+        for (size_t i = 0; i < take.size(); ++i)
+            take[i] = 0.3f * (float) std::sin ((double) i * 0.0523);   // ~400 Hz at -10 dBFS
+
+        Session::TrackRevisions written {};
+        {
+            AudioEngine a;
+            a.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }));
+            a.projectName = "My Song";
+            a.inputStrips[2]->controls.trim->set (7.5f);
+            a.inputStrips[2]->eq.gain[FourBandEq::HMF]->set (-4.0f);
+            a.returnStrips[5]->controls.fader->set (64.0f);
+            a.busComp.ratio->set (4.0f);
+            a.tape.speed->set (0.0f);
+            a.inputStrips[0]->name = "Kick";
+            a.setPatch (AudioEngine::Patch::returnIn + 3, std::uint64_t (1) << (AudioEngine::Patch::auxOut + 1));
+            a.tape.writeTrack (4, 0, take.data(), (int) take.size());
+            a.tape.setLength ((juce::int64) take.size());
+            a.tape.setInPoint (1000);
+            a.tape.setOutPoint (5000);
+            a.tape.loopOn = true;
+            const auto r = Session::save (a, folder, &written);
+            check (r.ok, "session saved");
+            check (folder.getChildFile ("session.json").existsAsFile() && folder.getChildFile ("Track 05.wav").existsAsFile()
+                   && ! folder.getChildFile ("Track 01.wav").exists(), "session.json plus a WAV for each track with audio");
+
+            // Saving again without changes does not rewrite the track.
+            const auto before = folder.getChildFile ("Track 05.wav").getLastModificationTime();
+            juce::Thread::sleep (1100);
+            Session::save (a, folder, &written);
+            check (folder.getChildFile ("Track 05.wav").getLastModificationTime() == before, "unchanged tracks are not rewritten");
+        }
+        {
+            AudioEngine b;
+            b.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }));
+            const auto r = Session::load (b, nullptr, folder);
+            check (r.ok, "session loaded");
+            check (b.projectName.toString() == "My Song", "project name");
+            check (b.inputStrips[2]->controls.trim->get() == 7.5f && b.inputStrips[2]->eq.gain[FourBandEq::HMF]->get() == -4.0f
+                   && b.returnStrips[5]->controls.fader->get() == 64.0f && b.busComp.ratio->get() == 4.0f && b.tape.speed->get() == 0.0f,
+                   "controls restored");
+            check (b.inputStrips[0]->name == "Kick" && b.inputStrips[1]->name == "Input 2", "strip names restored");
+            check (b.getPatch (AudioEngine::Patch::returnIn + 3) == (std::uint64_t (1) << (AudioEngine::Patch::auxOut + 1)), "patch cables restored");
+            check (b.tape.getLength() == (juce::int64) take.size() && b.tape.getInPoint() == 1000 && b.tape.getOutPoint() == 5000 && b.tape.loopOn,
+                   "tape length and locators restored");
+            std::vector<float> got (take.size());
+            b.tape.readTrack (4, 0, got.data(), (int) got.size());
+            check (got == take, "track audio restored bit for bit (32-bit float WAV)");
+
+            // Export the mix (track 5 through return 5, everything else at defaults).
+            const auto wav = folder.getChildFile ("mix.wav");
+            const auto e = Session::exportMix (b, wav, 1.0, [] (double) { return true; });
+            check (e.ok, "export finished");
+            juce::AudioFormatManager fm;
+            fm.registerBasicFormats();
+            std::unique_ptr<juce::AudioFormatReader> reader (fm.createReaderFor (wav));
+            check (reader != nullptr && reader->bitsPerSample == 24 && reader->numChannels == 2, "24-bit stereo WAV");
+            if (reader != nullptr)
+            {
+                check (reader->lengthInSamples == (juce::int64) take.size() + 48000, "length = tape + 1 s tail");
+                float lo[2] {}, hi[2] {};
+                juce::Range<float> ranges[2];
+                reader->readMaxLevels (0, reader->lengthInSamples, ranges, 2);
+                const float peak = juce::jmax (ranges[0].getEnd(), -ranges[0].getStart());
+                std::printf ("      exported peak %.1f dBFS\n", toDb (peak));
+                check (peak > 0.05f && peak <= AudioEngine::limiterCeiling + 1.0e-3f, "mix is in the file, under the -3 dBFS limiter");
+                juce::ignoreUnused (lo, hi);
+            }
+            check (! b.tape.isPlaying() && b.tape.getPosition() == 0 && ! b.tape.exporting, "transport put back after export");
+        }
+        {
+            AudioEngine c;
+            c.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }));
+            c.inputStrips[0]->controls.trim->set (10.0f);
+            c.tape.writeTrack (0, 0, take.data(), 1000);
+            Session::reset (c);
+            check (c.inputStrips[0]->controls.trim->get() == 0.0f && c.tape.getLength() == 0 && ! c.tape.trackHasAudio (0), "new session clears everything");
+        }
+        folder.deleteRecursively();
+    }
+
     void testNoDeviceIsSafe()
     {
         std::puts ("Callback with zero channels");
@@ -1106,6 +1315,9 @@ int main (int argc, char** argv)
     testMasterSection();
     testPatchBay();
     testInserts();
+    testPunchAndLoop();
+    testWowFlutter();
+    testSessions();
     testNoDeviceIsSafe();
 
     for (int i = 1; i < argc; ++i)

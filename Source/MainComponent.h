@@ -8,6 +8,7 @@
 #include "PluginManager.h"
 #include "PluginWindows.h"
 #include "InsertsUI.h"
+#include "SessionController.h"
 
 /** Top bar (name plate, audio device, zoom, Fit, status) above the zoomable desk. */
 class MainComponent : public juce::Component,
@@ -15,7 +16,9 @@ class MainComponent : public juce::Component,
                       private juce::ChangeListener
 {
 public:
-    MainComponent (AudioEngine&, PluginManager&, std::function<void()> saveSettings);
+    MainComponent (AudioEngine&, PluginManager&, SessionController&, std::function<void()> saveSettings);
+
+    bool keyPressed (const juce::KeyPress&) override;
     ~MainComponent() override;
 
     void paint (juce::Graphics&) override;
@@ -25,10 +28,11 @@ private:
     AudioEngine& engine;
     std::function<void()> saveSettings;
     PluginManager& pluginManager;
+    SessionController& sessions;
     PluginWindows pluginWindows;
     PluginContext pluginContext;
 
-    juce::TextButton audioButton { "Audio device" }, toneButton { "Test tone" }, fitButton { "Fit" }, patchButton { "Patch bay" }, pluginsButton { "Plugins" };
+    juce::TextButton audioButton { "Audio device" }, toneButton { "Test tone" }, fitButton { "Fit" }, patchButton { "Patch bay" }, pluginsButton { "Plugins" }, sessionButton { "Session" };
     juce::Slider zoomSlider;
     juce::Label zoomLabel, statusLabel;
 
@@ -41,6 +45,8 @@ private:
     juce::Component::SafePointer<juce::DialogWindow> settingsWindow;
     juce::Component::SafePointer<juce::DialogWindow> pluginListWindow;
     void openPluginList();
+    void showSessionMenu();
+    void parentHierarchyChanged() override;
     void forEachChain (const std::function<void (InsertChain&)>&);
 
     juce::String deviceText;

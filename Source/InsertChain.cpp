@@ -69,6 +69,7 @@ void InsertChain::destroy (std::unique_ptr<juce::AudioProcessor> p)
         return;
     if (beforeDelete)
         beforeDelete (p.get());
+    p->removeListener (this);
     p->releaseResources();
     p.reset();
 }
@@ -84,6 +85,7 @@ void InsertChain::setSlot (int slot, std::unique_ptr<juce::AudioProcessor> p, co
     p->prepareToPlay (sampleRate, blockSize);
     p->setNonRealtime (false);
     const int ins = p->getMainBusNumInputChannels(), outs = p->getMainBusNumOutputChannels();
+    p->addListener (this);
 
     std::unique_ptr<juce::AudioProcessor> old;
     {

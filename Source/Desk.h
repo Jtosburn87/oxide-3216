@@ -11,7 +11,7 @@
 namespace DeskLayout
 {
     constexpr int stripW = 110, cheekW = 30, centreW = 780;
-    constexpr int bridgeH = 84, knobH = 930, faderH = 270;
+    constexpr int bridgeH = 84, knobH = 970, faderH = 270;
     constexpr int totalH = bridgeH + knobH + faderH;
 
     // Centre fader area grid: Sub 1-4, Aux 1-8, then Main (1.8 columns wide) behind a divider.
@@ -90,6 +90,10 @@ private:
     juce::TextButton power { "Power" }, rew { "Rew" }, stop { "Stop" }, play { "Play" }, rec { "Rec" }, erase { "Erase" };
     Knob recordLevel;
     juce::OwnedArray<ParamButton> armButtons;
+    juce::TextButton setIn { "Set In" }, setOut { "Set Out" }, loopButton { "Loop" }, punchButton { "Punch" };
+    ParamButton wowButton;
+    juce::Rectangle<int> locateBox;
+    juce::int64 shownIn = -1, shownOut = -1;
     juce::OwnedArray<Knob> groupEqKnobs;   // [sub][band][gain, freq]
 
     std::array<std::array<LedMeter, 2>, Config::numSubs> subMeters;

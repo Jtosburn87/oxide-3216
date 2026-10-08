@@ -109,6 +109,10 @@ public:
 
     std::atomic<bool> testToneOn { false };   // 440 Hz at -18 dBFS into main
 
+    /** Export: runs the console with no live inputs and writes main L/R (post limiter) to the given buffers.
+        Only call while the device is not calling the engine (see MainComponent::exportMix). */
+    void renderOffline (float* left, float* right, int numSamples);
+
     /** Called by audioDeviceAboutToStart; also used by the tests to run without a device. */
     void prepare (double sampleRate, const juce::BigInteger& activeInputs, const juce::BigInteger& activeOutputs,
                   int reportedRoundTripLatency = 0);
@@ -170,6 +174,8 @@ private:
         when nothing is plugged in; otherwise the cables, summed. Channel inputs keep the interface input too. */
     const float* patchedInput (int dest, const float* normal, int phase, int n) noexcept;
 
+    void render (const float* const* inputs, int numInputs, float* const* outputs, int numOutputs,
+                 int numSamples, float* mainLeft, float* mainRight) noexcept;
     static void raisePeak (std::atomic<float>& peak, float value) noexcept;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioEngine)

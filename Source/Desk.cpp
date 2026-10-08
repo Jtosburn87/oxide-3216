@@ -288,6 +288,10 @@ void StripComponent::paint (juce::Graphics& g)
 
 void StripComponent::update()
 {
+    // A loaded session may have renamed the strip.
+    if (! scribble.isBeingEdited() && scribble.getText() != strip.name)
+        scribble.setText (strip.name, juce::dontSendNotification);
+
     meter.setLevel (strip.takePeak());
     grMeter.setReduction (strip.comp.isIn() ? strip.comp.takeGainReduction() : 0.0f);
 
@@ -340,6 +344,7 @@ void TapeClock::paint (juce::Graphics& g)
 CentreSection::CentreSection (AudioEngine& e, PluginContext* plugins)
     : engine (e), tape (e.tape),
       recordLevel (*e.tape.recordLevel, "Level", juce::Colour (0xffd6392d)),
+      wowButton (*e.tape.wowFlutter, "W&F"),
       mainFader (*e.mainFader),
       busPanel (e.busComp),
       inserts (e, plugins)
@@ -374,6 +379,22 @@ CentreSection::CentreSection (AudioEngine& e, PluginContext* plugins)
     play.onClick  = [this] { tape.play(); };
     rec.onClick   = [this] { tape.setRecordEnabled (! tape.isRecordEnabled()); };
     erase.onClick = [this] { confirmErase(); };
+
+    // Locators: one In/Out region for loop and auto-punch.
+    setIn.setTooltip ("Set the In point to the current tape position");
+    setOut.setTooltip ("Set the Out point to the current tape position");
+    loopButton.setTooltip ("Loop between In and Out");
+    punchButton.setTooltip ("Auto-punch: record armed tracks only between In and Out (you hear the old take outside)");
+    wowButton.setTooltip ("Wow and flutter: subtle tape speed wobble, smaller at higher speeds");
+    setIn.onClick  = [this] { tape.setInPoint (tape.getPosition()); };
+    setOut.onClick = [this] { tape.setOutPoint (tape.getPosition()); };
+    loopButton.onClick  = [this] { tape.loopOn = ! tape.loopOn.load(); };
+    punchButton.onClick = [this] { tape.punchOn = ! tape.punchOn.load(); };
+    loopButton.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff3a8fd6));
+    punchButton.setColour (juce::TextButton::buttonOnColourId, muteRed);
+    punchButton.setColour (juce::TextButton::textColourOnId, juce::Colours::white);
+    for (auto* b : { &setIn, &setOut, &loopButton, &punchButton, (juce::TextButton*) &wowButton })
+        addAndMakeVisible (b);
 
     recordLevel.setEndLabels ("-12", "+18");
     addAndMakeVisible (recordLevel);
@@ -481,7 +502,7 @@ void CentreSection::resized()
     mainMeters[1].setBounds (mainCx + 2, my, 10, mh);
 
     // Tape machine panel, left column.
-    deckBox = { 12, bridgeH + 12, 300, 476 };
+    deckBox = { 12, bridgeH + 12, 300, 540 };
     auto d = deckBox.reduced (10);
     d.removeFromTop (18);   // title
     cassette.setBounds (d.removeFromTop (Cassette::height).withSizeKeepingCentre (Cassette::width, Cassette::height));
@@ -495,6 +516,18 @@ void CentreSection::resized()
     {
         b->setBounds (row.removeFromLeft (bw));
         row.removeFromLeft (4);
+    }
+
+    d.removeFromTop (16);
+    locateBox = d.removeFromTop (48);
+    {
+        auto locRow = locateBox.reduced (8, 0).withTrimmedTop (14).withHeight (26);
+        const int lw = (locRow.getWidth() - 4 * 4) / 5;
+        for (auto* b : { &setIn, &setOut, &loopButton, &punchButton, (juce::TextButton*) &wowButton })
+        {
+            b->setBounds (locRow.removeFromLeft (lw));
+            locRow.removeFromLeft (4);
+        }
     }
 
     d.removeFromTop (16);
@@ -520,7 +553,7 @@ void CentreSection::resized()
 
     // Group EQ: full centre width under the tape machine and (stage 5) the bus compressor.
     // One column per sub, four bands down, gain and frequency side by side.
-    groupEqBox = { 12, bridgeH + 512, centreW - 24, 24 + 4 * 52 + 4 };
+    groupEqBox = { 12, bridgeH + 576, centreW - 24, 24 + 4 * 52 + 4 };
     const int colWidth = (groupEqBox.getWidth() - 8) / Config::numSubs;
     for (int k = 0; k < Config::numSubs; ++k)
     {
@@ -595,6 +628,8 @@ void CentreSection::paint (juce::Graphics& g)
 
     paintSection (g, "Tape speed (ips) and record level", levelBox, faderArea);
     paintSection (g, "Record arm", armBox, faderArea);
+    const auto t = [this] (juce::int64 s) { const auto sr = tape.getSampleRate(); const auto tenths = (juce::int64) ((double) s / (sr > 0 ? sr : 48000.0) * 10.0); return juce::String::formatted ("%02d:%02d.%d", (int) (tenths / 600), (int) ((tenths / 10) % 60), (int) (tenths % 10)); };
+    paintSection (g, "Locate   In " + t (tape.getInPoint()) + "   Out " + t (tape.getOutPoint()), locateBox, faderArea);
 
     // Group EQ.
     paintSection (g, "Group EQ", groupEqBox, stripGrey);
@@ -660,6 +695,14 @@ void CentreSection::update()
     power.setToggleState (engine.isPowered(), juce::dontSendNotification);
     play.setToggleState (tape.isPlaying(), juce::dontSendNotification);
     rec.setToggleState (tape.isRecordEnabled(), juce::dontSendNotification);
+    loopButton.setToggleState (tape.loopOn.load(), juce::dontSendNotification);
+    punchButton.setToggleState (tape.punchOn.load(), juce::dontSendNotification);
+    if (tape.getInPoint() != shownIn || tape.getOutPoint() != shownOut)
+    {
+        shownIn = tape.getInPoint();
+        shownOut = tape.getOutPoint();
+        repaint (locateBox.expanded (2, 8));
+    }
 }
 
 //==============================================================================

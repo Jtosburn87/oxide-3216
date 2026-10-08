@@ -18,7 +18,11 @@ void Param::set (float newValue)
         newValue = std::round (newValue);
 
     if (value.exchange (newValue) != newValue)
+    {
+        if (changeCounter != nullptr)
+            changeCounter->fetch_add (1);
         listeners.call ([this] (Listener& l) { l.paramChanged (*this); });
+    }
 }
 
 float Param::toNormalised (float v) const noexcept
@@ -39,6 +43,7 @@ Param& ParamSet::add (const juce::String& id, const juce::String& name, float mi
 {
     jassert (byId.find (id) == byId.end());   // ids must be unique
     auto* p = params.add (new Param (id, name, min, max, def, scale));
+    p->changeCounter = &changes;
     byId[id] = p;
     return *p;
 }

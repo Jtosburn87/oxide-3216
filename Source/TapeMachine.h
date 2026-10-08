@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "Params.h"
 #include "Dsp.h"
@@ -37,12 +37,13 @@ public:
         float lowPassHz;
         float hissDb;          // dBFS
         float secondsPerTurn;  // how fast the cassette hubs spin
+        float wowPercent, flutterPercent;   // peak speed deviation (wow ~0.5 Hz, flutter ~6-9 Hz)
     };
 
     static constexpr Speed speeds[3] = {
-        { "7.5", 1.80f, 90.0f, 4.0f, -3.0f, 12000.0f, -50.0f, 2.4f },
-        { "15",  1.30f, 60.0f, 2.5f, -1.0f, 18000.0f, -57.0f, 1.2f },
-        { "30",  0.95f, 38.0f, 1.5f,  0.0f, 21000.0f, -64.0f, 0.6f },
+        { "7.5", 1.80f, 90.0f, 4.0f, -3.0f, 12000.0f, -50.0f, 2.4f, 0.060f, 0.030f },
+        { "15",  1.30f, 60.0f, 2.5f, -1.0f, 18000.0f, -57.0f, 1.2f, 0.030f, 0.015f },
+        { "30",  0.95f, 38.0f, 1.5f,  0.0f, 21000.0f, -64.0f, 0.6f, 0.015f, 0.008f },
     };
 
     explicit TapeMachine (ParamSet&);
@@ -51,6 +52,7 @@ public:
     Param* recordLevel;                       // dB into tape, -12..+18
     Param* speed;                             // 0, 1, 2 = 7.5, 15, 30 ips
     std::array<Param*, numTracks> arm {};     // armed tracks monitor their input and record
+    Param* wowFlutter;                        // W&F on/off
 
     const Speed& currentSpeed() const noexcept { return speeds[juce::jlimit (0, 2, juce::roundToInt (speed->get()))]; }
 
@@ -67,6 +69,21 @@ public:
     void setRecordEnabled (bool);
     void eraseAll();
 
+    // Locators: one In/Out region used by both loop and auto-punch (message thread).
+    void setInPoint (juce::int64 p)  { inPoint.store (juce::jmax ((juce::int64) 0, p)); }
+    void setOutPoint (juce::int64 p) { outPoint.store (juce::jmax ((juce::int64) 0, p)); }
+    juce::int64 getInPoint() const noexcept  { return inPoint.load(); }
+    juce::int64 getOutPoint() const noexcept { return outPoint.load(); }
+    std::atomic<bool> loopOn { false }, punchOn { false };
+    bool hasRegion() const noexcept { return outPoint.load() > inPoint.load(); }
+
+    /** Replaces a track with new audio (session loading). Message thread, transport stopped. */
+    void loadTrack (int track, const float* data, juce::int64 numSamples);
+    void setLength (juce::int64 samples) { length.store (juce::jmax ((juce::int64) 0, samples)); }
+
+    /** Goes up whenever a track is recorded on, so sessions only rewrite tracks that changed. */
+    std::uint32_t getTrackRevision (int track) const noexcept { return trackRevision[(size_t) track].load(); }
+
     bool isPlaying() const noexcept         { return playing.load(); }
     bool isRecordEnabled() const noexcept   { return recordEnabled.load(); }
     bool isRecording (int track) const noexcept;
@@ -76,6 +93,15 @@ public:
     int getLatency() const noexcept          { return latency.load(); }
     void setLatency (int samples) noexcept   { latency.store (juce::jmax (0, samples)); }
     juce::int64 getDroppedSamples() const noexcept { return dropped.load(); }
+
+    /** Export: every track plays back (armed ones too) and nothing records. */
+    std::atomic<bool> exporting { false };
+
+    /** Does this track hold any recorded audio? */
+    bool trackHasAudio (int track) const noexcept;
+
+    /** Writes audio straight onto a track (session loading). Message thread, transport stopped. */
+    void writeTrack (int track, juce::int64 start, const float* data, int numSamples);
 
     /** Tape character on/off. Always on in the app; the tests switch it off to check storage bit-for-bit. */
     std::atomic<bool> characterOn { true };
@@ -99,6 +125,8 @@ private:
     std::atomic<juce::int64> position { 0 }, length { 0 }, locateRequest { -1 }, dropped { 0 };
     std::atomic<std::uint64_t> blocksProcessed { 0 };
     juce::int64 pos = 0;   // audio thread's own copy of the position
+    std::atomic<juce::int64> inPoint { 0 }, outPoint { 0 };
+    std::array<std::atomic<std::uint32_t>, numTracks> trackRevision {};
 
     // Tape character state.
     Dsp::Smoothed levelGain;
@@ -108,6 +136,17 @@ private:
     struct TrackFilters { Dsp::Biquad bump, shelf, lowPass; };
     std::array<TrackFilters, numTracks> filters {};
     std::array<Dsp::Noise, numTracks> hiss {};
+
+    // Wow and flutter: one modulated delay per track on the playback path, driven by one shared transport wobble.
+    static constexpr int wowLineSize = 512;
+    std::array<std::array<float, wowLineSize>, numTracks> wowLine {};
+    int wowWrite = 0;
+    double wowPhase = 0.0, flutterPhase1 = 0.0, flutterPhase2 = 0.0;
+    std::array<float, Config::maxBlock> wowDelay {};
+    std::array<float, Config::maxBlock> playScratch {};
+    int wowBase (const Speed&) const noexcept;
+    void processSegment (float* const* tapeOut, int offset, int count,
+                         bool isPlay, bool rec, bool character, const Speed& sp, int delay) noexcept;
     int designedSpeed = -1;
     double designedRate = 0.0;
 
@@ -121,7 +160,7 @@ private:
     void write (int track, juce::int64 start, const float* src, int n) noexcept;
     void designFilters (int speedIndex) noexcept;
     void saturate (int numSamples, const Speed&) noexcept;
-    int recordDelay() const noexcept { return latency.load() + oversamplerLatency; }
+    int recordDelay() const noexcept;
 
     JUCE_DECLARE_NON_COPYABLE (TapeMachine)
 };

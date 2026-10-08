@@ -42,6 +42,8 @@ public:
 private:
     std::atomic<float> value;
     juce::ListenerList<Listener> listeners;
+    std::atomic<std::uint32_t>* changeCounter = nullptr;   // shared by the whole ParamSet (unsaved-changes detection)
+    friend class ParamSet;
 
     JUCE_DECLARE_NON_COPYABLE (Param)
 };
@@ -58,7 +60,11 @@ public:
     Param* find (const juce::String& id) const;
     const juce::OwnedArray<Param>& all() const noexcept { return params; }
 
+    /** Goes up whenever any parameter changes. */
+    std::uint32_t changeCount() const noexcept { return changes.load(); }
+
 private:
     juce::OwnedArray<Param> params;
     std::map<juce::String, Param*> byId;
+    std::atomic<std::uint32_t> changes { 0 };
 };

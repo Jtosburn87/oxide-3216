@@ -1,4 +1,4 @@
-#include "TapeMachine.h"
+﻿#include "TapeMachine.h"
 
 namespace
 {
@@ -10,7 +10,8 @@ TapeMachine::TapeMachine (ParamSet& params)
     : maxChunks ((size_t) std::ceil (Config::maxSampleRate * 60.0 * Config::maxTapeMinutes / chunkSize))
 {
     recordLevel = &params.add ("tape.level", "Record level", -12.0f, 18.0f, 0.0f);
-    speed = &params.add ("tape.speed", "Tape speed", 0.0f, 2.0f, 1.0f);   // 15 ips
+    speed = &params.addStepped ("tape.speed", "Tape speed", 3, 1);   // 15 ips
+    wowFlutter = &params.addToggle ("tape.wf", "Wow and flutter", true);
     for (int t = 0; t < numTracks; ++t)
     {
         arm[(size_t) t] = &params.addToggle ("tape.arm" + juce::String (t + 1), "Arm " + juce::String (t + 1), false);
@@ -81,6 +82,8 @@ void TapeMachine::locate (juce::int64 p)
 void TapeMachine::eraseAll()
 {
     stop();
+    for (auto& r : trackRevision)
+        r.fetch_add (1);
     const auto stamp = blocksProcessed.load();
     for (auto& table : chunks)
         for (auto& c : table)
@@ -216,6 +219,43 @@ void TapeMachine::saturate (int n, const Speed& s) noexcept
     oversampler->processSamplesDown (block);
 }
 
+
+//==============================================================================
+int TapeMachine::wowBase (const Speed& s) const noexcept
+{
+    if (! wowFlutter->on())
+        return 0;
+    // Enough fixed delay that the wobble never needs to read ahead of the tape.
+    const double wow = s.wowPercent * 0.01 * sampleRate / (juce::MathConstants<double>::twoPi * 0.55);
+    const double flutter = s.flutterPercent * 0.01 * sampleRate / (juce::MathConstants<double>::twoPi * 6.8);
+    return (int) std::ceil (wow + flutter) + 3;
+}
+
+int TapeMachine::recordDelay() const noexcept
+{
+    return latency.load() + oversamplerLatency + (characterOn.load() ? wowBase (currentSpeed()) : 0);
+}
+
+void TapeMachine::loadTrack (int track, const float* data, juce::int64 n)
+{
+    jassert (! isPlaying());
+    const auto stamp = blocksProcessed.load();
+    for (auto& c : chunks[(size_t) track])
+        if (auto* old = c.exchange (nullptr))
+            retired.push_back ({ old, stamp });
+
+    if (n <= 0)
+        return;
+    ensureChunks (track, 0, n - 1);
+    for (juce::int64 done = 0; done < n;)
+    {
+        const auto len = (int) juce::jmin ((juce::int64) chunkSize, n - done);
+        std::memcpy (chunks[(size_t) track][(size_t) (done >> chunkBits)].load(), data + done, sizeof (float) * (size_t) len);
+        done += len;
+    }
+    trackRevision[(size_t) track].fetch_add (1);
+}
+
 void TapeMachine::process (const float* const* tapeIn, float* const* tapeOut, int n) noexcept
 {
     jassert (n <= Config::maxBlock);
@@ -226,7 +266,7 @@ void TapeMachine::process (const float* const* tapeIn, float* const* tapeOut, in
         pos = req;
 
     const bool isPlay = playing.load();
-    const bool rec = recordEnabled.load();
+    const bool rec = recordEnabled.load() && ! exporting.load();
     const bool character = characterOn.load() && oversampler != nullptr;
 
     const int speedIndex = juce::jlimit (0, 2, juce::roundToInt (speed->get()));
@@ -242,7 +282,7 @@ void TapeMachine::process (const float* const* tapeIn, float* const* tapeOut, in
     bool anyArmed = false;
     for (int t = 0; t < numTracks; ++t)
     {
-        const bool armed = arm[(size_t) t]->on();
+        const bool armed = arm[(size_t) t]->on() && ! exporting.load (std::memory_order_relaxed);
         anyArmed = anyArmed || armed;
         float* dst = recordBuf[(size_t) t].data();
         const float* in = tapeIn[t];
@@ -256,62 +296,177 @@ void TapeMachine::process (const float* const* tapeIn, float* const* tapeOut, in
     if (character && anyArmed)
         saturate (n, sp);
 
-    const int delay = character ? recordDelay() : latency.load();
-    const float hissGain = Dsp::dbToGain (sp.hissDb);
+    // Wow and flutter: one wobble for the whole transport (as on a real machine), smaller at higher speeds.
+    const int base = character ? wowBase (sp) : 0;
+    if (base > 0)
+    {
+        const double twoPi = juce::MathConstants<double>::twoPi;
+        const double wowAmp = sp.wowPercent * 0.01 * sampleRate / (twoPi * 0.55);
+        const double flutterAmp = sp.flutterPercent * 0.01 * sampleRate / (twoPi * 6.8);
+        const double incW = twoPi * 0.55 / sampleRate, incF1 = twoPi * 6.8 / sampleRate, incF2 = twoPi * 9.3 / sampleRate;
+        for (int i = 0; i < n; ++i)
+        {
+            const double wobble = wowAmp * std::sin (wowPhase) + flutterAmp * (0.65 * std::sin (flutterPhase1) + 0.35 * std::sin (flutterPhase2));
+            wowDelay[(size_t) i] = (float) (base - wobble);
+            wowPhase += incW;
+            flutterPhase1 += incF1;
+            flutterPhase2 += incF2;
+        }
+        wowPhase = std::fmod (wowPhase, twoPi);
+        flutterPhase1 = std::fmod (flutterPhase1, twoPi);
+        flutterPhase2 = std::fmod (flutterPhase2, twoPi);
+    }
 
-    bool anyRecording = false;
+    // Everything the musician hears from tape is late by this much: recordings are written that much earlier.
+    const int delay = latency.load() + (character ? oversamplerLatency + base : 0);
+
+    // Loop: split the block where the tape reaches the Out point and jump back to In.
+    const bool loop = loopOn.load() && hasRegion();
+    const auto loopIn = inPoint.load(), loopOut = outPoint.load();
+    int done = 0;
+    while (done < n)
+    {
+        int count = n - done;
+        if (isPlay && loop && pos < loopOut)
+            count = (int) juce::jmin ((juce::int64) count, loopOut - pos);
+
+        processSegment (tapeOut, done, count, isPlay, rec, character, sp, delay);
+
+        if (isPlay)
+        {
+            pos += count;
+            if (loop && pos == loopOut)
+                pos = loopIn;
+        }
+        done += count;
+    }
+
+    if (isPlay)
+    {
+        const bool endOfTape = pos >= (juce::int64) maxChunks * chunkSize - Config::maxBlock;
+        const bool looping = loop && pos < loopOut;
+        if (endOfTape || (! rec && ! looping && pos >= length.load()))
+            playing.store (false);
+    }
+
+    position.store (pos);
+}
+
+void TapeMachine::processSegment (float* const* tapeOut, int offset, int count,
+                                  bool isPlay, bool rec, bool character, const Speed& sp, int delay) noexcept
+{
+    const auto punchIn = inPoint.load(), punchOut = outPoint.load();
+    const bool punch = punchOn.load() && punchOut > punchIn && isPlay && rec;
+    const bool wobble = character && wowBase (sp) > 0;
+    const float hissGain = Dsp::dbToGain (sp.hissDb);
+    float* play = playScratch.data();
+    juce::int64 recordedEnd = -1;
+
     for (int t = 0; t < numTracks; ++t)
     {
-        float* out = tapeOut[t];
+        float* out = tapeOut[t] + offset;
+        const float* input = recordBuf[(size_t) t].data() + offset;
+        const bool armed = arm[(size_t) t]->on() && ! exporting.load (std::memory_order_relaxed);
 
-        if (arm[(size_t) t]->on())
+        // Playback (plus hiss while rolling): unarmed tracks, and armed tracks outside the punch region.
+        const bool needPlay = isPlay && (! armed || punch);
+        if (needPlay)
         {
-            // Armed: monitor the input (and record it when rolling in record).
-            std::memcpy (out, recordBuf[(size_t) t].data(), sizeof (float) * (size_t) n);
-            if (isPlay && rec)
-            {
-                write (t, pos - delay, out, n);
-                anyRecording = true;
-            }
-        }
-        else if (isPlay)
-        {
-            readTrack (t, pos, out, n);
+            readTrack (t, pos, play, count);
             if (character)
             {
                 auto& noise = hiss[(size_t) t];
-                for (int i = 0; i < n; ++i)
-                    out[i] += hissGain * noise.next();
+                for (int i = 0; i < count; ++i)
+                    play[i] += hissGain * noise.next();
             }
         }
         else
         {
-            std::memset (out, 0, sizeof (float) * (size_t) n);
+            std::memset (play, 0, sizeof (float) * (size_t) count);
+        }
+
+        if (wobble)
+        {
+            // Modulated delay with linear interpolation; the line keeps running so it never clicks.
+            auto& line = wowLine[(size_t) t];
+            for (int i = 0; i < count; ++i)
+            {
+                const int w = (wowWrite + i) & (wowLineSize - 1);
+                line[(size_t) w] = play[i];
+                const float readPos = (float) (wowWrite + i) - wowDelay[(size_t) (offset + i)];
+                const int i0 = (int) std::floor (readPos);
+                const float frac = readPos - (float) i0;
+                const float a = line[(size_t) (i0 & (wowLineSize - 1))], b = line[(size_t) ((i0 + 1) & (wowLineSize - 1))];
+                play[i] = a + (b - a) * frac;
+            }
+        }
+
+        if (! armed)
+        {
+            std::memcpy (out, play, sizeof (float) * (size_t) count);
+        }
+        else if (punch)
+        {
+            // Auto-input: hear the old take until the punch-in point, the input inside the region.
+            for (int i = 0; i < count; ++i)
+            {
+                const auto heard = pos + i;
+                out[i] = (heard >= punchIn && heard < punchOut) ? input[i] : play[i];
+            }
+        }
+        else
+        {
+            std::memcpy (out, input, sizeof (float) * (size_t) count);
+        }
+
+        if (armed && isPlay && rec)
+        {
+            const auto w0 = pos - delay;
+            auto a = w0, b = w0 + count;
+            if (punch)
+            {
+                a = juce::jmax (a, punchIn);
+                b = juce::jmin (b, punchOut);
+            }
+            if (b > a)
+            {
+                write (t, a, input + (a - w0), (int) (b - a));
+                trackRevision[(size_t) t].fetch_add (1, std::memory_order_relaxed);
+                recordedEnd = juce::jmax (recordedEnd, b);
+            }
         }
 
         if (character)
         {
             auto& f = filters[(size_t) t];
-            for (int i = 0; i < n; ++i)
+            for (int i = 0; i < count; ++i)
                 out[i] = f.lowPass.process (f.shelf.process (f.bump.process (out[i])));
         }
     }
 
-    if (isPlay)
+    if (wobble)
+        wowWrite = (wowWrite + count) & (wowLineSize - 1);
+
+    if (recordedEnd > 0)
     {
-        if (anyRecording)
-        {
-            const auto end = pos + n - delay;
-            auto len = length.load();
-            while (end > len && ! length.compare_exchange_weak (len, end)) {}
-        }
-
-        pos += n;
-
-        const bool endOfTape = pos >= (juce::int64) maxChunks * chunkSize - Config::maxBlock;
-        if (endOfTape || (! rec && pos >= length.load()))
-            playing.store (false);
+        auto len = length.load();
+        while (recordedEnd > len && ! length.compare_exchange_weak (len, recordedEnd)) {}
     }
+}
 
-    position.store (pos);
+bool TapeMachine::trackHasAudio (int track) const noexcept
+{
+    for (auto& c : chunks[(size_t) track])
+        if (c.load (std::memory_order_acquire) != nullptr)
+            return true;
+    return false;
+}
+
+void TapeMachine::writeTrack (int track, juce::int64 start, const float* data, int n)
+{
+    if (n <= 0)
+        return;
+    ensureChunks (track, start, start + n - 1);
+    write (track, start, data, n);
+    trackRevision[(size_t) track].fetch_add (1);
 }
