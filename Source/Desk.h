@@ -8,29 +8,47 @@
 namespace DeskLayout
 {
     constexpr int stripW = 110, cheekW = 30, centreW = 640;
-    constexpr int bridgeH = 84, knobH = 330, faderH = 270;
+    constexpr int bridgeH = 84, knobH = 930, faderH = 270;
     constexpr int totalH = bridgeH + knobH + faderH;
+
+    // Centre fader area grid: Sub 1-4, Aux 1-8, then Main (1.8 columns wide) behind a divider.
+    constexpr float gridX = 8.0f, gridW = 624.0f, colW = gridW / 13.8f;
+    inline float subColumnX (int k)  { return gridX + (float) k * colW; }
+    inline float auxColumnX (int k)  { return gridX + (float) (Config::numSubs + k) * colW; }
+    inline float mainColumnX()       { return gridX + 12.0f * colW; }
 }
 
 /** One channel strip column: bridge meter, knob area, fader area, scribble strip. */
 class StripComponent : public juce::Component
 {
 public:
-    StripComponent (ChannelStrip&, bool isReturn);
+    explicit StripComponent (ChannelStrip&);
 
     void paint (juce::Graphics&) override;
     void resized() override;
-    void updateMeter() { meter.setLevel (strip.takePeak()); }
+    void update();   // meters and pop flash, from the desk timer
 
 private:
     ChannelStrip& strip;
-    const bool isReturn;
 
     LedMeter meter;
     Knob trim, hpf, pan;
-    ParamButton mainButton, mute, solo;
+    juce::OwnedArray<Knob> eqKnobs;            // gain, freq per band
+    Knob gateThr, gateRange;
+    ParamButton gateFast;
+    Knob compInput, compOutput, compAttack, compRelease;
+    juce::OwnedArray<RadioParamButton> ratioButtons;
+    ParamButton compAll, compIn;
+    GrMeter grMeter;
+    juce::OwnedArray<Knob> auxKnobs;
+    juce::OwnedArray<ParamButton> auxPre;
+    ParamButton mainButton;
+    juce::OwnedArray<ParamButton> subButtons;
+    ParamButton mute, solo;
     Fader fader;
     juce::Label scribble;
+
+    std::uint32_t lastPops = 0;
 
     struct Section { juce::String title; juce::Rectangle<int> box; };
     std::vector<Section> sections;
@@ -48,7 +66,8 @@ private:
     bool rec = false;
 };
 
-/** Centre section: tape machine and transport on the left, main fader and meters. */
+/** Centre section: tape machine, transport and group EQs on the left; bus meters in the bridge;
+    main fader at the far right of the fader area. */
 class CentreSection : public juce::Component
 {
 public:
@@ -66,12 +85,15 @@ private:
     juce::TextButton power { "Power" }, rew { "Rew" }, stop { "Stop" }, play { "Play" }, rec { "Rec" }, erase { "Erase" };
     Knob recordLevel;
     juce::OwnedArray<ParamButton> armButtons;
+    juce::OwnedArray<Knob> groupEqKnobs;   // [sub][band][gain, freq]
 
+    std::array<std::array<LedMeter, 2>, Config::numSubs> subMeters;
+    std::array<LedMeter, Config::numAux> auxMeters;
     std::array<LedMeter, 2> mainMeters;
     Fader mainFader;
     juce::Label mainScribble;
 
-    juce::Rectangle<int> deckBox, armBox, levelBox;
+    juce::Rectangle<int> deckBox, armBox, levelBox, groupEqBox;
 
     void styleTransport (juce::TextButton&, juce::Colour);
     void confirmErase();

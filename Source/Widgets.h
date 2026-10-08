@@ -37,12 +37,17 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
 
+    /** Default 34 px dial in a 48 x 50 box; small knobs use a 26 px dial in a 36 x 42 box. */
+    void setDialSize (int px) { dialSize = px; resized(); }
+
     static constexpr int preferredWidth = 48, preferredHeight = 50;
+    static constexpr int smallWidth = 36, smallHeight = 42;
 
 private:
     ParamSlider slider;
     juce::String legend, shown, endLeft, endRight;
     std::function<juce::String (float)> formatter;
+    int dialSize = 34;
 
     void paramChanged (Param&) override { updateLegend(); }
     void updateLegend();
@@ -58,7 +63,12 @@ public:
 
     Param& param;
 
+    /** Briefly light the button in red (the gate pop indicator). */
+    void flash();
+
 private:
+    bool flashing = false;
+    void paintButton (juce::Graphics&, bool over, bool down) override;
     void paramChanged (Param&) override;
     void clicked() override;
 };
@@ -84,4 +94,30 @@ public:
 private:
     float shownDb = -100.0f, holdDb = -100.0f;
     int holdFrames = 0;
+};
+
+/** One button of a radio group bound to a stepped Param: lit when the param equals its index. */
+class RadioParamButton : public juce::TextButton,
+                         private Param::Listener
+{
+public:
+    RadioParamButton (Param&, int index, const juce::String& text);
+    ~RadioParamButton() override;
+
+private:
+    Param& param;
+    const int index;
+    void paramChanged (Param&) override;
+    void clicked() override;
+};
+
+/** Horizontal gain-reduction bar, 0..20 dB, amber to red. */
+class GrMeter : public juce::Component
+{
+public:
+    void setReduction (float db);
+    void paint (juce::Graphics&) override;
+
+private:
+    float shown = 0.0f;
 };

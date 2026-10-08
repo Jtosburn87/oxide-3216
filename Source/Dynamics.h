@@ -1,0 +1,96 @@
+#pragma once
+
+#include "Params.h"
+#include "Dsp.h"
+
+/** Fast-attack pop: the exaggerated click a hardware gate makes when a loud transient
+    slams it open. Change these numbers to taste. */
+namespace GatePop
+{
+    constexpr float triggerLevel = 0.25f;     // transient peak that fires it (-12 dBFS)
+    constexpr float amount       = 1.2f;      // pop level = amount x transient peak ...
+    constexpr float maxLevel     = 0.8f;      // ... capped here
+    constexpr float thumpHz      = 150.0f;    // low thump
+    constexpr float thumpDecayS  = 0.014f;
+    constexpr float thumpMix     = 0.8f;
+    constexpr float clickDecayS  = 0.0007f;   // short noise click
+    constexpr float clickMix     = 0.6f;
+    constexpr float lockoutS     = 0.040f;    // no re-trigger for this long
+    constexpr float watchS       = 0.004f;    // after opening, how long a transient may still fire it
+}
+
+/** Channel gate (from the prototype): peak detector, 5 dB hysteresis, 50 ms hold,
+    attack 1.5 ms (0.1 ms with Fast Attack), release 120 ms. Threshold at minimum = off. */
+class Gate
+{
+public:
+    Gate (ParamSet&, const juce::String& prefix);
+
+    Param* threshold;   // dBFS, -80..-10 (-80 = off)
+    Param* range;       // dB, -60..0
+    Param* fast;        // fast attack + pop
+
+    void prepare (double sampleRate) noexcept;
+    void beginBlock() noexcept;
+    float process (float x) noexcept;
+    bool isOff() const noexcept { return threshold->get() <= -79.0f; }
+
+    /** Fully open with no pop running: safe to skip processing while off. */
+    bool isIdle() const noexcept { return gain >= 0.99999f && popAmp == 0.0f && watch == 0; }
+
+    /** Counts pops; the UI flashes the Fast Attack button when this changes. */
+    std::atomic<std::uint32_t> popCount { 0 };
+
+private:
+    double sr = 48000.0;
+    float env = 0.0f, gain = 1.0f;
+    bool open = true;
+    int hold = 0, watch = 0, cooldown = 0, popT = 0;
+    float popAmp = 0.0f;
+    Dsp::Noise noise;
+
+    // per-block values
+    bool off = true, fastOn = false;
+    float dec = 0, aAttack = 0, aRelease = 0, thrLin = 0, closeLin = 0, rangeLin = 0;
+};
+
+/** Black-face 1176-style FET compressor (from the prototype).
+    Input drives into a fixed -14 dBFS threshold (3 dB per unit). Peak detection, soft knee 4 dB,
+    asymmetric tanh saturation after the gain reduction, no automatic make-up. */
+class FetCompressor
+{
+public:
+    FetCompressor (ParamSet&, const juce::String& prefix);
+
+    Param* in;        // in/out, default out
+    Param* input;     // 0..10
+    Param* output;    // dB, -12..+12
+    Param* attack;    // 1..7, 7 fastest (800 us .. 20 us)
+    Param* release;   // 1..7, 7 fastest (1.1 s .. 50 ms)
+    Param* ratio;     // 0..3 = 4, 8, 12, 20
+    Param* all;       // all buttons in
+
+    static constexpr float ratios[4] = { 4.0f, 8.0f, 12.0f, 20.0f };
+
+    void prepare (double sampleRate) noexcept;
+    void beginBlock() noexcept;
+    float process (float x) noexcept;
+    bool isIn() const noexcept { return in->on(); }
+
+    /** Peak gain reduction (dB) since the last call. */
+    float takeGainReduction() noexcept { return grPeak.exchange (0.0f); }
+
+private:
+    double sr = 48000.0;
+    float env = 0.0f, gr = 0.0f, blockMaxGr = 0.0f;
+    std::atomic<float> grPeak { 0.0f };
+
+    // per-block values
+    float driveGain = 1, outGain = 1, aAttack = 0, aRelease = 0, dec = 0, slope = 0, knee = 4, satScale = 0.9f;
+    static constexpr float satBias = 0.08f;
+    const float satOffset = std::tanh (satBias);
+    bool wasIn = false;
+
+    void finishBlock() noexcept;
+    friend class ChannelStrip;
+};

@@ -30,6 +30,7 @@ endif()
 add_library(ConsoleTapeCore STATIC
     Source/AudioEngine.cpp
     Source/ChannelStrip.cpp
+    Source/Dynamics.cpp
     Source/Params.cpp
     Source/TapeMachine.cpp)
 target_include_directories(ConsoleTapeCore PUBLIC Source "${ASIO_SDK_DIR}/common")

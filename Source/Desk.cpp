@@ -6,11 +6,23 @@ using namespace DeskLayout;
 
 namespace
 {
-    const juce::Colour muteRed { 0xffd0473c };
+    const juce::Colour muteRed  { 0xffd0473c };
+    const juce::Colour gateCap  { 0xff3d6b50 };
+    const juce::Colour compCap  { 0xffc9c6bb };
+    const juce::Colour auxCap   { 0xffd9d6cc };
 
     juce::String formatHz (float f)
     {
         return f >= 1000.0f ? juce::String (f / 1000.0f, f >= 10000.0f ? 0 : 1) + "k" : juce::String (juce::roundToInt (f));
+    }
+
+    /** Range printed at the ends of a frequency knob's sweep: Hz for LF, kHz for the others. */
+    std::pair<juce::String, juce::String> freqEnds (const FourBandEq::BandSpec& s)
+    {
+        if (s.maxHz <= 1000.0f)
+            return { juce::String (juce::roundToInt (s.minHz)), juce::String (juce::roundToInt (s.maxHz)) };
+        const auto k = [] (float hz) { auto t = juce::String (hz / 1000.0f, 1); return t.endsWith (".0") ? t.dropLastCharacters (2) : t; };
+        return { k (s.minHz), k (s.maxHz) };
     }
 
     void paintSection (juce::Graphics& g, const juce::String& title, juce::Rectangle<int> box, juce::Colour background)
@@ -41,6 +53,12 @@ namespace
         l.setColour (juce::TextEditor::focusedOutlineColourId, focus);
     }
 
+    void redButton (juce::Button& b)
+    {
+        b.setColour (juce::TextButton::buttonOnColourId, muteRed);
+        b.setColour (juce::TextButton::textColourOnId, juce::Colours::white);
+    }
+
     void paintColumn (juce::Graphics& g, juce::Rectangle<int> r)
     {
         // Bridge cell.
@@ -63,30 +81,106 @@ namespace
         g.setColour (juce::Colours::black);
         g.fillRect (r.getX(), bridgeH + knobH, r.getWidth(), 1);
     }
+
+    juce::Rectangle<int> knobAt (int x, int y)      { return { x, y, Knob::preferredWidth, Knob::preferredHeight }; }
+    juce::Rectangle<int> smallKnobAt (int x, int y) { return { x, y, Knob::smallWidth, Knob::smallHeight }; }
 }
 
 //==============================================================================
-StripComponent::StripComponent (ChannelStrip& s, bool ret)
-    : strip (s), isReturn (ret),
+StripComponent::StripComponent (ChannelStrip& s)
+    : strip (s),
       trim (*s.controls.trim, "Trim"),
       hpf (*s.controls.hpf, "HPF"),
       pan (*s.controls.pan, "Pan"),
+      gateThr (*s.gate.threshold, "Thr", gateCap),
+      gateRange (*s.gate.range, "Range", gateCap),
+      gateFast (*s.gate.fast, "Fast atk"),
+      compInput (*s.comp.input, "Input", compCap),
+      compOutput (*s.comp.output, "Output", compCap),
+      compAttack (*s.comp.attack, "Attack", compCap),
+      compRelease (*s.comp.release, "Release", compCap),
+      compAll (*s.comp.all, "All"),
+      compIn (*s.comp.in, "In"),
       mainButton (*s.controls.main, "Main"),
       mute (*s.controls.mute, "Mute"),
       solo (*s.controls.solo, "Solo"),
       fader (*s.controls.fader)
 {
+    auto add = [this] (juce::Component& c) { addAndMakeVisible (c); };
+
+    add (meter);
+
     hpf.setFormatter ([] (float f) { return f < 20.5f ? juce::String ("off") : formatHz (f); });
     hpf.setEndLabels ("20", "300");
+    add (trim);
+    add (hpf);
+
+    for (int b = 0; b < FourBandEq::numBands; ++b)
+    {
+        const auto& spec = FourBandEq::bands[b];
+        const auto cap = juce::Colour (spec.capColour);
+        auto* g = eqKnobs.add (new Knob (*s.eq.gain[b], spec.label, cap));
+        g->setEndLabels ("-", "+");
+        auto* f = eqKnobs.add (new Knob (*s.eq.freq[b], "freq", cap));
+        f->setFormatter ([] (float hz) { return formatHz (hz); });
+        const auto [lo, hi] = freqEnds (spec);
+        f->setEndLabels (lo, hi);
+        add (*g);
+        add (*f);
+    }
+
+    gateThr.setFormatter ([] (float db) { return db <= -79.0f ? juce::String ("off") : juce::String (juce::roundToInt (db)); });
+    gateFast.setTooltip ("Fast attack: opens in 0.1 ms. A loud transient makes the gate pop.");
+    gateFast.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffd9dbd8));
+    gateFast.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff0b0b0b));
+    add (gateThr);
+    add (gateRange);
+    add (gateFast);
+
+    compInput.setEndLabels ("0", "10");
+    compOutput.setEndLabels ("-", "+");
+    compAttack.setEndLabels ("1", "7");
+    compRelease.setEndLabels ("1", "7");
+    for (auto* k : { &compInput, &compOutput, &compAttack, &compRelease })
+        add (*k);
+    for (int i = 0; i < 4; ++i)
+    {
+        auto* b = ratioButtons.add (new RadioParamButton (*s.comp.ratio, i, juce::String (juce::roundToInt (FetCompressor::ratios[i]))));
+        b->setTooltip ("Ratio " + b->getButtonText() + ":1");
+        add (*b);
+    }
+    compAll.setTooltip ("All buttons in: about 60:1 with extra drive and distortion");
+    redButton (compAll);
+    compIn.setTooltip ("Compressor in");
+    add (compAll);
+    add (compIn);
+    add (grMeter);
+
+    for (int k = 0; k < Config::numAux; ++k)
+    {
+        auto* knob = auxKnobs.add (new Knob (*s.controls.auxLevel[k], "A" + juce::String (k + 1), auxCap));
+        knob->setDialSize (26);
+        auto* p = auxPre.add (new ParamButton (*s.controls.auxPre[k], "P"));
+        p->setTooltip ("P = pre-fader send");
+        add (*knob);
+        add (*p);
+    }
+
+    add (mainButton);
+    for (int k = 0; k < Config::numSubs; ++k)
+    {
+        auto* b = subButtons.add (new ParamButton (*s.controls.sub[k], "S" + juce::String (k + 1)));
+        b->setTooltip ("Assign to sub " + juce::String (k + 1));
+        add (*b);
+    }
     pan.setEndLabels ("L", "R");
+    add (pan);
 
-    mute.setColour (juce::TextButton::buttonOnColourId, muteRed);
-    mute.setColour (juce::TextButton::textColourOnId, juce::Colours::white);
-
-    for (juce::Component* c : { (juce::Component*) &meter, (juce::Component*) &trim, (juce::Component*) &hpf,
-                                (juce::Component*) &pan, (juce::Component*) &mainButton, (juce::Component*) &mute,
-                                (juce::Component*) &solo, (juce::Component*) &fader, (juce::Component*) &scribble })
-        addAndMakeVisible (c);
+    redButton (mute);
+    add (mute);
+    add (solo);
+    add (fader);
+    add (scribble);
 
     setupScribble (scribble, strip.name);
     scribble.setEditable (false, true, false);   // double-click to rename
@@ -96,6 +190,7 @@ StripComponent::StripComponent (ChannelStrip& s, bool ret)
     fader.slider.setTitle (strip.name + " fader");
     setTitle (strip.name);
     setFocusContainerType (FocusContainerType::focusContainer);
+    lastPops = s.gate.popCount.load();
 }
 
 void StripComponent::resized()
@@ -103,18 +198,73 @@ void StripComponent::resized()
     meter.setBounds (juce::Rectangle<int> (10, 64).withCentre ({ stripW / 2, bridgeH / 2 }));
 
     sections.clear();
+    const int bx = 5, bw = stripW - 10;
+    const int left = bx + 2, right = bx + bw - 2 - Knob::preferredWidth;
     int y = bridgeH + 12;
 
-    auto box = juce::Rectangle<int> (5, y, stripW - 10, 66);
+    auto box = juce::Rectangle<int> (bx, y, bw, 66);
     sections.push_back ({ "Input", box });
-    trim.setBounds (box.getX() + 2, box.getY() + 10, Knob::preferredWidth, Knob::preferredHeight);
-    hpf.setBounds (box.getRight() - 2 - Knob::preferredWidth, box.getY() + 10, Knob::preferredWidth, Knob::preferredHeight);
+    trim.setBounds (knobAt (left, box.getY() + 10));
+    hpf.setBounds (knobAt (right, box.getY() + 10));
     y = box.getBottom() + 14;
 
-    box = juce::Rectangle<int> (5, y, stripW - 10, 90);
+    box = { bx, y, bw, 10 + 4 * 52 + 4 };
+    sections.push_back ({ "Equaliser", box });
+    for (int b = 0; b < FourBandEq::numBands; ++b)
+    {
+        eqKnobs[b * 2]->setBounds (knobAt (left, box.getY() + 10 + b * 52));
+        eqKnobs[b * 2 + 1]->setBounds (knobAt (right, box.getY() + 10 + b * 52));
+    }
+    y = box.getBottom() + 14;
+
+    box = { bx, y, bw, 10 + 50 + 4 + 18 + 6 };
+    sections.push_back ({ "Gate", box });
+    gateThr.setBounds (knobAt (left, box.getY() + 10));
+    gateRange.setBounds (knobAt (right, box.getY() + 10));
+    gateFast.setBounds (bx + 5, box.getY() + 64, bw - 10, 18);
+    y = box.getBottom() + 14;
+
+    box = { bx, y, bw, 10 + 2 * 52 + 2 + 17 + 4 + 16 + 6 };
+    sections.push_back ({ "Compressor", box });
+    compInput.setBounds (knobAt (left, box.getY() + 10));
+    compOutput.setBounds (knobAt (right, box.getY() + 10));
+    compAttack.setBounds (knobAt (left, box.getY() + 62));
+    compRelease.setBounds (knobAt (right, box.getY() + 62));
+    {
+        auto row = juce::Rectangle<int> (bx + 4, box.getY() + 116, bw - 8, 17);
+        const int w = row.getWidth() / 5;
+        for (auto* b : ratioButtons)
+            b->setBounds (row.removeFromLeft (w).reduced (1, 0));
+        compAll.setBounds (row.reduced (1, 0));
+
+        auto row2 = juce::Rectangle<int> (bx + 4, box.getY() + 137, bw - 8, 16);
+        compIn.setBounds (row2.removeFromLeft (30));
+        row2.removeFromLeft (4);
+        grMeter.setBounds (row2.withSizeKeepingCentre (row2.getWidth(), 8));
+    }
+    y = box.getBottom() + 14;
+
+    box = { bx, y, bw, 10 + 4 * 44 + 4 };
+    sections.push_back ({ "Aux sends", box });
+    for (int k = 0; k < Config::numAux; ++k)
+    {
+        const int col = k % 2, row = k / 2;
+        const int x = bx + 2 + col * 48, ky = box.getY() + 8 + row * 44;
+        auxKnobs[k]->setBounds (smallKnobAt (x, ky));
+        auxPre[k]->setBounds (x + Knob::smallWidth - 1, ky + 7, 12, 15);
+    }
+    y = box.getBottom() + 14;
+
+    box = { bx, y, bw, 12 + 20 + 4 + 20 + 2 + 50 + 2 };
     sections.push_back ({ "Routing", box });
-    mainButton.setBounds (box.getX() + 8, box.getY() + 12, box.getWidth() - 16, 20);
-    pan.setBounds (juce::Rectangle<int> (Knob::preferredWidth, Knob::preferredHeight).withCentre ({ stripW / 2, box.getY() + 64 }));
+    mainButton.setBounds (bx + 6, box.getY() + 10, bw - 12, 20);
+    {
+        auto row = juce::Rectangle<int> (bx + 4, box.getY() + 34, bw - 8, 20);
+        const int w = row.getWidth() / Config::numSubs;
+        for (auto* b : subButtons)
+            b->setBounds (row.removeFromLeft (w).reduced (1, 0));
+    }
+    pan.setBounds (juce::Rectangle<int> (Knob::preferredWidth, Knob::preferredHeight).withCentre ({ stripW / 2, box.getY() + 82 }));
 
     const int f = bridgeH + knobH;
     mute.setBounds (8, f + 8, 45, 20);
@@ -134,7 +284,19 @@ void StripComponent::paint (juce::Graphics& g)
     g.fillRect (0, 0, 1, getHeight());
     g.setColour (juce::Colours::black);
     g.fillRect (getWidth() - 1, 0, 1, getHeight());
-    juce::ignoreUnused (isReturn);
+}
+
+void StripComponent::update()
+{
+    meter.setLevel (strip.takePeak());
+    grMeter.setReduction (strip.comp.isIn() ? strip.comp.takeGainReduction() : 0.0f);
+
+    const auto pops = strip.gate.popCount.load();
+    if (pops != lastPops)
+    {
+        lastPops = pops;
+        gateFast.flash();
+    }
 }
 
 //==============================================================================
@@ -208,14 +370,36 @@ CentreSection::CentreSection (AudioEngine& e)
     for (int t = 0; t < TapeMachine::numTracks; ++t)
     {
         auto* b = armButtons.add (new ParamButton (*tape.arm[(size_t) t], juce::String (t + 1)));
-        b->setColour (juce::TextButton::buttonOnColourId, muteRed);
-        b->setColour (juce::TextButton::textColourOnId, juce::Colours::white);
+        redButton (*b);
         b->setTooltip ("Arm track " + juce::String (t + 1) + ": armed tracks monitor their input and record; others play back");
         addAndMakeVisible (b);
     }
 
+    for (int k = 0; k < Config::numSubs; ++k)
+    {
+        for (int b = 0; b < FourBandEq::numBands; ++b)
+        {
+            const auto& spec = FourBandEq::bands[b];
+            const auto cap = juce::Colour (spec.capColour);
+            auto* g = groupEqKnobs.add (new Knob (*engine.groupEq[k]->gain[b], spec.label, cap));
+            auto* f = groupEqKnobs.add (new Knob (*engine.groupEq[k]->freq[b], "freq", cap));
+            g->setEndLabels ("-", "+");
+            f->setFormatter ([] (float hz) { return formatHz (hz); });
+            const auto [lo, hi] = freqEnds (spec);
+            f->setEndLabels (lo, hi);
+            addAndMakeVisible (g);
+            addAndMakeVisible (f);
+        }
+    }
+
+    for (auto& pair : subMeters)
+        for (auto& m : pair)
+            addAndMakeVisible (m);
+    for (auto& m : auxMeters)
+        addAndMakeVisible (m);
     for (auto& m : mainMeters)
         addAndMakeVisible (m);
+
     addAndMakeVisible (mainFader);
     mainFader.slider.setTitle ("Main fader");
     setupScribble (mainScribble, "Main");
@@ -249,13 +433,26 @@ void CentreSection::confirmErase()
 
 void CentreSection::resized()
 {
-    // Main meters in the bridge, above the main fader.
-    const int mainX = centreW - 100;
-    mainMeters[0].setBounds (mainX + 34, 10, 12, 64);
-    mainMeters[1].setBounds (mainX + 52, 10, 12, 64);
+    // Bridge: stereo meters over the sub faders, mono over the aux faders, stereo over main.
+    const int my = 8, mh = 60;
+    for (int k = 0; k < Config::numSubs; ++k)
+    {
+        const int cx = juce::roundToInt (subColumnX (k) + colW * 0.5f);
+        subMeters[(size_t) k][0].setBounds (cx - 9, my, 8, mh);
+        subMeters[(size_t) k][1].setBounds (cx + 1, my, 8, mh);
+    }
+    for (int k = 0; k < Config::numAux; ++k)
+    {
+        const int cx = juce::roundToInt (auxColumnX (k) + colW * 0.5f);
+        auxMeters[(size_t) k].setBounds (cx - 4, my, 8, mh);
+    }
+    const int mainX = juce::roundToInt (mainColumnX());
+    const int mainCx = juce::roundToInt (mainColumnX() + colW * 0.9f);
+    mainMeters[0].setBounds (mainCx - 12, my, 10, mh);
+    mainMeters[1].setBounds (mainCx + 2, my, 10, mh);
 
     // Tape machine panel, left column.
-    deckBox = { 12, bridgeH + 12, 300, knobH - 24 };
+    deckBox = { 12, bridgeH + 12, 300, 300 };
     auto d = deckBox.reduced (10);
     d.removeFromTop (18);   // title
     clock.setBounds (d.removeFromTop (44));
@@ -274,21 +471,47 @@ void CentreSection::resized()
     recordLevel.setBounds (juce::Rectangle<int> (Knob::preferredWidth, Knob::preferredHeight).withCentre (levelBox.getCentre().translated (0, 4)));
 
     d.removeFromTop (14);
-    armBox = d.removeFromTop (54);
-    auto grid = armBox.reduced (8, 0).withTrimmedTop (14).withHeight (24);
+    armBox = d.removeFromTop (72);
+    auto grid = armBox.reduced (8, 0).withTrimmedTop (14);
     const int cols = 8, cw = grid.getWidth() / cols;
     for (int t = 0; t < armButtons.size(); ++t)
-        armButtons[t]->setBounds (grid.getX() + (t % cols) * cw + 1, grid.getY() + (t / cols) * 28, cw - 2, 24);
+        armButtons[t]->setBounds (grid.getX() + (t % cols) * cw + 1, grid.getY() + (t / cols) * 26, cw - 2, 22);
+
+    // Group EQ: full centre width under the tape machine and (stage 5) the bus compressor.
+    // One column per sub, four bands down, gain and frequency side by side.
+    groupEqBox = { 12, bridgeH + 470, centreW - 24, 24 + 4 * 52 + 4 };
+    const int colWidth = (groupEqBox.getWidth() - 8) / Config::numSubs;
+    for (int k = 0; k < Config::numSubs; ++k)
+    {
+        const int x0 = groupEqBox.getX() + 4 + k * colWidth;
+        for (int b = 0; b < FourBandEq::numBands; ++b)
+        {
+            const int y0 = groupEqBox.getY() + 24 + b * 52;
+            const int idx = (k * FourBandEq::numBands + b) * 2;
+            const int cx = x0 + colWidth / 2;
+            groupEqKnobs[idx]->setBounds (knobAt (cx - Knob::preferredWidth - 4, y0));
+            groupEqKnobs[idx + 1]->setBounds (knobAt (cx + 4, y0));
+        }
+    }
 
     // Main fader, far right of the fader area.
     const int f = bridgeH + knobH;
-    mainScribble.setBounds (mainX + 6, getHeight() - 28, 90, 22);
-    mainFader.setBounds (mainX + 8, f + 36, 84, mainScribble.getY() - 6 - (f + 36));
+    mainScribble.setBounds (mainX + 4, getHeight() - 28, getWidth() - mainX - 12, 22);
+    mainFader.setBounds (mainX + 4, f + 36, getWidth() - mainX - 12, mainScribble.getY() - 6 - (f + 36));
 }
 
 void CentreSection::paint (juce::Graphics& g)
 {
     paintColumn (g, getLocalBounds());
+
+    // Bridge legends under the bus meters.
+    g.setFont (ConsoleLookAndFeel::uiFont (10.0f));
+    g.setColour (bridgeText.withAlpha (0.8f));
+    for (int k = 0; k < Config::numSubs; ++k)
+        g.drawText ("S" + juce::String (k + 1), juce::Rectangle<float> (subColumnX (k), 70.0f, colW, 10.0f), juce::Justification::centred, false);
+    for (int k = 0; k < Config::numAux; ++k)
+        g.drawText ("A" + juce::String (k + 1), juce::Rectangle<float> (auxColumnX (k), 70.0f, colW, 10.0f), juce::Justification::centred, false);
+    g.drawText ("Main", juce::Rectangle<float> (mainColumnX(), 70.0f, colW * 1.8f, 10.0f), juce::Justification::centred, false);
 
     // Tape machine panel.
     g.setColour (faderArea);
@@ -303,10 +526,26 @@ void CentreSection::paint (juce::Graphics& g)
     paintSection (g, "Record level", levelBox, faderArea);
     paintSection (g, "Record arm", armBox, faderArea);
 
+    // Group EQ.
+    paintSection (g, "Group EQ", groupEqBox, stripGrey);
+    g.setFont (ConsoleLookAndFeel::uiFont (11.0f, true));
+    const int colWidth = (groupEqBox.getWidth() - 8) / Config::numSubs;
+    for (int k = 0; k < Config::numSubs; ++k)
+    {
+        const int x0 = groupEqBox.getX() + 4 + k * colWidth;
+        g.setColour (legend);
+        g.drawText ("Sub " + juce::String (k + 1), juce::Rectangle<int> (x0, groupEqBox.getY() + 7, colWidth, 12), juce::Justification::centred, false);
+        if (k > 0)
+        {
+            g.setColour (juce::Colour (0xff8e9598).withAlpha (0.5f));
+            g.fillRect (x0 - 1, groupEqBox.getY() + 8, 1, groupEqBox.getHeight() - 14);
+        }
+    }
+
     // Divider before the main fader.
-    const int mainX = centreW - 100;
+    const int mainX = juce::roundToInt (mainColumnX());
     g.setColour (juce::Colour (0xff2c2f31));
-    g.fillRect (mainX, bridgeH + knobH, 1, faderH);
+    g.fillRect (mainX - 2, bridgeH + knobH, 1, faderH);
 
     g.setColour (juce::Colour (0xff2c2f31));
     g.fillRect (0, 0, 1, getHeight());
@@ -317,7 +556,13 @@ void CentreSection::paint (juce::Graphics& g)
 void CentreSection::update()
 {
     for (int side = 0; side < 2; ++side)
+    {
         mainMeters[(size_t) side].setLevel (engine.takeMainPeak (side));
+        for (int k = 0; k < Config::numSubs; ++k)
+            subMeters[(size_t) k][(size_t) side].setLevel (engine.takeSubPeak (k, side));
+    }
+    for (int k = 0; k < Config::numAux; ++k)
+        auxMeters[(size_t) k].setLevel (engine.takeAuxPeak (k));
 
     bool recording = false;
     for (int t = 0; t < TapeMachine::numTracks; ++t)
@@ -335,10 +580,10 @@ void CentreSection::update()
 Desk::Desk (AudioEngine& e) : engine (e), centre (e)
 {
     for (auto* s : engine.inputStrips)
-        addAndMakeVisible (inputs.add (new StripComponent (*s, false)));
+        addAndMakeVisible (inputs.add (new StripComponent (*s)));
     addAndMakeVisible (centre);
     for (auto* s : engine.returnStrips)
-        addAndMakeVisible (returns.add (new StripComponent (*s, true)));
+        addAndMakeVisible (returns.add (new StripComponent (*s)));
 
     setSize (2 * cheekW + (inputs.size() + returns.size()) * stripW + centreW, totalH);
     startTimerHz (30);
@@ -369,7 +614,7 @@ void Desk::paint (juce::Graphics& g)
 
 void Desk::timerCallback()
 {
-    for (auto* s : inputs)  s->updateMeter();
-    for (auto* s : returns) s->updateMeter();
+    for (auto* s : inputs)  s->update();
+    for (auto* s : returns) s->update();
     centre.update();
 }

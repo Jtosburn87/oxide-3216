@@ -7,10 +7,20 @@ class ConsoleTapeApplication : public juce::JUCEApplication
 public:
     const juce::String getApplicationName() override    { return JUCE_APPLICATION_NAME_STRING; }
     const juce::String getApplicationVersion() override { return JUCE_APPLICATION_VERSION_STRING; }
-    bool moreThanOneInstanceAllowed() override          { return false; }
+    bool moreThanOneInstanceAllowed() override          { return isSnapshot(); }
+
+    /** Developer option: ConsoleTape.exe --snapshot out.png [zoom] renders the desk to an image and exits,
+        without opening the audio device. Used to check the look without touching a running copy. */
+    static bool isSnapshot() { return getCommandLineParameterArray().contains ("--snapshot"); }
 
     void initialise (const juce::String&) override
     {
+        if (isSnapshot())
+        {
+            writeSnapshot();
+            return;
+        }
+
         juce::PropertiesFile::Options options;
         options.applicationName = "ConsoleTape";
         options.folderName = "ConsoleTape";
@@ -37,6 +47,26 @@ public:
 
     void systemRequestedQuit() override { quit(); }
     void anotherInstanceStarted (const juce::String&) override {}
+
+    void writeSnapshot()
+    {
+        juce::LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);
+        const auto args = getCommandLineParameterArray();
+        const int i = args.indexOf ("--snapshot");
+        const juce::File out (args[i + 1]);
+        const float zoom = args.size() > i + 2 ? args[i + 2].getFloatValue() : 1.0f;
+
+        AudioEngine e;
+        {
+            Desk desk (e);
+            const auto image = desk.createComponentSnapshot (desk.getLocalBounds(), true, zoom > 0.0f ? zoom : 1.0f);
+            out.deleteFile();
+            juce::FileOutputStream stream (out);
+            juce::PNGImageFormat().writeImageToStream (image, stream);
+        }
+        juce::LookAndFeel::setDefaultLookAndFeel (nullptr);
+        quit();
+    }
 
 private:
     class MainWindow : public juce::DocumentWindow

@@ -350,6 +350,170 @@ namespace
         check (near (b.out[0][255], 1.0f * pan, 1.0e-3f), "record level +6 dB");
     }
 
+    //==========================================================================
+    /** Feeds a sine into interface input 1 (-> strip 1) and returns the steady-state peak at main L,
+        divided by the centre pan gain, i.e. the strip's own gain. */
+    struct SineRig
+    {
+        AudioEngine e;
+        Buffers b { 1, 2, 256 };
+        double phase = 0.0;
+
+        SineRig() { e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 })); mapOnly (e, 0, 0); }
+
+        void run (float freq, float amp, int blocks)
+        {
+            for (int k = 0; k < blocks; ++k)
+            {
+                for (int i = 0; i < b.n; ++i)
+                {
+                    b.in[0][(size_t) i] = amp * (float) std::sin (phase);
+                    phase += juce::MathConstants<double>::twoPi * freq / 48000.0;
+                }
+                b.run (e);
+            }
+        }
+
+        float measure (float freq, float amp, int settleBlocks = 100)
+        {
+            run (freq, amp, settleBlocks);   // settle (100 blocks = about half a second)
+            float pk = 0.0f;
+            for (int k = 0; k < 20; ++k)
+            {
+                run (freq, amp, 1);
+                for (float x : b.out[0])
+                    pk = juce::jmax (pk, std::abs (x));
+            }
+            return pk / pan;
+        }
+    };
+
+    float toDb (float g) { return 20.0f * std::log10 (juce::jmax (g, 1.0e-9f)); }
+    bool nearDb (float gain, float expectedDb, float tolDb) { return std::abs (toDb (gain) - expectedDb) <= tolDb; }
+
+    void testEq()
+    {
+        std::puts ("Channel EQ and group EQ");
+        {
+            SineRig r;
+            auto& eq = r.e.inputStrips[0]->eq;
+            check (nearDb (r.measure (1000.0f, 0.01f) / 0.01f, 0.0f, 0.01f), "flat EQ is unity");
+            eq.gain[FourBandEq::HMF]->set (15.0f);   // bell at 3 kHz
+            const float g = r.measure (3000.0f, 0.01f) / 0.01f;
+            std::printf ("      HMF +15 dB at 3 kHz measures %.2f dB\n", toDb (g));
+            check (nearDb (g, 15.0f, 0.3f), "HMF bell gives +15 dB at its centre frequency");
+            eq.gain[FourBandEq::HMF]->set (0.0f);
+
+            eq.gain[FourBandEq::LF]->set (12.0f);    // shelf at 100 Hz
+            check (nearDb (r.measure (25.0f, 0.01f) / 0.01f, 12.0f, 0.8f), "LF shelf +12 dB well below its corner");
+            eq.gain[FourBandEq::LF]->set (0.0f);
+
+            eq.gain[FourBandEq::HF]->set (-15.0f);   // shelf at 8 kHz
+            check (nearDb (r.measure (20000.0f, 0.01f) / 0.01f, -15.0f, 1.5f), "HF shelf -15 dB well above its corner");
+        }
+        {
+            SineRig r;
+            auto& c = r.e.inputStrips[0]->controls;
+            c.main->set (0.0f);
+            c.sub[0]->set (1.0f);
+            check (nearDb (r.measure (500.0f, 0.01f) / 0.01f, 0.0f, 0.05f), "strip reaches main through sub 1 at unity");
+            r.e.groupEq[0]->gain[FourBandEq::LMF]->set (12.0f);   // bell at 500 Hz
+            check (nearDb (r.measure (500.0f, 0.01f) / 0.01f, 12.0f, 0.3f), "sub 1 group EQ LMF +12 dB");
+        }
+    }
+
+    void testGate()
+    {
+        std::puts ("Gate: threshold, range, fast attack pop");
+        {
+            SineRig r;
+            auto& gate = r.e.inputStrips[0]->gate;
+            gate.threshold->set (-30.0f);
+            gate.range->set (-40.0f);
+            check (nearDb (r.measure (1000.0f, 0.1f) / 0.1f, 0.0f, 0.1f), "signal above threshold passes");
+            const float cut = r.measure (1000.0f, 0.001f, 400) / 0.001f;   // 120 ms release: give it 2 s
+            std::printf ("      gate closed: %.1f dB\n", toDb (cut));
+            check (nearDb (cut, -40.0f, 1.0f), "signal below threshold is cut by the range (-40 dB)");
+            check (gate.popCount.load() == 0, "no pop without fast attack");
+        }
+        {
+            SineRig r;
+            auto& gate = r.e.inputStrips[0]->gate;
+            gate.threshold->set (-30.0f);
+            gate.fast->set (1.0f);
+            r.run (1000.0f, 0.0f, 40);           // silence: gate closes
+            r.run (1000.0f, 0.5f, 4);            // loud burst: gate opens with a pop
+            check (gate.popCount.load() == 1, "loud transient into a closed gate fires one pop");
+            r.run (1000.0f, 0.5f, 4);
+            check (gate.popCount.load() == 1, "no further pops while the gate stays open");
+
+            SineRig quiet;
+            auto& g2 = quiet.e.inputStrips[0]->gate;
+            g2.threshold->set (-40.0f);
+            g2.fast->set (1.0f);
+            quiet.run (1000.0f, 0.0f, 40);
+            quiet.run (1000.0f, 0.05f, 4);       // -26 dBFS: opens, but below the -12 dBFS pop trigger
+            check (g2.popCount.load() == 0, "quiet transient opens without a pop");
+        }
+    }
+
+    void testFetCompressor()
+    {
+        std::puts ("1176-style compressor");
+        SineRig r;
+        auto& comp = r.e.inputStrips[0]->comp;
+        comp.input->set (10.0f);   // +30 dB drive
+        check (nearDb (r.measure (1000.0f, 0.1f) / 0.1f, 0.0f, 0.01f), "compressor out (default) is bypassed");
+
+        comp.in->set (1.0f);
+        // -20 dBFS + 30 dB drive = +10, 24 dB over the -14 threshold, ratio 4 -> 18 dB reduction -> about -8 dBFS.
+        const float out = r.measure (1000.0f, 0.1f) * 0.1f / 0.1f;
+        const float gr = comp.takeGainReduction();
+        std::printf ("      ratio 4: output %.1f dBFS, gain reduction %.1f dB\n", toDb (out), gr);
+        check (std::abs (toDb (out) - (-8.0f)) < 1.5f, "ratio 4 output level");
+        check (std::abs (gr - 18.0f) < 1.5f, "ratio 4 gain reduction");
+
+        comp.ratio->set (3.0f);   // 20:1
+        r.measure (1000.0f, 0.1f);
+        const float gr20 = comp.takeGainReduction();
+        comp.all->set (1.0f);
+        r.measure (1000.0f, 0.1f);
+        const float grAll = comp.takeGainReduction();
+        std::printf ("      ratio 20: %.1f dB, all buttons: %.1f dB\n", gr20, grAll);
+        check (gr20 > gr + 3.0f && grAll > gr20, "higher ratios compress harder; all buttons hardest");
+
+        comp.output->set (6.0f);
+        const float louder = r.measure (1000.0f, 0.1f);
+        comp.output->set (0.0f);
+        const float base = r.measure (1000.0f, 0.1f);
+        check (nearDb (louder / base, 6.0f, 0.2f), "output knob +6 dB");
+    }
+
+    void testSends()
+    {
+        std::puts ("Aux sends, pre/post");
+        SineRig r;
+        auto& c = r.e.inputStrips[0]->controls;
+        c.auxLevel[0]->set (1.0f);
+        r.measure (1000.0f, 0.1f);
+        r.e.takeAuxPeak (0);
+        r.run (1000.0f, 0.1f, 10);
+        check (near (r.e.takeAuxPeak (0), 0.15f, 2.0e-3f), "aux 1 full send = level x 1.5");
+
+        c.fader->set (0.0f);
+        r.run (1000.0f, 0.1f, 40);
+        r.e.takeAuxPeak (0);
+        r.run (1000.0f, 0.1f, 10);
+        check (r.e.takeAuxPeak (0) < 1.0e-4f, "post-fader send follows the fader down");
+
+        c.auxPre[0]->set (1.0f);
+        r.run (1000.0f, 0.1f, 40);
+        r.e.takeAuxPeak (0);
+        r.run (1000.0f, 0.1f, 10);
+        check (near (r.e.takeAuxPeak (0), 0.15f, 2.0e-3f), "pre-fader send ignores the fader");
+        check (r.e.takeAuxPeak (1) == 0.0f, "aux 2 untouched");
+    }
+
     void testNoDeviceIsSafe()
     {
         std::puts ("Callback with zero channels");
@@ -358,6 +522,65 @@ namespace
         Buffers b (0, 0, 64);
         b.run (e);
         check (true, "no crash");
+    }
+
+    /** Worst case: every strip with all EQ bands, gate, compressor and all sends on,
+        16 tracks playing back, 64-sample blocks. Reports CPU use of one core. */
+    void benchmark()
+    {
+        std::puts ("\nBenchmark (worst case, 64-sample blocks, 48 kHz):");
+        AudioEngine e;
+        auto all = [&] (auto fn) { for (auto* s : e.inputStrips) fn (*s); for (auto* s : e.returnStrips) fn (*s); };
+        all ([] (ChannelStrip& s)
+        {
+            for (int b = 0; b < FourBandEq::numBands; ++b)
+                s.eq.gain[b]->set (3.0f);
+            s.controls.hpf->set (80.0f);
+            s.gate.threshold->set (-50.0f);
+            s.comp.in->set (1.0f);
+            s.comp.input->set (5.0f);
+            for (int k = 0; k < Config::numAux; ++k)
+                s.controls.auxLevel[k]->set (0.5f);
+            s.controls.sub[0]->set (1.0f);
+        });
+        for (auto* eq : e.groupEq)
+            eq->gain[0]->set (2.0f);
+
+        juce::BigInteger ins;
+        ins.setRange (0, 16, true);
+        e.prepare (48000.0, ins, channels ({ 0, 1 }));
+
+        // Fill 16 tracks with 10 s of noise by recording, then play them back.
+        Buffers b (16, 2, 64);
+        juce::Random rnd (1);
+        auto fill = [&] { for (auto& ch : b.in) for (auto& x : ch) x = rnd.nextFloat() * 0.2f - 0.1f; };
+        for (int t = 0; t < TapeMachine::numTracks; ++t)
+            e.tape.arm[(size_t) t]->set (1.0f);
+        e.tape.setRecordEnabled (true);
+        e.tape.play();
+        const int blocks = 48000 * 10 / 64;
+        for (int i = 0; i < blocks; ++i)
+        {
+            if (i % 64 == 0)
+                e.tape.service();
+            fill();
+            b.run (e);
+        }
+        e.tape.stop();
+        e.tape.setRecordEnabled (false);
+        for (int t = 0; t < TapeMachine::numTracks; ++t)
+            e.tape.arm[(size_t) t]->set (0.0f);
+        e.tape.locate (0);
+        e.tape.play();
+
+        const auto start = juce::Time::getHighResolutionTicks();
+        for (int i = 0; i < blocks; ++i)
+        {
+            fill();
+            b.run (e);
+        }
+        const double secs = juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - start);
+        std::printf ("  10 s of audio processed in %.2f s: %.0f%% of one CPU core\n", secs, secs / 10.0 * 100.0);
     }
 
     void listDevices()
@@ -391,10 +614,17 @@ int main (int argc, char** argv)
     testRecordingIsLatencyCompensated();
     testTapeStorageAndTransport();
     testUnarmedPlaybackAndArmedMonitoring();
+    testEq();
+    testGate();
+    testFetCompressor();
+    testSends();
     testNoDeviceIsSafe();
 
-    if (argc > 1 && juce::String (argv[1]) == "--devices")
-        listDevices();
+    for (int i = 1; i < argc; ++i)
+    {
+        if (juce::String (argv[i]) == "--devices") listDevices();
+        if (juce::String (argv[i]) == "--bench")   benchmark();
+    }
 
     std::printf ("\n%s (%d failure%s)\n", failures == 0 ? "ALL TESTS PASSED" : "TESTS FAILED", failures, failures == 1 ? "" : "s");
     return failures == 0 ? 0 : 1;

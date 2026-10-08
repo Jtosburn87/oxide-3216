@@ -52,11 +52,16 @@ public:
     ParamSet params;
     juce::OwnedArray<ChannelStrip> inputStrips, returnStrips;
     TapeMachine tape { params };
+    juce::OwnedArray<FourBandEq> groupEq;                  // one stereo group EQ per sub
+    std::array<Param*, Config::numSubs> subFader {};       // 0..100, unity at 80 (faders arrive in stage 5)
+    std::array<Param*, Config::numAux> auxMaster {};       // 0..100, unity at 80
     Param* mainFader = nullptr;
 
     // Metering: peak linear level since the last call.
     float takeInputPeak (int strip);   // post-fader, input bank
     float takeMainPeak (int side);
+    float takeSubPeak (int sub, int side);
+    float takeAuxPeak (int aux);
 
     /** Number of audio callbacks so far: lets the UI tell whether audio is actually running. */
     std::uint64_t getCallbackCount() const noexcept { return callbackCount.load (std::memory_order_relaxed); }
@@ -86,10 +91,14 @@ private:
     std::array<int, maxDeviceChannels> inputSlot {}, outputSlot {};
 
     std::array<std::atomic<float>, 2> mainPeak;
+    std::array<std::array<std::atomic<float>, 2>, Config::numSubs> subPeak;
+    std::array<std::atomic<float>, Config::numAux> auxPeak;
     std::atomic<std::uint64_t> callbackCount { 0 };
     double currentSampleRate = 48000.0;
     double tonePhase = 0.0;
     Dsp::Smoothed mainGainL;
+    std::array<Dsp::Smoothed, Config::numSubs> subGain;
+    std::array<Dsp::Smoothed, Config::numAux> auxGain;
 
     // Scratch buffers, allocated once.
     using Block = std::array<float, Config::maxBlock>;
@@ -97,6 +106,8 @@ private:
     std::array<Block, Config::numReturnStrips> returnDirect {};
     std::array<Block, Config::numTracks> tapeOut {};
     Block mixL {}, mixR {};
+    std::array<Block, Config::numSubs> subL {}, subR {};
+    std::array<Block, Config::numAux> aux {};
 
     static void raisePeak (std::atomic<float>& peak, float value) noexcept;
 

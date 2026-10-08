@@ -59,12 +59,76 @@ namespace Dsp
             a2 = (float) ((1.0 - alpha) / a0);
         }
 
+        /** Shelves use the cookbook's shelf slope S = 1 (as the prototype's Web Audio filters do). */
+        void setLowShelf (double sampleRate, double freq, double gainDb) noexcept  { setShelf (sampleRate, freq, gainDb, false); }
+        void setHighShelf (double sampleRate, double freq, double gainDb) noexcept { setShelf (sampleRate, freq, gainDb, true); }
+
+        void setPeak (double sampleRate, double freq, double q, double gainDb) noexcept
+        {
+            const double A = std::pow (10.0, gainDb / 40.0);
+            const double w = 2.0 * 3.141592653589793 * freq / sampleRate;
+            const double cs = std::cos (w), alpha = std::sin (w) / (2.0 * q), a0 = 1.0 + alpha / A;
+            b0 = (float) ((1.0 + alpha * A) / a0);
+            b1 = (float) (-2.0 * cs / a0);
+            b2 = (float) ((1.0 - alpha * A) / a0);
+            a1 = b1;
+            a2 = (float) ((1.0 - alpha / A) / a0);
+        }
+
         float process (float x) noexcept
         {
             const float y = b0 * x + z1;
             z1 = b1 * x - a1 * y + z2;
             z2 = b2 * x - a2 * y;
             return y;
+        }
+
+    private:
+        void setShelf (double sampleRate, double freq, double gainDb, bool high) noexcept
+        {
+            const double A = std::pow (10.0, gainDb / 40.0);
+            const double w = 2.0 * 3.141592653589793 * freq / sampleRate;
+            const double cs = std::cos (w), alpha = std::sin (w) / 2.0 * std::sqrt (2.0);
+            const double sq = 2.0 * std::sqrt (A) * alpha;
+            const double s = high ? -1.0 : 1.0;   // the high shelf mirrors the low shelf's cosine terms
+            const double a0 = (A + 1.0) + s * (A - 1.0) * cs + sq;
+            b0 = (float) (A * ((A + 1.0) - s * (A - 1.0) * cs + sq) / a0);
+            b1 = (float) (s * 2.0 * A * ((A - 1.0) - s * (A + 1.0) * cs) / a0);
+            b2 = (float) (A * ((A + 1.0) - s * (A - 1.0) * cs - sq) / a0);
+            a1 = (float) (-s * 2.0 * ((A - 1.0) + s * (A + 1.0) * cs) / a0);
+            a2 = (float) (((A + 1.0) + s * (A - 1.0) * cs - sq) / a0);
+        }
+    };
+
+    /** Adds src * gain to dst, ramping the gain linearly from `from` to `to` across the block (no clicks). */
+    inline void addRamped (float* dst, const float* src, float from, float to, int n) noexcept
+    {
+        if (from == to)
+        {
+            if (to != 0.0f)
+                for (int i = 0; i < n; ++i)
+                    dst[i] += src[i] * to;
+            return;
+        }
+        const float step = (to - from) / (float) n;
+        float g = from;
+        for (int i = 0; i < n; ++i)
+        {
+            g += step;
+            dst[i] += src[i] * g;
+        }
+    }
+
+    /** Small fast random generator for noise in the audio thread (xorshift32). Returns -1..1. */
+    struct Noise
+    {
+        unsigned int state = 0x9e3779b9u;
+        float next() noexcept
+        {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            return (float) (int) state * (1.0f / 2147483648.0f);
         }
     };
 }

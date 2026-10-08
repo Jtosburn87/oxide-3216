@@ -83,7 +83,7 @@ void Knob::updateLegend()
 
 void Knob::resized()
 {
-    slider.setBounds (getLocalBounds().removeFromTop (getHeight() - 13).withSizeKeepingCentre (34, 34));
+    slider.setBounds (getLocalBounds().removeFromTop (getHeight() - 13).withSizeKeepingCentre (dialSize, dialSize));
 }
 
 void Knob::paint (juce::Graphics& g)
@@ -124,6 +124,38 @@ void ParamButton::paramChanged (Param&)
 void ParamButton::clicked()
 {
     param.toggle();
+}
+
+void ParamButton::flash()
+{
+    flashing = true;
+    repaint();
+    juce::Timer::callAfterDelay (110, [safe = juce::Component::SafePointer<ParamButton> (this)]
+    {
+        if (safe != nullptr)
+        {
+            safe->flashing = false;
+            safe->repaint();
+        }
+    });
+}
+
+void ParamButton::paintButton (juce::Graphics& g, bool over, bool down)
+{
+    if (! flashing)
+    {
+        juce::TextButton::paintButton (g, over, down);
+        return;
+    }
+
+    auto r = getLocalBounds().toFloat().reduced (0.5f);
+    g.setColour (juce::Colour (0xffff5a46).withAlpha (0.45f));
+    g.fillRoundedRectangle (r.expanded (0.5f), 3.0f);
+    g.setGradientFill (juce::ColourGradient (juce::Colour (0xffff7a62), r.getX(), r.getY(), juce::Colour (0xffd6392d), r.getX(), r.getBottom(), false));
+    g.fillRoundedRectangle (r.reduced (1.0f), 2.0f);
+    g.setColour (juce::Colours::white);
+    g.setFont (getLookAndFeel().getTextButtonFont (*this, getHeight()));
+    g.drawFittedText (getButtonText(), getLocalBounds(), juce::Justification::centred, 1);
 }
 
 //==============================================================================
@@ -191,5 +223,54 @@ void LedMeter::paint (juce::Graphics& g)
         const bool on = (float) s < lit || (s == holdSeg && holdDb > -60.0f);
         g.setColour (on ? colour.brighter (0.25f) : colour.withMultipliedBrightness (0.22f));
         g.fillRect (r.getX(), r.getBottom() - (float) (s + 1) * segH + 1.0f, r.getWidth(), juce::jmax (1.0f, segH - 1.0f));
+    }
+}
+
+//==============================================================================
+RadioParamButton::RadioParamButton (Param& p, int i, const juce::String& text)
+    : juce::TextButton (text), param (p), index (i)
+{
+    setToggleState (juce::roundToInt (p.get()) == index, juce::dontSendNotification);
+    p.addListener (this);
+}
+
+RadioParamButton::~RadioParamButton()
+{
+    param.removeListener (this);
+}
+
+void RadioParamButton::paramChanged (Param&)
+{
+    setToggleState (juce::roundToInt (param.get()) == index, juce::dontSendNotification);
+}
+
+void RadioParamButton::clicked()
+{
+    param.set ((float) index);
+}
+
+//==============================================================================
+void GrMeter::setReduction (float db)
+{
+    const float before = shown;
+    shown = db > shown ? db : juce::jmax (db, shown - 1.0f);
+    if (std::abs (shown - before) > 0.01f)
+        repaint();
+}
+
+void GrMeter::paint (juce::Graphics& g)
+{
+    auto r = getLocalBounds().toFloat();
+    g.setColour (juce::Colour (0xff050607));
+    g.fillRect (r);
+    g.setColour (juce::Colours::black);
+    g.drawRect (r, 1.0f);
+
+    const float w = (r.getWidth() - 2.0f) * juce::jlimit (0.0f, 1.0f, shown / 20.0f);
+    if (w > 0.0f)
+    {
+        g.setGradientFill (juce::ColourGradient (juce::Colour (0xffd9a02d), r.getX(), 0.0f,
+                                                 juce::Colour (0xffb8372c), r.getRight(), 0.0f, false));
+        g.fillRect (r.getX() + 1.0f, r.getY() + 1.0f, w, r.getHeight() - 2.0f);
     }
 }

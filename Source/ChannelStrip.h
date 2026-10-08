@@ -1,17 +1,24 @@
 #pragma once
 
+#include "Config.h"
 #include "Params.h"
 #include "Dsp.h"
+#include "Eq.h"
+#include "Dynamics.h"
 
 /** DSP for one mono console channel (input or tape return).
 
-    Signal order (stage 2): input -> trim -> high-pass -> fader -> mute -> direct out -> pan -> main.
-    Stage 3 adds EQ, gate and compressor between the high-pass and the fader, plus aux/sub sends. */
+    Signal order (as in the prototype):
+        input -> trim -> high-pass -> EQ (LF, LMF, HMF, HF) -> gate -> compressor
+              -> [pre-fader sends] -> fader -> mute -> direct out -> [post-fader sends] -> pan -> main / subs */
 class ChannelStrip
 {
 public:
-    /** idPrefix is e.g. "ch1" or "rt1"; parameters are created as "ch1.trim", "ch1.fader", ... */
+    /** idPrefix is e.g. "ch1" or "rt1"; parameters are created as "ch1.trim", "ch1.eq.hf.gain", ... */
     ChannelStrip (ParamSet&, const juce::String& idPrefix, const juce::String& defaultName);
+
+    const juce::String idPrefix;
+    juce::String name;   // scribble strip
 
     struct Controls
     {
@@ -22,26 +29,39 @@ public:
         Param* mute;
         Param* solo;
         Param* fader;   // 0..100, see Dsp::faderGain
+        Param* sub[Config::numSubs];        // sub assigns
+        Param* auxLevel[Config::numAux];    // 0..1
+        Param* auxPre[Config::numAux];      // pre-fader send
     } controls;
 
-    const juce::String idPrefix;
-    juce::String name;   // scribble strip
+    FourBandEq eq;
+    Gate gate;
+    FetCompressor comp;
 
     void prepare (double sampleRate);
 
-    /** in may be null (silence). direct receives the post-fader, post-mute signal.
-        The panned signal is added to mainL/mainR when main is assigned and the strip is not cut by solo. */
-    void process (const float* in, float* direct, float* mainL, float* mainR, int numSamples, bool anySoloActive) noexcept;
+    /** in may be null (silence). direct receives the post-fader, post-mute signal (the direct out). */
+    void process (const float* in, float* direct, const BusPointers& buses, int numSamples, bool anySoloActive) noexcept;
 
     float takePeak() noexcept { return peak.exchange (0.0f); }
+
+    /** Aux send gain law from the prototype: level^2 x 1.5 (about +3.5 dB at full). */
+    static float auxGain (float level) noexcept { return level * level * 1.5f; }
 
 private:
     double sampleRate = 48000.0;
     Dsp::Biquad hp;
     float hpFreqSet = -1.0f;
-    Dsp::Smoothed trimGain, faderGain, leftGain, rightGain;
+    Dsp::Smoothed trimGain, faderGain;
     std::atomic<float> peak { 0.0f };
 
+    std::array<float, Config::maxBlock> pre {};
+    float lastMain[2] {}, lastSub[Config::numSubs][2] {}, lastAux[Config::numAux] {};
+
+    struct Targets
+    {
+        float main[2], sub[Config::numSubs][2], aux[Config::numAux];
+    };
+    Targets targets (bool anySoloActive) const noexcept;
     float targetFader() const noexcept;
-    void targetPan (bool anySoloActive, float& l, float& r) const noexcept;
 };

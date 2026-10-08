@@ -22,6 +22,20 @@ AudioEngine::AudioEngine()
     for (int i = 0; i < Config::numReturnStrips; ++i)
         returnStrips.add (new ChannelStrip (params, "rt" + juce::String (i + 1), "Return " + juce::String (i + 1)));
 
+    for (int k = 0; k < Config::numSubs; ++k)
+    {
+        const auto id = "sub" + juce::String (k + 1);
+        groupEq.add (new FourBandEq (params, id, 2));
+        subFader[(size_t) k] = &params.add (id + ".fader", "Sub " + juce::String (k + 1) + " fader", 0.0f, 100.0f, 80.0f);
+        subPeak[(size_t) k][0].store (0.0f);
+        subPeak[(size_t) k][1].store (0.0f);
+    }
+    for (int k = 0; k < Config::numAux; ++k)
+    {
+        auxMaster[(size_t) k] = &params.add ("aux" + juce::String (k + 1) + ".master", "Aux " + juce::String (k + 1) + " master", 0.0f, 100.0f, 80.0f);
+        auxPeak[(size_t) k].store (0.0f);
+    }
+
     mainFader = &params.add ("main.fader", "Main fader", 0.0f, 100.0f, 80.0f);
 }
 
@@ -135,6 +149,16 @@ float AudioEngine::takeMainPeak (int side)
     return (side == 0 || side == 1) ? mainPeak[(size_t) side].exchange (0.0f) : 0.0f;
 }
 
+float AudioEngine::takeSubPeak (int sub, int side)
+{
+    return juce::isPositiveAndBelow (sub, Config::numSubs) && (side == 0 || side == 1) ? subPeak[(size_t) sub][(size_t) side].exchange (0.0f) : 0.0f;
+}
+
+float AudioEngine::takeAuxPeak (int k)
+{
+    return juce::isPositiveAndBelow (k, Config::numAux) ? auxPeak[(size_t) k].exchange (0.0f) : 0.0f;
+}
+
 void AudioEngine::raisePeak (std::atomic<float>& peak, float value) noexcept
 {
     auto current = peak.load (std::memory_order_relaxed);
@@ -164,6 +188,13 @@ void AudioEngine::prepare (double sampleRate, const juce::BigInteger& activeInpu
     reportedLatency.store (reportedRoundTripLatency);
     tape.prepare (currentSampleRate, reportedRoundTripLatency + recordOffset.load());
     mainGainL.prepare (currentSampleRate, Dsp::faderGain (mainFader->get()));
+    for (int k = 0; k < Config::numSubs; ++k)
+    {
+        groupEq[k]->prepare (currentSampleRate);
+        subGain[(size_t) k].prepare (currentSampleRate, Dsp::faderGain (subFader[(size_t) k]->get()));
+    }
+    for (int k = 0; k < Config::numAux; ++k)
+        auxGain[(size_t) k].prepare (currentSampleRate, Dsp::faderGain (auxMaster[(size_t) k]->get()));
 }
 
 void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
@@ -214,16 +245,37 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputs, 
     const float* tapeInPtrs[Config::numTracks];
     float* tapeOutPtrs[Config::numTracks];
 
+    BusPointers buses;
+    buses.mainL = mixL.data();
+    buses.mainR = mixR.data();
+    for (int k = 0; k < Config::numSubs; ++k)
+    {
+        buses.subL[k] = subL[(size_t) k].data();
+        buses.subR[k] = subR[(size_t) k].data();
+    }
+    for (int k = 0; k < Config::numAux; ++k)
+        buses.aux[k] = aux[(size_t) k].data();
+
+    for (auto* eq : groupEq)
+        eq->update();
+
     for (int start = 0; start < numSamples; start += maxBlock)
     {
         const int n = juce::jmin (maxBlock, numSamples - start);
         juce::FloatVectorOperations::clear (mixL.data(), n);
         juce::FloatVectorOperations::clear (mixR.data(), n);
+        for (int k = 0; k < Config::numSubs; ++k)
+        {
+            juce::FloatVectorOperations::clear (subL[(size_t) k].data(), n);
+            juce::FloatVectorOperations::clear (subR[(size_t) k].data(), n);
+        }
+        for (auto& a : aux)
+            juce::FloatVectorOperations::clear (a.data(), n);
 
         // Input bank.
         for (int c = 0; c < Config::numInputStrips; ++c)
             inputStrips[c]->process (sources[c] != nullptr ? sources[c] + start : nullptr,
-                                     inputDirect[(size_t) c].data(), mixL.data(), mixR.data(), n, anySolo);
+                                     inputDirect[(size_t) c].data(), buses, n, anySolo);
 
         // Tape: channel direct outs are normalled to tape ins.
         for (int t = 0; t < Config::numTracks; ++t)
@@ -235,7 +287,53 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputs, 
 
         // Return bank: tape outs are normalled to return strip ins.
         for (int r = 0; r < Config::numReturnStrips; ++r)
-            returnStrips[r]->process (tapeOut[(size_t) r].data(), returnDirect[(size_t) r].data(), mixL.data(), mixR.data(), n, anySolo);
+            returnStrips[r]->process (tapeOut[(size_t) r].data(), returnDirect[(size_t) r].data(), buses, n, anySolo);
+
+        // Subs: group EQ -> sub fader -> main.
+        for (int k = 0; k < Config::numSubs; ++k)
+        {
+            auto& eq = *groupEq[k];
+            float* l = subL[(size_t) k].data();
+            float* r = subR[(size_t) k].data();
+            const float target = Dsp::faderGain (subFader[(size_t) k]->get());
+            auto& sg = subGain[(size_t) k];
+            const bool eqOn = ! eq.isFlat();
+
+            float pl = 0.0f, pr = 0.0f;
+            for (int i = 0; i < n; ++i)
+            {
+                const float g = sg.next (target);
+                float xl = l[i], xr = r[i];
+                if (eqOn)
+                {
+                    xl = eq.process (0, xl);
+                    xr = eq.process (1, xr);
+                }
+                xl *= g;
+                xr *= g;
+                mixL[(size_t) i] += xl;
+                mixR[(size_t) i] += xr;
+                pl = juce::jmax (pl, std::abs (xl));
+                pr = juce::jmax (pr, std::abs (xr));
+            }
+            raisePeak (subPeak[(size_t) k][0], pl);
+            raisePeak (subPeak[(size_t) k][1], pr);
+        }
+
+        // Aux masters (outputs and returns arrive in later stages): metered for now.
+        for (int k = 0; k < Config::numAux; ++k)
+        {
+            float* a = aux[(size_t) k].data();
+            const float target = Dsp::faderGain (auxMaster[(size_t) k]->get());
+            auto& ag = auxGain[(size_t) k];
+            float pk = 0.0f;
+            for (int i = 0; i < n; ++i)
+            {
+                a[i] *= ag.next (target);
+                pk = juce::jmax (pk, std::abs (a[i]));
+            }
+            raisePeak (auxPeak[(size_t) k], pk);
+        }
 
         if (tone)
         {
