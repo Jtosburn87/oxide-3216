@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.22)
+﻿cmake_minimum_required(VERSION 3.22)
 
 project(ConsoleTape VERSION 0.1.0 LANGUAGES C CXX)
 
@@ -29,6 +29,7 @@ endif()
 # library (linked PRIVATE); their include paths and defines are re-exported below.
 add_library(ConsoleTapeCore STATIC
     Source/AudioEngine.cpp
+    Source/BusCompressor.cpp
     Source/ChannelStrip.cpp
     Source/Dynamics.cpp
     Source/Params.cpp
@@ -63,6 +64,7 @@ target_sources(ConsoleTape PRIVATE
     Source/Main.cpp
     Source/MainComponent.cpp
     Source/AudioSettingsComponent.cpp
+    Source/BusCompPanel.cpp
     Source/Cassette.cpp
     Source/ConsoleLookAndFeel.cpp
     Source/Desk.cpp

@@ -11,7 +11,7 @@
 class Param
 {
 public:
-    enum class Scale { linear, log, toggle };
+    enum class Scale { linear, log, toggle, stepped };   // stepped: whole numbers min..max (a switch position)
 
     struct Listener
     {
@@ -53,6 +53,7 @@ public:
     Param& add (const juce::String& id, const juce::String& name, float min, float max, float def,
                 Param::Scale scale = Param::Scale::linear);
     Param& addToggle (const juce::String& id, const juce::String& name, bool def);
+    Param& addStepped (const juce::String& id, const juce::String& name, int numPositions, int def);
 
     Param* find (const juce::String& id) const;
     const juce::OwnedArray<Param>& all() const noexcept { return params; }

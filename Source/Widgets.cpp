@@ -11,6 +11,8 @@ ParamSlider::ParamSlider (Param& p) : param (p)
     setNormalisableRange ({ (double) p.min, (double) p.max,
                             [pp] (double, double, double n) { return (double) pp->fromNormalised ((float) n); },
                             [pp] (double, double, double v) { return (double) pp->toNormalised ((float) v); } });
+    if (p.scale == Param::Scale::stepped)
+        setNormalisableRange ({ (double) p.min, (double) p.max, 1.0 });   // snap to switch positions
     setValue (p.get(), juce::dontSendNotification);
     setDoubleClickReturnValue (true, p.def);
     setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
@@ -159,7 +161,7 @@ void ParamButton::paintButton (juce::Graphics& g, bool over, bool down)
 }
 
 //==============================================================================
-Fader::Fader (Param& p) : slider (p)
+Fader::Fader (Param& p, int labels) : slider (p), labelWidth (labels)
 {
     slider.setSliderStyle (juce::Slider::LinearVertical);
     slider.setSliderSnapsToMousePosition (false);   // grab the cap; clicking the slot does not jump
@@ -172,12 +174,12 @@ Fader::Fader (Param& p) : slider (p)
 
 void Fader::resized()
 {
-    slider.setBounds (getLocalBounds().withTrimmedLeft (20));
+    slider.setBounds (getLocalBounds().withTrimmedLeft (labelWidth));
 }
 
 void Fader::paint (juce::Graphics& g)
 {
-    g.setFont (ConsoleLookAndFeel::uiFont (9.5f));
+    g.setFont (ConsoleLookAndFeel::uiFont (labelWidth < 20 ? 8.5f : 9.5f));
     g.setColour (ConsoleColours::legend.withAlpha (0.8f));
 
     for (int db : { 15, 10, 5, 0, -5, -10, -20, -30, -40, -60 })
@@ -185,7 +187,7 @@ void Fader::paint (juce::Graphics& g)
         const double pos = db <= -60 ? 0.0 : 80.0 + db / 0.75;
         const float y = (float) slider.getY() + (float) slider.getPositionOfValue (pos);
         const auto text = db == -60 ? juce::String (juce::CharPointer_UTF8 ("\xe2\x88\x9e")) : (db > 0 ? "+" : "") + juce::String (db);
-        g.drawText (text, juce::Rectangle<float> (0.0f, y - 5.0f, 18.0f, 10.0f), juce::Justification::centredRight, false);
+        g.drawText (text, juce::Rectangle<float> (0.0f, y - 5.0f, (float) labelWidth - 2.0f, 10.0f), juce::Justification::centredRight, false);
     }
 }
 

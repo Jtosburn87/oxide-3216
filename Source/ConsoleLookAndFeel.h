@@ -37,6 +37,8 @@ public:
     void drawRotarySlider (juce::Graphics&, int x, int y, int width, int height, float sliderPosProportional,
                            float rotaryStartAngle, float rotaryEndAngle, juce::Slider&) override;
 
+    static void drawBusKnob (juce::Graphics&, juce::Rectangle<float> bounds, float angle, bool focused);
+
     int getSliderThumbRadius (juce::Slider&) override;   // half the fader cap height, so the cap stays inside the travel
     juce::Font getTextButtonFont (juce::TextButton&, int buttonHeight) override;
 

@@ -14,6 +14,8 @@ void Param::set (float newValue)
     newValue = juce::jlimit (min, max, newValue);
     if (scale == Scale::toggle)
         newValue = newValue >= 0.5f ? 1.0f : 0.0f;
+    else if (scale == Scale::stepped)
+        newValue = std::round (newValue);
 
     if (value.exchange (newValue) != newValue)
         listeners.call ([this] (Listener& l) { l.paramChanged (*this); });
@@ -50,4 +52,9 @@ Param* ParamSet::find (const juce::String& id) const
 {
     auto it = byId.find (id);
     return it != byId.end() ? it->second : nullptr;
+}
+
+Param& ParamSet::addStepped (const juce::String& id, const juce::String& name, int numPositions, int def)
+{
+    return add (id, name, 0.0f, (float) (numPositions - 1), (float) def, Param::Scale::stepped);
 }

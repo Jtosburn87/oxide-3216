@@ -340,7 +340,8 @@ void TapeClock::paint (juce::Graphics& g)
 CentreSection::CentreSection (AudioEngine& e)
     : engine (e), tape (e.tape),
       recordLevel (*e.tape.recordLevel, "Level", juce::Colour (0xffd6392d)),
-      mainFader (*e.mainFader)
+      mainFader (*e.mainFader),
+      busPanel (e.busComp)
 {
     cassette.projectName().referTo (engine.projectName);
     addAndMakeVisible (cassette);
@@ -409,8 +410,25 @@ CentreSection::CentreSection (AudioEngine& e)
     for (auto& m : mainMeters)
         addAndMakeVisible (m);
 
+    addAndMakeVisible (busPanel);
+
+    for (int i = 0; i < Config::numSubs + Config::numAux; ++i)
+    {
+        const bool isSub = i < Config::numSubs;
+        const auto name = isSub ? "Sub " + juce::String (i + 1) : "A" + juce::String (i - Config::numSubs + 1);
+        auto* f = busFaders.add (new Fader (isSub ? *engine.subFader[(size_t) i] : *engine.auxMaster[(size_t) (i - Config::numSubs)], 16));
+        f->slider.getProperties().set ("capWidth", 30);
+        f->slider.setTitle (name + (isSub ? " fader" : " master"));
+        addAndMakeVisible (f);
+        auto* l = busScribbles.add (new juce::Label());
+        setupScribble (*l, name);
+        l->setFont (ConsoleLookAndFeel::uiFont (12.0f, true));
+        addAndMakeVisible (l);
+    }
+
     addAndMakeVisible (mainFader);
     mainFader.slider.setTitle ("Main fader");
+    mainFader.slider.getProperties().set ("capWidth", 46);
     setupScribble (mainScribble, "Main");
     addAndMakeVisible (mainScribble);
 
@@ -515,8 +533,18 @@ void CentreSection::resized()
         }
     }
 
+    // Bus compressor faceplate, right column.
+    busPanel.setBounds (330 + ((centreW - 12) - 330 - BusCompPanel::width) / 2, bridgeH + 12, BusCompPanel::width, BusCompPanel::height);
+
     // Main fader, far right of the fader area.
     const int f = bridgeH + knobH;
+    for (int i = 0; i < busFaders.size(); ++i)
+    {
+        const int cx = juce::roundToInt (gridX + (float) i * colW);
+        const int busW = juce::roundToInt (colW);
+        busScribbles[i]->setBounds (cx + 2, getHeight() - 28, busW - 4, 22);
+        busFaders[i]->setBounds (cx + 1, f + 36, busW - 2, getHeight() - 34 - (f + 36));
+    }
     mainScribble.setBounds (mainX + 4, getHeight() - 28, getWidth() - mainX - 12, 22);
     mainFader.setBounds (mainX + 4, f + 36, getWidth() - mainX - 12, mainScribble.getY() - 6 - (f + 36));
 }
@@ -533,6 +561,21 @@ void CentreSection::paint (juce::Graphics& g)
     for (int k = 0; k < Config::numAux; ++k)
         g.drawText ("A" + juce::String (k + 1), juce::Rectangle<float> (auxColumnX (k), 70.0f, colW, 10.0f), juce::Justification::centred, false);
     g.drawText ("Main", juce::Rectangle<float> (mainColumnX(), 70.0f, colW * 1.8f, 10.0f), juce::Justification::centred, false);
+
+    // Limiter lamp next to the main meters.
+    {
+        const float lx = mainColumnX() + colW * 1.8f - 14.0f;
+        g.setColour (limitHold > 0 ? juce::Colour (0xffff4a3a) : juce::Colour (0xff3a1512));
+        g.fillEllipse (lx - 4.0f, 30.0f, 8.0f, 8.0f);
+        if (limitHold > 0)
+        {
+            g.setColour (juce::Colour (0x66ff4a3a));
+            g.drawEllipse (lx - 6.0f, 28.0f, 12.0f, 12.0f, 2.0f);
+        }
+        g.setColour (bridgeText.withAlpha (0.8f));
+        g.setFont (ConsoleLookAndFeel::uiFont (9.0f));
+        g.drawText ("LIM", juce::Rectangle<float> (lx - 12.0f, 40.0f, 24.0f, 10.0f), juce::Justification::centred, false);
+    }
 
     // Tape machine panel.
     g.setColour (faderArea);
@@ -576,6 +619,16 @@ void CentreSection::paint (juce::Graphics& g)
 
 void CentreSection::update()
 {
+    busPanel.update();
+
+    const int holdBefore = limitHold;
+    if (engine.takeLimiting())
+        limitHold = 10;
+    else if (limitHold > 0)
+        --limitHold;
+    if ((holdBefore > 0) != (limitHold > 0))
+        repaint (juce::roundToInt (mainColumnX() + colW * 1.8f) - 30, 20, 30, 34);
+
     for (int side = 0; side < 2; ++side)
     {
         mainMeters[(size_t) side].setLevel (engine.takeMainPeak (side));

@@ -4,16 +4,17 @@
 #include "AudioEngine.h"
 #include "Widgets.h"
 #include "Cassette.h"
+#include "BusCompPanel.h"
 
 /** Fixed console geometry, in desk units (pixels at 100% zoom). */
 namespace DeskLayout
 {
-    constexpr int stripW = 110, cheekW = 30, centreW = 640;
+    constexpr int stripW = 110, cheekW = 30, centreW = 780;
     constexpr int bridgeH = 84, knobH = 930, faderH = 270;
     constexpr int totalH = bridgeH + knobH + faderH;
 
     // Centre fader area grid: Sub 1-4, Aux 1-8, then Main (1.8 columns wide) behind a divider.
-    constexpr float gridX = 8.0f, gridW = 624.0f, colW = gridW / 13.8f;
+    constexpr float gridX = 8.0f, gridW = (float) centreW - 16.0f, colW = gridW / 13.8f;
     inline float subColumnX (int k)  { return gridX + (float) k * colW; }
     inline float auxColumnX (int k)  { return gridX + (float) (Config::numSubs + k) * colW; }
     inline float mainColumnX()       { return gridX + 12.0f * colW; }
@@ -95,6 +96,10 @@ private:
     std::array<LedMeter, 2> mainMeters;
     Fader mainFader;
     juce::Label mainScribble;
+    BusCompPanel busPanel;
+    juce::OwnedArray<Fader> busFaders;          // Sub 1-4, then A1-A8
+    juce::OwnedArray<juce::Label> busScribbles;
+    int limitHold = 0;
 
     juce::Rectangle<int> deckBox, armBox, levelBox, groupEqBox;
 

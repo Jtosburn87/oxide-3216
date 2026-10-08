@@ -23,59 +23,111 @@ namespace
     }
 }
 
-AudioSettingsComponent::AudioSettingsComponent (AudioEngine& e, std::function<void()> changed)
+//==============================================================================
+AudioSettingsComponent::MappingPage::MappingPage (juce::String text, std::vector<Row> r, int cols)
+    : rows (std::move (r)), columns (cols)
+{
+    heading.setText (text, juce::dontSendNotification);
+    heading.setFont (ConsoleLookAndFeel::uiFont (14.0f));
+    heading.setColour (juce::Label::textColourId, ConsoleColours::legend.withAlpha (0.8f));
+    addAndMakeVisible (heading);
+
+    for (auto& row : rows)
+    {
+        auto* l = labels.add (new juce::Label ({}, row.label));
+        l->setFont (ConsoleLookAndFeel::uiFont (14.0f));
+        addAndMakeVisible (l);
+
+        auto* box = boxes.add (new juce::ComboBox (row.label));
+        box->setTitle (row.label);
+        box->onChange = [this, box, set = row.set]
+        {
+            set (channelForId (box->getSelectedId()));
+            if (onChanged) onChanged();
+        };
+        addAndMakeVisible (box);
+    }
+}
+
+void AudioSettingsComponent::MappingPage::refresh (const juce::StringArray& names, const juce::BigInteger& active)
+{
+    for (size_t i = 0; i < rows.size(); ++i)
+        fillChannelBox (*boxes[(int) i], names, active, rows[i].get());
+}
+
+void AudioSettingsComponent::MappingPage::resized()
+{
+    auto area = getLocalBounds().reduced (10, 8);
+    heading.setBounds (area.removeFromTop (22));
+    area.removeFromTop (4);
+
+    const int rowH = 28, gap = 16;
+    const int perColumn = (int) (rows.size() + (size_t) columns - 1) / columns;
+    const int colW = (area.getWidth() - gap * (columns - 1)) / columns;
+    for (size_t i = 0; i < rows.size(); ++i)
+    {
+        const int col = (int) i / perColumn, row = (int) i % perColumn;
+        auto cell = juce::Rectangle<int> (area.getX() + col * (colW + gap), area.getY() + row * rowH, colW, rowH).reduced (0, 2);
+        labels[(int) i]->setBounds (cell.removeFromLeft (64));
+        boxes[(int) i]->setBounds (cell);
+    }
+
+    if (extra != nullptr)
+        extra->setBounds (area.getX(), area.getY() + perColumn * rowH + 8, 120, 26);
+}
+
+//==============================================================================
+AudioSettingsComponent::AudioSettingsComponent (AudioEngine& e, std::function<void()> changedCallback)
     : engine (e),
-      onChanged (std::move (changed)),
+      onChanged (std::move (changedCallback)),
       selector (e.getDeviceManager(), 0, AudioEngine::maxDeviceChannels, 0, AudioEngine::maxDeviceChannels,
                 false, false, false, false)
 {
     addAndMakeVisible (selector);
 
-    inputsTitle.setText ("Input channels: which interface input feeds each console channel", juce::dontSendNotification);
-    outputsTitle.setText ("Main outputs", juce::dontSendNotification);
-    for (auto* l : { &inputsTitle, &outputsTitle })
+    std::vector<MappingPage::Row> inRows;
+    for (int c = 0; c < AudioEngine::numConsoleInputs; ++c)
+        inRows.push_back ({ "Input " + juce::String (c + 1),
+                            [this, c] { return engine.getInputSource (c); },
+                            [this, c] (int ch) { engine.setInputSource (c, ch); } });
+    inputsPage = std::make_unique<MappingPage> ("Which interface input feeds each console input channel", std::move (inRows), 2);
+    inputsPage->onChanged = [this] { changed(); };
+    autoMapButton.setTooltip ("Input channel 1 from interface input 1, channel 2 from input 2, and so on");
+    autoMapButton.onClick = [this]
     {
-        l->setFont (ConsoleLookAndFeel::uiFont (15.0f, true));
-        addAndMakeVisible (*l);
-    }
+        for (int c = 0; c < AudioEngine::numConsoleInputs; ++c)
+            engine.setInputSource (c, c);
+        refresh();
+        changed();
+    };
+    inputsPage->addAndMakeVisible (autoMapButton);
+    inputsPage->extra = &autoMapButton;
+
+    std::vector<MappingPage::Row> outRows;
+    outRows.push_back ({ "Main L", [this] { return engine.getMainOutput (0); }, [this] (int ch) { engine.setMainOutput (0, ch); } });
+    outRows.push_back ({ "Main R", [this] { return engine.getMainOutput (1); }, [this] (int ch) { engine.setMainOutput (1, ch); } });
+    for (int k = 0; k < Config::numAux; ++k)
+        outRows.push_back ({ "Aux " + juce::String (k + 1),
+                             [this, k] { return engine.getAuxOutput (k); },
+                             [this, k] (int ch) { engine.setAuxOutput (k, ch); } });
+    for (int k = 0; k < Config::numSubs; ++k)
+        for (int side = 0; side < 2; ++side)
+            outRows.push_back ({ "Sub " + juce::String (k + 1) + (side == 0 ? " L" : " R"),
+                                 [this, k, side] { return engine.getSubOutput (k, side); },
+                                 [this, k, side] (int ch) { engine.setSubOutput (k, side, ch); } });
+    outputsPage = std::make_unique<MappingPage> ("Interface outputs for main, and optionally for each aux master and sub", std::move (outRows), 2);
+    outputsPage->onChanged = [this] { changed(); };
+
+    const auto tabColour = ConsoleColours::room;
+    tabs.addTab ("Inputs", tabColour, inputsPage.get(), false);
+    tabs.addTab ("Outputs", tabColour, outputsPage.get(), false);
+    tabs.setTabBarDepth (30);
+    tabs.setOutline (0);
+    addAndMakeVisible (tabs);
+
     latencyLabel.setFont (ConsoleLookAndFeel::uiFont (13.0f));
     latencyLabel.setColour (juce::Label::textColourId, ConsoleColours::legend.withAlpha (0.75f));
     addAndMakeVisible (latencyLabel);
-
-    for (int c = 0; c < AudioEngine::numConsoleInputs; ++c)
-    {
-        auto* label = inputLabels.add (new juce::Label ({}, "Input " + juce::String (c + 1)));
-        label->setFont (ConsoleLookAndFeel::uiFont (14.0f));
-        addAndMakeVisible (label);
-
-        auto* box = inputBoxes.add (new juce::ComboBox ("Source for input " + juce::String (c + 1)));
-        box->setTitle ("Source for input channel " + juce::String (c + 1));
-        box->onChange = [this, c, box]
-        {
-            engine.setInputSource (c, channelForId (box->getSelectedId()));
-            if (onChanged) onChanged();
-        };
-        addAndMakeVisible (box);
-    }
-
-    for (int side = 0; side < 2; ++side)
-    {
-        mainLabels[side].setText (side == 0 ? "Main L" : "Main R", juce::dontSendNotification);
-        mainLabels[side].setFont (ConsoleLookAndFeel::uiFont (14.0f));
-        addAndMakeVisible (mainLabels[side]);
-
-        mainBoxes[side].setTitle (side == 0 ? "Main left output" : "Main right output");
-        mainBoxes[side].onChange = [this, side]
-        {
-            engine.setMainOutput (side, channelForId (mainBoxes[side].getSelectedId()));
-            if (onChanged) onChanged();
-        };
-        addAndMakeVisible (mainBoxes[side]);
-    }
-
-    autoMapButton.setTooltip ("Input channel 1 from interface input 1, channel 2 from input 2, and so on");
-    autoMapButton.onClick = [this] { autoMap(); };
-    addAndMakeVisible (autoMapButton);
 
     offsetTitle.setText ("Recording offset", juce::dontSendNotification);
     offsetTitle.setFont (ConsoleLookAndFeel::uiFont (15.0f, true));
@@ -94,15 +146,15 @@ AudioSettingsComponent::AudioSettingsComponent (AudioEngine& e, std::function<vo
     offsetSlider.onValueChange = [this]
     {
         engine.setRecordOffset ((int) offsetSlider.getValue());
-        refreshChannelLists();
-        if (onChanged) onChanged();
+        refresh();
+        changed();
     };
     addAndMakeVisible (offsetSlider);
 
     engine.getDeviceManager().addChangeListener (this);
-    refreshChannelLists();
+    refresh();
 
-    setSize (1040, 620);
+    setSize (1040, 640);
 }
 
 AudioSettingsComponent::~AudioSettingsComponent()
@@ -110,13 +162,18 @@ AudioSettingsComponent::~AudioSettingsComponent()
     engine.getDeviceManager().removeChangeListener (this);
 }
 
-void AudioSettingsComponent::changeListenerCallback (juce::ChangeBroadcaster*)
+void AudioSettingsComponent::changed()
 {
-    refreshChannelLists();
     if (onChanged) onChanged();
 }
 
-void AudioSettingsComponent::refreshChannelLists()
+void AudioSettingsComponent::changeListenerCallback (juce::ChangeBroadcaster*)
+{
+    refresh();
+    changed();
+}
+
+void AudioSettingsComponent::refresh()
 {
     juce::StringArray inNames, outNames;
     juce::BigInteger activeIn, activeOut;
@@ -130,11 +187,9 @@ void AudioSettingsComponent::refreshChannelLists()
         activeOut = device->getActiveOutputChannels();
 
         const double sr = device->getCurrentSampleRate();
-        const int buffer = device->getCurrentBufferSizeSamples();
-        const int inLat = device->getInputLatencyInSamples();
-        const int outLat = device->getOutputLatencyInSamples();
+        const int inLat = device->getInputLatencyInSamples(), outLat = device->getOutputLatencyInSamples();
         status = engine.getDeviceManager().getCurrentAudioDeviceType() + ", " + device->getName() + ": "
-               + juce::String ((int) sr) + " Hz, " + juce::String (buffer) + " samples.  Reported latency in "
+               + juce::String ((int) sr) + " Hz, " + juce::String (device->getCurrentBufferSizeSamples()) + " samples.  Reported latency in "
                + juce::String (inLat) + " + out " + juce::String (outLat) + " samples ("
                + juce::String (sr > 0 ? 1000.0 * (inLat + outLat) / sr : 0.0, 1) + " ms round trip).";
         if (engine.getRecordOffset() != 0)
@@ -142,26 +197,15 @@ void AudioSettingsComponent::refreshChannelLists()
     }
 
     latencyLabel.setText (status, juce::dontSendNotification);
-
-    for (int c = 0; c < inputBoxes.size(); ++c)
-        fillChannelBox (*inputBoxes[c], inNames, activeIn, engine.getInputSource (c));
-    for (int side = 0; side < 2; ++side)
-        fillChannelBox (mainBoxes[side], outNames, activeOut, engine.getMainOutput (side));
-}
-
-void AudioSettingsComponent::autoMap()
-{
-    for (int c = 0; c < AudioEngine::numConsoleInputs; ++c)
-        engine.setInputSource (c, c);
-    refreshChannelLists();
-    if (onChanged) onChanged();
+    inputsPage->refresh (inNames, activeIn);
+    outputsPage->refresh (outNames, activeOut);
 }
 
 void AudioSettingsComponent::paint (juce::Graphics& g)
 {
     g.fillAll (ConsoleColours::room);
     g.setColour (ConsoleColours::edge);
-    g.drawVerticalLine (500, 10.0f, (float) getHeight() - 10.0f);
+    g.fillRect (500, 10, 1, getHeight() - 20);
 }
 
 void AudioSettingsComponent::resized()
@@ -171,37 +215,12 @@ void AudioSettingsComponent::resized()
     area.removeFromLeft (20);
 
     latencyLabel.setBounds (area.removeFromBottom (40));
+    auto offset = area.removeFromBottom (100);
+    offsetTitle.setBounds (offset.removeFromTop (26));
+    offsetSlider.setBounds (offset.removeFromTop (28).removeFromLeft (160));
+    offset.removeFromTop (4);
+    offsetHelp.setBounds (offset);
 
-    inputsTitle.setBounds (area.removeFromTop (26));
-    area.removeFromTop (4);
-
-    const int rowH = 28, colGap = 16;
-    auto grid = area.removeFromTop (rowH * 8);
-    const int colW = (grid.getWidth() - colGap) / 2;
-    for (int c = 0; c < inputBoxes.size(); ++c)
-    {
-        const int col = c / 8, row = c % 8;
-        auto cell = juce::Rectangle<int> (grid.getX() + col * (colW + colGap), grid.getY() + row * rowH, colW, rowH).reduced (0, 2);
-        inputLabels[c]->setBounds (cell.removeFromLeft (64));
-        inputBoxes[c]->setBounds (cell);
-    }
-
-    area.removeFromTop (8);
-    autoMapButton.setBounds (area.removeFromTop (26).removeFromLeft (120));
-    area.removeFromTop (18);
-
-    outputsTitle.setBounds (area.removeFromTop (26));
-    area.removeFromTop (4);
-    for (int side = 0; side < 2; ++side)
-    {
-        auto row = area.removeFromTop (rowH).reduced (0, 2).removeFromLeft (colW);
-        mainLabels[side].setBounds (row.removeFromLeft (64));
-        mainBoxes[side].setBounds (row);
-    }
-
-    area.removeFromTop (18);
-    offsetTitle.setBounds (area.removeFromTop (26));
-    offsetSlider.setBounds (area.removeFromTop (28).removeFromLeft (160));
-    area.removeFromTop (4);
-    offsetHelp.setBounds (area.removeFromTop (40));
+    area.removeFromBottom (10);
+    tabs.setBounds (area);
 }

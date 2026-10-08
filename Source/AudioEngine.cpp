@@ -12,6 +12,11 @@ AudioEngine::AudioEngine()
         inputSource[(size_t) c].store (c);
     mainOutput[0].store (0);
     mainOutput[1].store (1);
+    for (auto& o : auxOutput)
+        o.store (-1);
+    for (auto& pair : subOutput)
+        for (auto& o : pair)
+            o.store (-1);
     mainPeak[0].store (0.0f);
     mainPeak[1].store (0.0f);
     inputSlot.fill (-1);
@@ -73,6 +78,11 @@ void AudioEngine::initialise (const juce::XmlElement* savedState)
         setMainOutput (0, routing->getIntAttribute ("mainL", 0));
         setMainOutput (1, routing->getIntAttribute ("mainR", 1));
         setRecordOffset (routing->getIntAttribute ("recordOffset", 0));
+        for (int k = 0; k < Config::numAux; ++k)
+            setAuxOutput (k, routing->getIntAttribute ("aux" + juce::String (k + 1), -1));
+        for (int k = 0; k < Config::numSubs; ++k)
+            for (int side = 0; side < 2; ++side)
+                setSubOutput (k, side, routing->getIntAttribute ("sub" + juce::String (k + 1) + (side == 0 ? "L" : "R"), -1));
     }
 
     deviceManager.addAudioCallback (this);
@@ -91,6 +101,11 @@ std::unique_ptr<juce::XmlElement> AudioEngine::createStateXml() const
     routing->setAttribute ("mainL", getMainOutput (0));
     routing->setAttribute ("mainR", getMainOutput (1));
     routing->setAttribute ("recordOffset", getRecordOffset());
+    for (int k = 0; k < Config::numAux; ++k)
+        routing->setAttribute ("aux" + juce::String (k + 1), getAuxOutput (k));
+    for (int k = 0; k < Config::numSubs; ++k)
+        for (int side = 0; side < 2; ++side)
+            routing->setAttribute ("sub" + juce::String (k + 1) + (side == 0 ? "L" : "R"), getSubOutput (k, side));
     return xml;
 }
 
@@ -130,6 +145,28 @@ void AudioEngine::setMainOutput (int side, int deviceOutput)
 int AudioEngine::getMainOutput (int side) const
 {
     return (side == 0 || side == 1) ? mainOutput[(size_t) side].load() : -1;
+}
+
+void AudioEngine::setAuxOutput (int k, int dev)
+{
+    if (juce::isPositiveAndBelow (k, Config::numAux))
+        auxOutput[(size_t) k].store (juce::jlimit (-1, maxDeviceChannels - 1, dev));
+}
+
+int AudioEngine::getAuxOutput (int k) const
+{
+    return juce::isPositiveAndBelow (k, Config::numAux) ? auxOutput[(size_t) k].load() : -1;
+}
+
+void AudioEngine::setSubOutput (int k, int side, int dev)
+{
+    if (juce::isPositiveAndBelow (k, Config::numSubs) && (side == 0 || side == 1))
+        subOutput[(size_t) k][(size_t) side].store (juce::jlimit (-1, maxDeviceChannels - 1, dev));
+}
+
+int AudioEngine::getSubOutput (int k, int side) const
+{
+    return juce::isPositiveAndBelow (k, Config::numSubs) && (side == 0 || side == 1) ? subOutput[(size_t) k][(size_t) side].load() : -1;
 }
 
 void AudioEngine::setRecordOffset (int samples)
@@ -188,6 +225,9 @@ void AudioEngine::prepare (double sampleRate, const juce::BigInteger& activeInpu
     reportedLatency.store (reportedRoundTripLatency);
     tape.prepare (currentSampleRate, reportedRoundTripLatency + recordOffset.load());
     mainGainL.prepare (currentSampleRate, Dsp::faderGain (mainFader->get()));
+    busComp.prepare (currentSampleRate);
+    limiterEnv = 0.0f;
+    limiterRelease = (float) std::exp (-1.0 / (0.1 * currentSampleRate));
     for (int k = 0; k < Config::numSubs; ++k)
     {
         groupEq[k]->prepare (currentSampleRate);
@@ -233,6 +273,20 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputs, 
         const int slot = juce::isPositiveAndBelow (dev, maxDeviceChannels) ? outputSlot[(size_t) dev] : -1;
         mainOut[side] = juce::isPositiveAndBelow (slot, numOutputs) ? outputs[slot] : nullptr;
     }
+
+    // Optional extra outputs: aux masters and subs.
+    const auto outFor = [&] (int dev) -> float*
+    {
+        const int slot = juce::isPositiveAndBelow (dev, maxDeviceChannels) ? outputSlot[(size_t) dev] : -1;
+        return juce::isPositiveAndBelow (slot, numOutputs) ? outputs[slot] : nullptr;
+    };
+    float* auxOut[Config::numAux];
+    for (int k = 0; k < Config::numAux; ++k)
+        auxOut[k] = outFor (auxOutput[(size_t) k].load (std::memory_order_relaxed));
+    float* subOut[Config::numSubs][2];
+    for (int k = 0; k < Config::numSubs; ++k)
+        for (int side = 0; side < 2; ++side)
+            subOut[k][side] = outFor (subOutput[(size_t) k][(size_t) side].load (std::memory_order_relaxed));
 
     bool anySolo = false;
     for (auto* s : inputStrips)  anySolo = anySolo || s->controls.solo->on();
@@ -289,7 +343,7 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputs, 
         for (int r = 0; r < Config::numReturnStrips; ++r)
             returnStrips[r]->process (tapeOut[(size_t) r].data(), returnDirect[(size_t) r].data(), buses, n, anySolo);
 
-        // Subs: group EQ -> sub fader -> main.
+        // Subs: group EQ -> sub fader -> main (and optional sub outputs).
         for (int k = 0; k < Config::numSubs; ++k)
         {
             auto& eq = *groupEq[k];
@@ -311,6 +365,8 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputs, 
                 }
                 xl *= g;
                 xr *= g;
+                l[i] = xl;
+                r[i] = xr;
                 mixL[(size_t) i] += xl;
                 mixR[(size_t) i] += xr;
                 pl = juce::jmax (pl, std::abs (xl));
@@ -318,9 +374,11 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputs, 
             }
             raisePeak (subPeak[(size_t) k][0], pl);
             raisePeak (subPeak[(size_t) k][1], pr);
+            if (subOut[k][0] != nullptr) juce::FloatVectorOperations::add (subOut[k][0] + start, l, n);
+            if (subOut[k][1] != nullptr) juce::FloatVectorOperations::add (subOut[k][1] + start, r, n);
         }
 
-        // Aux masters (outputs and returns arrive in later stages): metered for now.
+        // Aux masters -> optional aux outputs (returns to main arrive with the plug-in stage).
         for (int k = 0; k < Config::numAux; ++k)
         {
             float* a = aux[(size_t) k].data();
@@ -333,6 +391,8 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputs, 
                 pk = juce::jmax (pk, std::abs (a[i]));
             }
             raisePeak (auxPeak[(size_t) k], pk);
+            if (auxOut[k] != nullptr)
+                juce::FloatVectorOperations::add (auxOut[k] + start, a, n);
         }
 
         if (tone)
@@ -346,6 +406,9 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputs, 
             }
             tonePhase = std::fmod (tonePhase, juce::MathConstants<double>::twoPi);
         }
+
+        // Master section: bus compressor -> [master inserts, stage 7] -> main fader -> limiter -> outputs.
+        busComp.process (mixL.data(), mixR.data(), n);
 
         // Main fader (one smoothed gain for both sides).
         if (mainGainL.settled (mainT))
@@ -362,6 +425,23 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputs, 
                 mixR[(size_t) i] *= g;
             }
         }
+
+        // Limiter at -3 dBFS: instant attack (nothing gets past), 100 ms release, no added delay.
+        bool limited = false;
+        for (int i = 0; i < n; ++i)
+        {
+            const float pk = juce::jmax (std::abs (mixL[(size_t) i]), std::abs (mixR[(size_t) i]));
+            limiterEnv = juce::jmax (pk, limiterEnv * limiterRelease);
+            if (limiterEnv > limiterCeiling)
+            {
+                const float g = limiterCeiling / limiterEnv;
+                mixL[(size_t) i] *= g;
+                mixR[(size_t) i] *= g;
+                limited = limited || g < 0.944f;   // more than 0.5 dB
+            }
+        }
+        if (limited)
+            limiting.store (true, std::memory_order_relaxed);
 
         float* mix[2] = { mixL.data(), mixR.data() };
         for (int side = 0; side < 2; ++side)

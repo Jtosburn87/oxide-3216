@@ -8,6 +8,7 @@
 #include "Params.h"
 #include "ChannelStrip.h"
 #include "TapeMachine.h"
+#include "BusCompressor.h"
 
 /** Owns the audio device, the console's parameters and its DSP, and runs the real-time callback.
 
@@ -43,6 +44,10 @@ public:
     int  getInputSource (int consoleChannel) const;
     void setMainOutput (int side, int deviceOutput);   // side 0 = left, 1 = right
     int  getMainOutput (int side) const;
+    void setAuxOutput (int aux, int deviceOutput);                // optional, -1 = none
+    int  getAuxOutput (int aux) const;
+    void setSubOutput (int sub, int side, int deviceOutput);      // optional, -1 = none
+    int  getSubOutput (int sub, int side) const;
 
     /** Extra recording offset in samples, added to the latency the driver reports.
         Positive = the driver under-reports its latency. */
@@ -56,13 +61,17 @@ public:
     juce::OwnedArray<FourBandEq> groupEq;                  // one stereo group EQ per sub
     std::array<Param*, Config::numSubs> subFader {};       // 0..100, unity at 80 (faders arrive in stage 5)
     std::array<Param*, Config::numAux> auxMaster {};       // 0..100, unity at 80
+    BusCompressor busComp { params };
     Param* mainFader = nullptr;
+
+    static constexpr float limiterCeiling = 0.70795f;   // -3 dBFS
 
     // Metering: peak linear level since the last call.
     float takeInputPeak (int strip);   // post-fader, input bank
     float takeMainPeak (int side);
     float takeSubPeak (int sub, int side);
     float takeAuxPeak (int aux);
+    bool takeLimiting() noexcept { return limiting.exchange (false); }   // limiter worked since the last call
 
     /** Number of audio callbacks so far: lets the UI tell whether audio is actually running. */
     std::uint64_t getCallbackCount() const noexcept { return callbackCount.load (std::memory_order_relaxed); }
@@ -89,6 +98,10 @@ private:
 
     std::array<std::atomic<int>, numConsoleInputs> inputSource;
     std::array<std::atomic<int>, 2> mainOutput;
+    std::array<std::atomic<int>, Config::numAux> auxOutput;
+    std::array<std::array<std::atomic<int>, 2>, Config::numSubs> subOutput;
+    float limiterEnv = 0.0f, limiterRelease = 0.0f;
+    std::atomic<bool> limiting { false };
     std::atomic<int> recordOffset { 0 }, reportedLatency { 0 };
 
     // device channel number -> index into the callback's buffer arrays (-1 = inactive)

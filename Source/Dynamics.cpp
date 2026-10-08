@@ -107,7 +107,7 @@ FetCompressor::FetCompressor (ParamSet& params, const juce::String& prefix)
     output  = &params.add (prefix + ".comp.output", "Compressor output", -12.0f, 12.0f, 0.0f);
     attack  = &params.add (prefix + ".comp.attack", "Compressor attack", 1.0f, 7.0f, 3.0f);
     release = &params.add (prefix + ".comp.release", "Compressor release", 1.0f, 7.0f, 4.0f);
-    ratio   = &params.add (prefix + ".comp.ratio", "Compressor ratio", 0.0f, 3.0f, 0.0f);
+    ratio   = &params.addStepped (prefix + ".comp.ratio", "Compressor ratio", 4, 0);
     all     = &params.addToggle (prefix + ".comp.all", "Compressor all buttons", false);
 }
 

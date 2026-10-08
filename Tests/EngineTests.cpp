@@ -570,6 +570,124 @@ namespace
         check (rmsDb() < -150.0f, "no hiss when the tape is stopped");
     }
 
+    /** Steady-state output peak of a BusCompressor fed with the same sine on both sides. */
+    struct BusCompRig
+    {
+        ParamSet params;
+        BusCompressor bc { params };
+        std::vector<float> l = std::vector<float> (512), r = std::vector<float> (512);
+        double phase = 0.0;
+
+        BusCompRig() { bc.prepare (48000.0); }
+
+        float measure (float freq, float amp, int blocks = 400)
+        {
+            float pk = 0.0f;
+            for (int k = 0; k < blocks; ++k)
+            {
+                for (size_t i = 0; i < l.size(); ++i)
+                {
+                    l[i] = r[i] = amp * (float) std::sin (phase);
+                    phase += juce::MathConstants<double>::twoPi * freq / 48000.0;
+                }
+                bc.process (l.data(), r.data(), (int) l.size());
+                if (k >= blocks - 20)
+                    for (float x : l)
+                        pk = juce::jmax (pk, std::abs (x));
+            }
+            return pk;
+        }
+    };
+
+    void testBusCompressor()
+    {
+        std::puts ("Stereo bus compressor");
+        {
+            BusCompRig r;
+            check (nearDb (r.measure (1000.0f, 0.5f) / 0.5f, 0.0f, 0.001f), "out (default): audio untouched");
+
+            r.bc.in->set (1.0f);
+            r.bc.ratio->set (3.0f);   // 4:1
+            // -6 dBFS against the -18 dBFS threshold (knob at 0): 12 dB over at 4:1 -> 9 dB of reduction -> -15 dBFS.
+            const float out = r.measure (1000.0f, 0.5f);
+            const float gr = r.bc.takeGainReduction();
+            std::printf ("      4:1, -6 dBFS in: %.1f dBFS out, %.1f dB reduction\n", toDb (out), gr);
+            check (std::abs (toDb (out) + 15.0f) < 0.7f, "4:1 output level");
+            check (std::abs (gr - 9.0f) < 0.7f, "gain reduction for the needle");
+
+            r.bc.threshold->set (20.0f);   // knob +20 -> 0 dBFS threshold
+            check (nearDb (r.measure (1000.0f, 0.25f) / 0.25f, 0.0f, 0.1f), "threshold knob at +20: -12 dBFS passes");
+
+            r.bc.threshold->set (0.0f);
+            r.bc.makeup->set (6.0f);
+            const float withMakeup = r.measure (1000.0f, 0.5f);
+            check (nearDb (withMakeup / out, 6.0f, 0.2f), "make up +6 dB");
+
+            r.bc.release->set (5.0f);   // auto
+            check (std::abs (toDb (r.measure (1000.0f, 0.5f) / withMakeup)) < 0.5f, "auto release settles to the same steady level");
+        }
+        {
+            // Side-chain HPF: a 40 Hz bass line triggers far less reduction with the HPF at 185 Hz.
+            BusCompRig a, b;
+            for (auto* rig : { &a, &b })
+            {
+                rig->bc.in->set (1.0f);
+                rig->bc.ratio->set (5.0f);   // 10:1
+            }
+            b.bc.hpf->set (5.0f);
+            const float plain = a.measure (40.0f, 0.5f), filtered = b.measure (40.0f, 0.5f);
+            std::printf ("      40 Hz at 10:1: %.1f dB reduction without HPF, %.1f dB with 185 Hz HPF\n",
+                         toDb (0.5f / plain), toDb (0.5f / filtered));
+            check (toDb (0.5f / filtered) < toDb (0.5f / plain) - 6.0f, "side-chain HPF lets the bass through");
+        }
+    }
+
+    void testMasterSection()
+    {
+        std::puts ("Master: limiter, sub fader, aux and sub outputs");
+        {
+            SineRig r;
+            r.e.inputStrips[0]->controls.trim->set (20.0f);   // drive main far over 0 dBFS
+            r.run (1000.0f, 1.0f, 100);
+            r.e.takeMainPeak (0);
+            float pk = 0.0f;
+            for (int k = 0; k < 50; ++k)
+            {
+                r.run (1000.0f, 1.0f, 1);
+                for (float x : r.b.out[0])
+                    pk = juce::jmax (pk, std::abs (x));
+            }
+            std::printf ("      +20 dB over: output peak %.2f dBFS\n", toDb (pk));
+            check (pk <= AudioEngine::limiterCeiling + 1.0e-6f, "nothing gets past the -3 dBFS limiter");
+            check (r.e.takeLimiting(), "limiter indicator");
+        }
+        {
+            SineRig r;
+            auto& c = r.e.inputStrips[0]->controls;
+            c.main->set (0.0f);
+            c.sub[0]->set (1.0f);
+            r.e.subFader[0]->set (faderFor (-6.0f));
+            check (nearDb (r.measure (1000.0f, 0.01f) / 0.01f, -6.0f, 0.05f), "sub 1 fader -6 dB");
+        }
+        {
+            AudioEngine e;
+            e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1, 2, 3, 4, 5 }));
+            mapOnly (e, 0, 0);
+            auto& c = e.inputStrips[0]->controls;
+            c.auxLevel[0]->set (1.0f);
+            c.sub[1]->set (1.0f);
+            e.setAuxOutput (0, 2);
+            e.setSubOutput (1, 0, 4);
+            e.setSubOutput (1, 1, 5);
+            Buffers b (1, 6, 256);
+            std::fill (b.in[0].begin(), b.in[0].end(), 0.1f);
+            settle (e, b);
+            check (near (b.out[2][200], 0.15f, 1.0e-3f), "aux 1 on interface output 3");
+            check (near (b.out[3][200], 0.0f), "unassigned output 4 is silent");
+            check (near (b.out[4][200], 0.1f * pan, 1.0e-3f) && near (b.out[5][200], 0.1f * pan, 1.0e-3f), "sub 2 on outputs 5/6");
+        }
+    }
+
     void testNoDeviceIsSafe()
     {
         std::puts ("Callback with zero channels");
@@ -675,6 +793,8 @@ int main (int argc, char** argv)
     testFetCompressor();
     testSends();
     testTapeCharacter();
+    testBusCompressor();
+    testMasterSection();
     testNoDeviceIsSafe();
 
     for (int i = 1; i < argc; ++i)

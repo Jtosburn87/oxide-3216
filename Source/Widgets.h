@@ -77,11 +77,15 @@ private:
 class Fader : public juce::Component
 {
 public:
-    explicit Fader (Param&);
+    /** labelWidth: room for the printed dB scale on the left. */
+    explicit Fader (Param&, int labelWidth = 20);
     void paint (juce::Graphics&) override;
     void resized() override;
 
     ParamSlider slider;
+
+private:
+    const int labelWidth;
 };
 
 /** Vertical LED peak meter, -60 to 0 dBFS, with a short peak hold. */

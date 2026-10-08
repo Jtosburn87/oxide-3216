@@ -36,6 +36,12 @@ juce::Font ConsoleLookAndFeel::uiFont (float height, bool bold)
 void ConsoleLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int width, int height, float pos,
                                            float startAngle, float endAngle, juce::Slider& slider)
 {
+    if (slider.getProperties().contains ("busKnob"))
+    {
+        drawBusKnob (g, juce::Rectangle<int> (x, y, width, height).toFloat(), startAngle + pos * (endAngle - startAngle), slider.hasKeyboardFocus (false));
+        return;
+    }
+
     // Small console knob: printed ticks around a dark skirt, white pointer line, coloured centre cap.
     const auto bounds = juce::Rectangle<int> (x, y, width, height).toFloat();
     const auto c = bounds.getCentre();
@@ -99,6 +105,26 @@ void ConsoleLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& 
     auto r = button.getLocalBounds().toFloat().reduced (0.5f);
     const bool on = button.getToggleState();
 
+    if (button.getProperties().contains ("faceplateIn"))
+    {
+        // Light grey push button; lit blue underneath when in.
+        g.setColour (on ? juce::Colour (0x8c3ea0ff) : juce::Colours::black.withAlpha (0.4f));
+        g.fillRoundedRectangle (r.translated (0.0f, 3.0f).expanded (on ? 2.0f : 0.0f), 3.0f);
+        g.setGradientFill (juce::ColourGradient (juce::Colour (0xffeceef0), r.getX(), r.getY(), juce::Colour (0xffaeb2b8), r.getX(), r.getBottom(), false));
+        g.fillRoundedRectangle (r, 2.0f);
+        g.setColour (on ? juce::Colour (0xff3ea0ff) : juce::Colour (0xff6f747a));
+        g.fillRect (r.getX() + 1.0f, r.getBottom() - 4.0f, r.getWidth() - 2.0f, 4.0f);
+        g.setColour (juce::Colours::black);
+        g.drawRoundedRectangle (r, 2.0f, 1.0f);
+        if (button.hasKeyboardFocus (true))
+        {
+            g.setColour (focus);
+            g.drawRoundedRectangle (r.expanded (1.0f), 3.0f, 2.0f);
+        }
+        juce::ignoreUnused (isMouseOver, isButtonDown);
+        return;
+    }
+
     auto base = on ? button.findColour (juce::TextButton::buttonOnColourId)
                    : button.findColour (juce::TextButton::buttonColourId);
     if (isMouseOver && ! on)
@@ -152,7 +178,9 @@ void ConsoleLookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, int 
     juce::ignoreUnused (minSliderPos, maxSliderPos);
     const auto area = juce::Rectangle<int> (x, y, width, height).toFloat();
     const float cx = area.getCentreX(), top = area.getY(), bottom = area.getBottom();
-    const float scaleW = juce::jmin (area.getWidth(), 44.0f);
+    // Cap width can be set per fader ("capWidth"): wide caps on the bus and main faders.
+    const float capWidthProp = (float) slider.getProperties().getWithDefault ("capWidth", 0.0);
+    const float scaleW = capWidthProp > 0.0f ? juce::jmin (area.getWidth(), capWidthProp + 10.0f) : juce::jmin (area.getWidth(), 44.0f);
 
     g.setColour (juce::Colour (0xffd6d9da).withAlpha (0.7f));
     const int ticks = juce::jmax (2, juce::roundToInt ((bottom - top) / 14.0f));
@@ -186,5 +214,51 @@ void ConsoleLookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, int 
     {
         g.setColour (focus);
         g.drawRect (juce::Rectangle<float> (scaleW + 6.0f, bottom - top + 36.0f).withCentre (area.getCentre()), 2.0f);
+    }
+}
+
+void ConsoleLookAndFeel::drawBusKnob (juce::Graphics& g, juce::Rectangle<float> bounds, float angle, bool focused)
+{
+    // Large faceplate knob: knurled grey skirt, light grey body, blue cap, white pointer bar.
+    const auto c = bounds.getCentre();
+    const float r = juce::jmin (bounds.getWidth(), bounds.getHeight()) * 0.5f - 3.0f;
+
+    g.setColour (juce::Colours::black.withAlpha (0.6f));
+    g.fillEllipse (juce::Rectangle<float> (r * 2, r * 2).withCentre (c.translated (0.0f, 3.0f)));
+
+    for (int i = 0; i < 120; ++i)   // knurling: 3-degree ridges
+    {
+        juce::Path ridge;
+        const float a = (float) i * juce::MathConstants<float>::twoPi / 120.0f;
+        ridge.addPieSegment (c.x - r, c.y - r, r * 2, r * 2, a, a + juce::MathConstants<float>::twoPi / 120.0f, 0.0f);
+        g.setColour (i % 2 == 0 ? juce::Colour (0xffc3c7cb) : juce::Colour (0xff8f9499));
+        g.fillPath (ridge);
+    }
+    g.setColour (juce::Colours::black);
+    g.drawEllipse (juce::Rectangle<float> (r * 2, r * 2).withCentre (c), 1.0f);
+
+    const float body = r - 3.0f;
+    g.setGradientFill (juce::ColourGradient (juce::Colour (0xffd9dcdf), c.x - body * 0.2f, c.y - body * 0.4f,
+                                             juce::Colour (0xff9ca1a6), c.x + body, c.y + body, true));
+    g.fillEllipse (juce::Rectangle<float> (body * 2, body * 2).withCentre (c));
+
+    const float cap = r * 0.72f;
+    juce::ColourGradient blue (juce::Colour (0xff55b0f5), c.x - cap * 0.2f, c.y - cap * 0.45f,
+                               juce::Colour (0xff165ea8), c.x + cap, c.y + cap, true);
+    blue.addColour (0.62, juce::Colour (0xff1f78d0));
+    g.setGradientFill (blue);
+    g.fillEllipse (juce::Rectangle<float> (cap * 2, cap * 2).withCentre (c));
+    g.setColour (juce::Colours::black.withAlpha (0.5f));
+    g.drawEllipse (juce::Rectangle<float> (cap * 2, cap * 2).withCentre (c), 0.8f);
+
+    juce::Path pointer;
+    pointer.addRoundedRectangle (-2.0f, -(r - 2.0f), 4.0f, r * 0.95f, 1.0f);
+    g.setColour (juce::Colour (0xfff6f8fa));
+    g.fillPath (pointer, juce::AffineTransform::rotation (angle).translated (c));
+
+    if (focused)
+    {
+        g.setColour (focus);
+        g.drawEllipse (bounds.reduced (0.5f), 1.6f);
     }
 }

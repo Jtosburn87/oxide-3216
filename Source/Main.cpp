@@ -1,6 +1,7 @@
 #include <juce_gui_extra/juce_gui_extra.h>
 #include "AudioEngine.h"
 #include "MainComponent.h"
+#include "AudioSettingsComponent.h"
 
 class ConsoleTapeApplication : public juce::JUCEApplication
 {
@@ -59,8 +60,18 @@ public:
 
         AudioEngine e;
         {
-            Desk desk (e);
-            const auto image = desk.createComponentSnapshot (desk.getLocalBounds(), true, zoom > 0.0f ? zoom : 1.0f);
+            // "--snapshot out.png 1.0 settings" renders the audio device window instead of the desk.
+            std::unique_ptr<juce::Component> view;
+            if (args.contains ("settings"))
+            {
+                auto settings = std::make_unique<AudioSettingsComponent> (e, nullptr);
+                if (args.contains ("outputs"))
+                    settings->showOutputsTab();
+                view = std::move (settings);
+            }
+            else
+                view = std::make_unique<Desk> (e);
+            const auto image = view->createComponentSnapshot (view->getLocalBounds(), true, zoom > 0.0f ? zoom : 1.0f);
             out.deleteFile();
             juce::FileOutputStream stream (out);
             juce::PNGImageFormat().writeImageToStream (image, stream);
