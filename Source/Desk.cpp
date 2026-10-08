@@ -212,6 +212,31 @@ StripComponent::StripComponent (ChannelStrip& s)
         addChildComponent (b);
     }
 
+    // Return strips: a button on the gate's title line switches the slot between gate and de-esser.
+    if (auto* d = s.deEsser.get())
+    {
+        deFreq = std::make_unique<Knob> (*d->frequency, "Freq", gateCap);
+        deFreq->setFormatter ([] (float hz) { return formatHz (hz); });
+        deFreq->setEndLabels ("2k", "12k");
+        deReduction = std::make_unique<Knob> (*d->reduction, "Reduce", gateCap);
+        deReduction->setEndLabels ("0", "20");
+        deWide = std::make_unique<ParamButton> (*d->wide, "Wide");
+        deWide->setTooltip ("Narrow (off): a band around the frequency. Wide (on): everything above it");
+        deGentle = std::make_unique<ParamButton> (*d->gentle, "Gentle");
+        deGentle->setTooltip ("Full (off): the whole signal comes down on an s. Gentle (on): only the sibilant band does");
+        deBypass = std::make_unique<ParamButton> (*d->bypass, "Byp");
+        deBypass->setTooltip ("Bypass the de-esser");
+        redButton (*deBypass);
+        for (juce::Component* c : { (juce::Component*) deFreq.get(), (juce::Component*) deReduction.get(),
+                                    (juce::Component*) deWide.get(), (juce::Component*) deGentle.get(), (juce::Component*) deBypass.get() })
+            addChildComponent (c);
+
+        gateModeButton.setButtonText ("Gate");
+        gateModeButton.setTooltip ("Switch this channel's gate to a de-esser");
+        gateModeButton.onClick = [d] { d->on->toggle(); };
+        add (gateModeButton);
+    }
+
     fader.slider.setTitle (strip.name + " fader");
     setTitle (strip.name);
     setFocusContainerType (FocusContainerType::focusContainer);
@@ -260,16 +285,31 @@ void StripComponent::setCollapsed (int mask)
     for (int i = 0; i < 4; ++i)
     {
         const bool folded = (mask & (1 << i)) != 0;
-        for (auto* c : sectionComponents (1 << i))
-            c->setVisible (! folded);
         auto& b = foldButtons[(size_t) i];
         b.setButtonText (folded ? "+" : juce::String (juce::CharPointer_UTF8 ("\xe2\x80\x93")));
         b.setTitle ((folded ? "Restore " : "Minimise ") + b.getTitle().fromFirstOccurrenceOf (" ", false, false));
         b.setTooltip (folded ? "Show this section again on the whole bank" : "Minimise this section on the whole bank");
     }
+    updateVisibility();
     resized();
     repaint();
 }
+
+void StripComponent::updateVisibility()
+{
+    // Hidden when the section is minimised; in the gate slot, only the gate or the de-esser shows.
+    const juce::Component* deEssParts[] = { deFreq.get(), deReduction.get(), deWide.get(), deGentle.get(), deBypass.get() };
+    for (int i = 0; i < 4; ++i)
+    {
+        const bool folded = (collapsed & (1 << i)) != 0;
+        for (auto* c : sectionComponents (1 << i))
+        {
+            const bool isDeEss = std::find (std::begin (deEssParts), std::end (deEssParts), c) != std::end (deEssParts);
+            c->setVisible (! folded && (i != 1 || isDeEss == shownDeEss));
+        }
+    }
+}
+
 
 std::vector<juce::Component*> StripComponent::sectionComponents (int bit)
 {
@@ -277,7 +317,13 @@ std::vector<juce::Component*> StripComponent::sectionComponents (int bit)
     if (bit == eqSection)
         for (auto* k : eqKnobs) list.push_back (k);
     if (bit == gateSection)
+    {
         list = { &gateThr, &gateRange, &gateFast };
+        for (juce::Component* c : { (juce::Component*) deFreq.get(), (juce::Component*) deReduction.get(), (juce::Component*) deWide.get(),
+                                    (juce::Component*) deGentle.get(), (juce::Component*) deBypass.get() })
+            if (c != nullptr)
+                list.push_back (c);
+    }
     if (bit == compSection)
     {
         list = { &compInput, &compOutput, &compAttack, &compRelease, &compAll, &compIn, &grMeter };
@@ -315,6 +361,8 @@ void StripComponent::resized()
         box = { bx, y, bw, folded ? collapsedH : expandedH[i] };
         sections.push_back ({ title, box });
         foldButtons[(size_t) i].setBounds (bx + bw - 20, box.getY() - 7, 18, 14);
+        if (i == 1 && deFreq != nullptr)
+            gateModeButton.setBounds (bx + 4, box.getY() - 7, 54, 14);
         if (i < 3)
         {
             // Unlocked chain: a button to move this section one place earlier (not on the first one).
@@ -328,7 +376,8 @@ void StripComponent::resized()
     };
 
     // With the chain unlocked, two buttons share the title line: "Compressor" would not fit.
-    const char* const stageTitles[] = { "Equaliser", "Gate", chainUnlocked ? "Comp" : "Compressor" };
+    // On return strips, the gate slot's title is the gate/de-esser switch instead.
+    const char* const stageTitles[] = { "Equaliser", deFreq != nullptr ? "" : "Gate", chainUnlocked ? "Comp" : "Compressor" };
     const std::function<void (juce::Rectangle<int>)> stageLayouts[] =
     {
         [&] (juce::Rectangle<int> b)
@@ -344,6 +393,17 @@ void StripComponent::resized()
             gateThr.setBounds (knobAt (left, b.getY() + 10));
             gateRange.setBounds (knobAt (right, b.getY() + 10));
             gateFast.setBounds (bx + 5, b.getY() + 64, bw - 10, 18);
+            if (deFreq != nullptr)
+            {
+                deFreq->setBounds (knobAt (left, b.getY() + 10));
+                deReduction->setBounds (knobAt (right, b.getY() + 10));
+                auto row = juce::Rectangle<int> (bx + 4, b.getY() + 64, bw - 8, 18);
+                deWide->setBounds (row.removeFromLeft (30));
+                row.removeFromLeft (2);
+                deBypass->setBounds (row.removeFromRight (26));
+                row.removeFromRight (2);
+                deGentle->setBounds (row);
+            }
         },
         [&] (juce::Rectangle<int> b)
         {
@@ -426,6 +486,16 @@ void StripComponent::update()
     // A loaded session may have renamed the strip.
     if (! scribble.isBeingEdited() && scribble.getText() != strip.name)
         scribble.setText (strip.name, juce::dontSendNotification);
+
+    // The gate slot switched between gate and de-esser (button, or a loaded session).
+    if (strip.deEsser != nullptr && strip.deEsser->on->on() != shownDeEss)
+    {
+        shownDeEss = ! shownDeEss;
+        gateModeButton.setButtonText (shownDeEss ? "De-esser" : "Gate");
+        gateModeButton.setTooltip (shownDeEss ? "Switch this channel back to the gate" : "Switch this channel's gate to a de-esser");
+        updateVisibility();
+        repaint();
+    }
 
     // A loaded session may have changed the chain order.
     if (strip.chain() != shownChain)

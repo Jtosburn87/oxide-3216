@@ -72,6 +72,18 @@ namespace Dsp
             a2 = (float) ((1.0 - alpha) / a0);
         }
 
+        /** Band-pass with 0 dB at the centre frequency. */
+        void setBandPass (double sampleRate, double freq, double q) noexcept
+        {
+            const double w = 2.0 * 3.141592653589793 * freq / sampleRate;
+            const double cs = std::cos (w), alpha = std::sin (w) / (2.0 * q), a0 = 1.0 + alpha;
+            b0 = (float) (alpha / a0);
+            b1 = 0.0f;
+            b2 = (float) (-alpha / a0);
+            a1 = (float) (-2.0 * cs / a0);
+            a2 = (float) ((1.0 - alpha) / a0);
+        }
+
         /** Takes another filter's coefficients but keeps this filter's state (no click). */
         void copyCoefficients (const Biquad& o) noexcept { b0 = o.b0; b1 = o.b1; b2 = o.b2; a1 = o.a1; a2 = o.a2; }
 

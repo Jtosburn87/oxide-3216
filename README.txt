@@ -32,6 +32,9 @@ that are out stay out, in the same place, the next time ConsoleTape starts.
 "Options" > "Unlock chain order" adds a small up arrow to the EQ, gate and compressor titles of
 every channel: it moves that section earlier in the channel's signal chain, and the strip shows
 the sections in the order the signal passes through them. The order is saved with the session.
+On the return strips, the button on the gate's title line switches it to a de-esser: Freq picks the
+sibilance, Reduce is the most it turns down (dB). Wide: everything above Freq (off: a band around
+it). Gentle: only the sibilant band comes down (off: the whole signal does). Byp bypasses it.
 
 Every strip: trim, high-pass filter, 4-band EQ, gate (Fast atk = fast attack with the pop),
 1176-style compressor, 8 aux sends (P = pre-fader), sub assigns S1-S4, main assign, pan,

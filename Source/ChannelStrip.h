@@ -15,7 +15,7 @@ class ChannelStrip
 {
 public:
     /** idPrefix is e.g. "ch1" or "rt1"; parameters are created as "ch1.trim", "ch1.eq.hf.gain", ... */
-    ChannelStrip (ParamSet&, const juce::String& idPrefix, const juce::String& defaultName);
+    ChannelStrip (ParamSet&, const juce::String& idPrefix, const juce::String& defaultName, bool withDeEsser = false);
 
     const juce::String idPrefix;
     juce::String name;   // scribble strip
@@ -44,6 +44,7 @@ public:
 
     FourBandEq eq;
     Gate gate;
+    std::unique_ptr<DeEsser> deEsser;   // return strips: the gate slot can be a de-esser instead
     FetCompressor comp;
 
     void prepare (double sampleRate);

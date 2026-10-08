@@ -492,6 +492,74 @@ namespace
         }
     }
 
+    void testDeEsser()
+    {
+        std::puts ("De-esser (return strips)");
+        // Feeds a 1 s mix of sines through a de-esser; returns the level (dB) of what comes out after the
+        // first half second, optionally through a low-pass that keeps only the part below 1 kHz.
+        const auto run = [] (std::vector<std::pair<float, float>> sines, const std::function<void (DeEsser&)>& setup, bool lowOnly = false)
+        {
+            ParamSet params;
+            DeEsser d (params, "t");
+            setup (d);
+            d.prepare (48000.0);
+            Dsp::Biquad low;
+            low.setLowPass (48000.0, 1000.0, 0.7071);
+            double in = 0.0, out = 0.0;
+            for (int i = 0; i < 48000; ++i)
+            {
+                if (i % 64 == 0)
+                    d.beginBlock();
+                float x = 0.0f, xl = 0.0f;
+                for (auto [f, a] : sines)
+                {
+                    const float s = a * (float) std::sin (2.0 * 3.141592653589793 * f * i / 48000.0);
+                    x += s;
+                    if (f < 1000.0f) xl += s;
+                }
+                float y = d.process (x);
+                if (lowOnly)
+                    y = low.process (y);
+                if (i >= 24000)
+                {
+                    in += (double) (lowOnly ? xl : x) * (lowOnly ? xl : x);
+                    out += (double) y * y;
+                }
+            }
+            return 10.0f * (float) std::log10 (out / in);
+        };
+        const auto defaults = [] (DeEsser& d) { d.on->set (1.0f); };
+
+        const float ess = run ({ { 6000.0f, 0.1f } }, defaults);
+        const float quietEss = run ({ { 6000.0f, 0.01f } }, defaults);
+        const float vowel = run ({ { 300.0f, 0.1f } }, defaults);
+        std::printf ("      6 kHz: %.1f dB (quiet: %.1f dB), 300 Hz: %.1f dB\n", ess, quietEss, vowel);
+        check (std::abs (ess + 8.0f) < 0.6f, "sibilance is turned down by the reduction setting (8 dB)");
+        check (std::abs (quietEss - ess) < 0.6f, "it acts the same on a quiet take");
+        check (vowel > -0.3f, "low-frequency material passes untouched");
+
+        const float less = run ({ { 6000.0f, 0.1f } }, [] (DeEsser& d) { d.on->set (1.0f); d.reduction->set (3.0f); });
+        check (std::abs (less + 3.0f) < 0.6f, "less reduction turns it down less");
+
+        const float above = run ({ { 9000.0f, 0.1f } }, defaults);
+        const float aboveWide = run ({ { 9000.0f, 0.1f } }, [] (DeEsser& d) { d.on->set (1.0f); d.wide->set (1.0f); });
+        std::printf ("      9 kHz with the band at 6 kHz: narrow %.1f dB, wide %.1f dB\n", above, aboveWide);
+        check (aboveWide < above - 2.0f && aboveWide < -6.0f, "wide catches sibilance above the frequency, narrow less so");
+
+        // A vowel and an "s" together: full turns the vowel down too, gentle leaves it alone.
+        const std::vector<std::pair<float, float>> both { { 300.0f, 0.1f }, { 6000.0f, 0.1f } };
+        const float full = run (both, defaults, true);
+        const float gentle = run (both, [] (DeEsser& d) { d.on->set (1.0f); d.gentle->set (1.0f); }, true);
+        std::printf ("      300 Hz under an s: full %.1f dB, gentle %.1f dB\n", full, gentle);
+        check (full < -2.0f && gentle > -0.5f, "full turns the whole signal down, gentle only the sibilant band");
+
+        ParamSet params;
+        DeEsser d (params, "t");
+        d.on->set (1.0f);
+        d.bypass->set (1.0f);
+        check (! d.isActive(), "bypass takes it out");
+    }
+
     void testFetCompressor()
     {
         std::puts ("1176-style compressor");
@@ -1408,6 +1476,7 @@ int main (int argc, char** argv)
     testUnarmedPlaybackAndArmedMonitoring();
     testEq();
     testGate();
+    testDeEsser();
     testFetCompressor();
     testSends();
     testTapeCharacter();

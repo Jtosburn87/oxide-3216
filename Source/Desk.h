@@ -68,6 +68,13 @@ private:
     int collapsed = 0;
     std::array<juce::TextButton, 4> foldButtons;
     std::array<juce::TextButton, 3> moveButtons;   // EQ, gate, compressor
+
+    // Return strips: the gate slot can be switched to a de-esser.
+    juce::TextButton gateModeButton;
+    std::unique_ptr<Knob> deFreq, deReduction;
+    std::unique_ptr<ParamButton> deWide, deGentle, deBypass;
+    bool shownDeEss = false;
+    void updateVisibility();
     bool chainUnlocked = false;
     ChannelStrip::Chain shownChain {};
     void moveEarlier (int stage);

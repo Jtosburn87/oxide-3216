@@ -27,7 +27,7 @@ AudioEngine::AudioEngine()
     for (int i = 0; i < Config::numInputStrips; ++i)
         inputStrips.add (new ChannelStrip (params, "ch" + juce::String (i + 1), "Input " + juce::String (i + 1)));
     for (int i = 0; i < Config::numReturnStrips; ++i)
-        returnStrips.add (new ChannelStrip (params, "rt" + juce::String (i + 1), "Return " + juce::String (i + 1)));
+        returnStrips.add (new ChannelStrip (params, "rt" + juce::String (i + 1), "Return " + juce::String (i + 1), true));
 
     for (int k = 0; k < Config::numSubs; ++k)
     {

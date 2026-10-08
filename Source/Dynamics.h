@@ -54,6 +54,48 @@ private:
     float dec = 0, aAttack = 0, aRelease = 0, thrLin = 0, closeLin = 0, rangeLin = 0;
 };
 
+/** De-esser for the return strips, switched in place of the gate. The detector compares the level in the
+    sibilant band with the whole signal, so it acts the same on loud and quiet takes. Narrow: a band around
+    the frequency; wide: everything above it. Full: the whole signal is turned down during an "s";
+    gentle: only the band is. Reduction is the most it turns down. */
+class DeEsser
+{
+public:
+    DeEsser (ParamSet&, const juce::String& prefix);
+
+    Param* on;          // the gate slot is a de-esser instead of a gate
+    Param* frequency;   // Hz, 2000..12000
+    Param* reduction;   // dB, 0..20
+    Param* wide;        // off: narrow band around the frequency; on: everything above it
+    Param* gentle;      // off: full band is turned down; on: only the sibilant band
+    Param* bypass;
+
+    void prepare (double sampleRate) noexcept;
+    void beginBlock() noexcept;
+    float process (float x) noexcept;
+    bool isActive() const noexcept { return on->on() && ! bypass->on(); }
+
+    /** Largest gain reduction since the last call (dB, positive), for a lamp or meter. */
+    float takeReduction() noexcept { return reductionPeak.exchange (0.0f); }
+
+    static constexpr float narrowQ = 2.0f;
+    static constexpr float dominanceDb = 9.0f;   // starts acting when the band is within 9 dB of the whole signal
+    static constexpr float slope = 1.5f;         // dB of reduction per dB above that
+
+private:
+    double sr = 48000.0;
+    Dsp::Biquad detect, split;
+    float shownFreq = -1.0f;
+    bool shownWide = false;
+    float bandEnv = 0.0f, fullEnv = 0.0f, gain = 1.0f;
+    float aAttack = 0.0f, aRelease = 0.0f, gAttack = 0.0f, gRelease = 0.0f;
+
+    // per-block values
+    float maxReduction = 0.0f, blockPeak = 0.0f;
+    bool gentleOn = false;
+    std::atomic<float> reductionPeak { 0.0f };
+};
+
 /** Black-face 1176-style FET compressor (from the prototype).
     Input drives into a fixed -14 dBFS threshold (3 dB per unit). Peak detection, soft knee 4 dB,
     asymmetric tanh saturation after the gain reduction, no automatic make-up. */

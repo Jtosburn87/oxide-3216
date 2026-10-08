@@ -174,3 +174,71 @@ void FetCompressor::finishBlock() noexcept
     while (blockMaxGr > current && ! grPeak.compare_exchange_weak (current, blockMaxGr, std::memory_order_relaxed)) {}
     blockMaxGr = 0.0f;
 }
+
+//==============================================================================
+DeEsser::DeEsser (ParamSet& params, const juce::String& prefix)
+{
+    on        = &params.addToggle (prefix + ".deess.on", "De-esser", false);
+    frequency = &params.add (prefix + ".deess.freq", "De-esser frequency", 2000.0f, 12000.0f, 6000.0f, Param::Scale::log);
+    reduction = &params.add (prefix + ".deess.reduction", "De-esser reduction", 0.0f, 20.0f, 8.0f);
+    wide      = &params.addToggle (prefix + ".deess.wide", "De-esser wide", false);
+    gentle    = &params.addToggle (prefix + ".deess.gentle", "De-esser gentle", false);
+    bypass    = &params.addToggle (prefix + ".deess.bypass", "De-esser bypass", false);
+}
+
+void DeEsser::prepare (double sampleRate) noexcept
+{
+    sr = sampleRate;
+    const auto coeff = [this] (double ms) { return (float) std::exp (-1.0 / (0.001 * ms * sr)); };
+    aAttack = coeff (0.5);
+    aRelease = coeff (60.0);
+    gAttack = coeff (1.0);
+    gRelease = coeff (40.0);
+    detect.reset();
+    split.reset();
+    shownFreq = -1.0f;
+    bandEnv = fullEnv = 0.0f;
+    gain = 1.0f;
+}
+
+void DeEsser::beginBlock() noexcept
+{
+    const float f = juce::jmin (frequency->get(), (float) (sr * 0.45));
+    const bool w = wide->on();
+    if (f != shownFreq || w != shownWide)
+    {
+        if (w) detect.setHighPass (sr, f, 0.7071);
+        else   detect.setBandPass (sr, f, narrowQ);
+        split.copyCoefficients (detect);
+        shownFreq = f;
+        shownWide = w;
+    }
+    maxReduction = reduction->get();
+    gentleOn = gentle->on();
+
+    reductionPeak.store (juce::jmax (reductionPeak.load (std::memory_order_relaxed), blockPeak), std::memory_order_relaxed);
+    blockPeak = 0.0f;
+}
+
+float DeEsser::process (float x) noexcept
+{
+    const float b = std::abs (detect.process (x)), a = std::abs (x);
+    bandEnv = b > bandEnv ? b + aAttack * (bandEnv - b) : b + aRelease * (bandEnv - b);
+    fullEnv = a > fullEnv ? a + aAttack * (fullEnv - a) : a + aRelease * (fullEnv - a);
+
+    // How close the sibilant band comes to the whole signal decides the reduction.
+    float reductionDb = 0.0f;
+    if (fullEnv > 1.0e-4f)
+    {
+        const float excess = 20.0f * std::log10 ((bandEnv + 1.0e-9f) / fullEnv) + dominanceDb;
+        reductionDb = juce::jlimit (0.0f, maxReduction, excess * slope);
+    }
+    const float target = Dsp::dbToGain (-reductionDb);
+    gain = target < gain ? target + gAttack * (gain - target) : target + gRelease * (gain - target);
+    blockPeak = juce::jmax (blockPeak, reductionDb);
+
+    if (gentleOn)
+        return x + (gain - 1.0f) * split.process (x);   // only the band comes down
+    split.process (x);                                    // keep its state current for switching
+    return x * gain;
+}

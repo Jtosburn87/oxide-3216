@@ -11,7 +11,7 @@ namespace
     }
 }
 
-ChannelStrip::ChannelStrip (ParamSet& params, const juce::String& prefix, const juce::String& defaultName)
+ChannelStrip::ChannelStrip (ParamSet& params, const juce::String& prefix, const juce::String& defaultName, bool withDeEsser)
     : idPrefix (prefix), name (defaultName),
       eq (params, prefix, 1), gate (params, prefix), comp (params, prefix)
 {
@@ -20,6 +20,8 @@ ChannelStrip::ChannelStrip (ParamSet& params, const juce::String& prefix, const 
     controls.hpf   = &params.add (id ("hpf"), "HPF", 20.0f, 300.0f, 20.0f, Param::Scale::log);
     controls.pan   = &params.add (id ("pan"), "Pan", -1.0f, 1.0f, 0.0f);
     controls.order = &params.addStepped (id ("order"), "Chain order", (int) chainOrders.size(), 0);
+    if (withDeEsser)
+        deEsser = std::make_unique<DeEsser> (params, prefix);
     controls.main  = &params.addToggle (id ("main"), "Main", true);
     controls.mute  = &params.addToggle (id ("mute"), "Mute", false);
     controls.solo  = &params.addToggle (id ("solo"), "Solo", false);
@@ -78,6 +80,8 @@ void ChannelStrip::prepare (double sr)
     hpFreqSet = -1.0f;
     eq.prepare (sr);
     gate.prepare (sr);
+    if (deEsser != nullptr)
+        deEsser->prepare (sr);
     comp.prepare (sr);
     trimGain.prepare (sr, Dsp::dbToGain (controls.trim->get()));
     faderGain.prepare (sr, targetFader());
@@ -113,10 +117,15 @@ void ChannelStrip::process (const float* in, float* direct, const BusPointers& b
     }
 
     eq.update();
+    // Return strips: the gate slot is either the gate or the de-esser.
+    const bool deEssMode = deEsser != nullptr && deEsser->on->on();
+    const bool deEssOn = deEssMode && ! deEsser->bypass->on();
+    if (deEssOn)
+        deEsser->beginBlock();
     gate.beginBlock();
     comp.beginBlock();
     const bool eqOn = ! eq.isFlat();
-    const bool gateOn = ! gate.isOff() || ! gate.isIdle();
+    const bool gateOn = ! deEssMode && (! gate.isOff() || ! gate.isIdle());
     const bool compOn = comp.isIn();
     const auto order = chain();
 
@@ -130,7 +139,7 @@ void ChannelStrip::process (const float* in, float* direct, const BusPointers& b
         for (const int stage : order)
         {
             if (stage == eqStage)        { if (eqOn)   x = eq.process (0, x); }
-            else if (stage == gateStage) { if (gateOn) x = gate.process (x); }
+            else if (stage == gateStage) { if (gateOn) x = gate.process (x); else if (deEssOn) x = deEsser->process (x); }
             else                         { if (compOn) x = comp.process (x); }
         }
 
