@@ -10,6 +10,11 @@
 #include <deque>
 #include <vector>
 
+// The benchmark can run at audio-thread priority. (Declared here: windows.h would break near().)
+extern "C" __declspec (dllimport) void* __stdcall GetCurrentThread();
+extern "C" __declspec (dllimport) int __stdcall SetThreadPriority (void*, int);
+constexpr int THREAD_PRIORITY_TIME_CRITICAL = 15;
+
 namespace
 {
     int failures = 0;
@@ -1306,10 +1311,29 @@ namespace
 
     /** Worst case: every strip with all EQ bands, gate, compressor and all sends on,
         16 tracks playing back, 64-sample blocks. Reports CPU use of one core. */
+    /** Times every block: the average says little about dropouts, the slowest blocks do. */
+    void reportBlockTimes (const char* what, std::vector<double>& ms)
+    {
+        const double budget = 64.0 / 48.0;   // ms per 64-sample block at 48 kHz
+        std::sort (ms.begin(), ms.end());
+        double sum = 0.0;
+        for (auto x : ms) sum += x;
+        const auto pct = [&] (double p) { return ms[(size_t) juce::jlimit (0.0, (double) ms.size() - 1, p * (double) ms.size())]; };
+        const auto over = std::count_if (ms.begin(), ms.end(), [&] (double x) { return x > budget * 0.5; });
+        std::printf ("  %s: average %.3f ms, 99%% %.3f ms, 99.9%% %.3f ms, slowest %.3f ms (budget %.3f ms); %d blocks over half the budget\n",
+                     what, sum / (double) ms.size(), pct (0.99), pct (0.999), ms.back(), budget, (int) over);
+    }
+
     void benchmark()
     {
         std::puts ("\nBenchmark (worst case, 64-sample blocks, 48 kHz):");
         AudioEngine e;
+        // BENCH_PRIORITY=1: time-critical, like a real audio thread, so the slowest blocks are the engine's
+        // own and not Windows scheduling. BENCH_NO_CHARACTER=1: tape character off.
+        if (juce::SystemStats::getEnvironmentVariable ("BENCH_PRIORITY", {}) == "1")
+            SetThreadPriority (GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+        if (juce::SystemStats::getEnvironmentVariable ("BENCH_NO_CHARACTER", {}) == "1")
+            e.tape.characterOn = false;
         auto all = [&] (auto fn) { for (auto* s : e.inputStrips) fn (*s); for (auto* s : e.returnStrips) fn (*s); };
         all ([] (ChannelStrip& s)
         {
@@ -1339,13 +1363,17 @@ namespace
         e.tape.setRecordEnabled (true);
         e.tape.play();
         const int blocks = 48000 * 10 / 64;
+        std::vector<double> recordMs;
         for (int i = 0; i < blocks; ++i)
         {
             if (i % 64 == 0)
                 e.tape.service();
             fill();
+            const auto t0 = juce::Time::getHighResolutionTicks();
             b.run (e);
+            recordMs.push_back (1000.0 * juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - t0));
         }
+        reportBlockTimes ("recording 16 tracks", recordMs);
         e.tape.stop();
         e.tape.setRecordEnabled (false);
         for (int t = 0; t < TapeMachine::numTracks; ++t)
@@ -1354,11 +1382,18 @@ namespace
         e.tape.play();
 
         const auto start = juce::Time::getHighResolutionTicks();
+        std::vector<double> playMs;
         for (int i = 0; i < blocks; ++i)
         {
             fill();
+            const auto t0 = juce::Time::getHighResolutionTicks();
             b.run (e);
+            playMs.push_back (1000.0 * juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - t0));
+            if (juce::SystemStats::getEnvironmentVariable ("BENCH_TRACE", {}) == "1" && playMs.back() > 0.4)
+                std::printf ("    slow block %d: %.3f ms at tape sample %lld (%lld into its chunk)\n", i, playMs.back(),
+                             (long long) e.tape.getPosition(), (long long) (e.tape.getPosition() % TapeMachine::chunkSize));
         }
+        reportBlockTimes ("playing 16 tracks", playMs);
         const double secs = juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - start);
         std::printf ("  10 s of audio processed in %.2f s: %.0f%% of one CPU core\n", secs, secs / 10.0 * 100.0);
     }

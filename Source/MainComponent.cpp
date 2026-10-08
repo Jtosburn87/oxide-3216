@@ -195,6 +195,10 @@ void MainComponent::timerCallback()
                              + (dropped > 0 ? "  |  tape overrun" : juce::String()),
                          juce::dontSendNotification);
     statusLabel.setColour (juce::Label::textColourId, running && dropped == 0 ? bridgeText : meterRed.brighter (0.4f));
+    statusLabel.setTooltip (xruns > 0 ? "Dropouts: the audio interface asked for audio and did not get it in time. "
+                                        "A larger buffer (Audio device: 128 or 256 samples) usually stops them; "
+                                        "so can the High performance power plan and switching Wi-Fi off while recording."
+                                      : juce::String());
 }
 
 void MainComponent::paint (juce::Graphics& g)
