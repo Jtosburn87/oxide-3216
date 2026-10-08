@@ -41,6 +41,7 @@ private:
 
     void refresh();
     void choosePlugin (int slot);
+    void openEditor (int slot);
 };
 
 /** Row of cells in the centre section: an FX button for each sub, aux return and the master,

@@ -31,11 +31,7 @@ InsertChainEditor::InsertChainEditor (InsertChain& c, PluginContext& ctx, Param*
         r.bypass.setTooltip ("Bypass this plugin");
         r.bypass.onClick = [this, i] { chain.setBypassed (i, ! chain.isBypassed (i)); };
         r.edit.setTooltip ("Open the plugin's window");
-        r.edit.onClick = [this, i]
-        {
-            if (auto* p = chain.getProcessor (i))
-                context.windows.open (*p, chain.name + "  |  slot " + juce::String (i + 1) + "  |  " + chain.getDescription (i).name);
-        };
+        r.edit.onClick = [this, i] { openEditor (i); };
         r.up.setButtonText (juce::CharPointer_UTF8 ("\xe2\x96\xb2"));
         r.down.setButtonText (juce::CharPointer_UTF8 ("\xe2\x96\xbc"));
         r.up.setTitle ("Move slot " + juce::String (i + 1) + " up");
@@ -125,10 +121,17 @@ void InsertChainEditor::choosePlugin (int slot)
                 return;
             }
             self.chain.setSlot (slot, std::move (instance), desc);
+            self.openEditor (slot);   // a newly chosen plugin opens straight away
         }
         if (self.context.changed)
             self.context.changed();
     });
+}
+
+void InsertChainEditor::openEditor (int slot)
+{
+    if (auto* p = chain.getProcessor (slot))
+        context.windows.open (*p, chain.name + "  |  slot " + juce::String (slot + 1) + "  |  " + chain.getDescription (slot).name);
 }
 
 void InsertChainEditor::paint (juce::Graphics& g)
