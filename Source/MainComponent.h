@@ -5,6 +5,9 @@
 #include "ConsoleLookAndFeel.h"
 #include "Desk.h"
 #include "PatchBay.h"
+#include "PluginManager.h"
+#include "PluginWindows.h"
+#include "InsertsUI.h"
 
 /** Top bar (name plate, audio device, zoom, Fit, status) above the zoomable desk. */
 class MainComponent : public juce::Component,
@@ -12,7 +15,7 @@ class MainComponent : public juce::Component,
                       private juce::ChangeListener
 {
 public:
-    MainComponent (AudioEngine&, std::function<void()> saveSettings);
+    MainComponent (AudioEngine&, PluginManager&, std::function<void()> saveSettings);
     ~MainComponent() override;
 
     void paint (juce::Graphics&) override;
@@ -21,8 +24,11 @@ public:
 private:
     AudioEngine& engine;
     std::function<void()> saveSettings;
+    PluginManager& pluginManager;
+    PluginWindows pluginWindows;
+    PluginContext pluginContext;
 
-    juce::TextButton audioButton { "Audio device" }, toneButton { "Test tone" }, fitButton { "Fit" }, patchButton { "Patch bay" };
+    juce::TextButton audioButton { "Audio device" }, toneButton { "Test tone" }, fitButton { "Fit" }, patchButton { "Patch bay" }, pluginsButton { "Plugins" };
     juce::Slider zoomSlider;
     juce::Label zoomLabel, statusLabel;
 
@@ -33,6 +39,9 @@ private:
     bool fittedOnce = false;
 
     juce::Component::SafePointer<juce::DialogWindow> settingsWindow;
+    juce::Component::SafePointer<juce::DialogWindow> pluginListWindow;
+    void openPluginList();
+    void forEachChain (const std::function<void (InsertChain&)>&);
 
     juce::String deviceText;
     std::uint64_t lastCallbackCount = 0;

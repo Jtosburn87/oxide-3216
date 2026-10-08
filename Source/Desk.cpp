@@ -337,11 +337,12 @@ void TapeClock::paint (juce::Graphics& g)
 }
 
 //==============================================================================
-CentreSection::CentreSection (AudioEngine& e)
+CentreSection::CentreSection (AudioEngine& e, PluginContext* plugins)
     : engine (e), tape (e.tape),
       recordLevel (*e.tape.recordLevel, "Level", juce::Colour (0xffd6392d)),
       mainFader (*e.mainFader),
-      busPanel (e.busComp)
+      busPanel (e.busComp),
+      inserts (e, plugins)
 {
     cassette.projectName().referTo (engine.projectName);
     addAndMakeVisible (cassette);
@@ -411,6 +412,7 @@ CentreSection::CentreSection (AudioEngine& e)
         addAndMakeVisible (m);
 
     addAndMakeVisible (busPanel);
+    addAndMakeVisible (inserts);
 
     for (int i = 0; i < Config::numSubs + Config::numAux; ++i)
     {
@@ -536,6 +538,10 @@ void CentreSection::resized()
     // Bus compressor faceplate, right column.
     busPanel.setBounds (330 + ((centreW - 12) - 330 - BusCompPanel::width) / 2, bridgeH + 12, BusCompPanel::width, BusCompPanel::height);
 
+    // Inserts and aux returns, along the bottom of the knob area.
+    insertsBox = { 12, groupEqBox.getBottom() + 22, centreW - 24, bridgeH + knobH - 12 - (groupEqBox.getBottom() + 22) };
+    inserts.setBounds (insertsBox.reduced (4, 8));
+
     // Main fader, far right of the fader area.
     const int f = bridgeH + knobH;
     for (int i = 0; i < busFaders.size(); ++i)
@@ -592,6 +598,7 @@ void CentreSection::paint (juce::Graphics& g)
 
     // Group EQ.
     paintSection (g, "Group EQ", groupEqBox, stripGrey);
+    paintSection (g, "Inserts (VST3) and aux returns", insertsBox, stripGrey);
     g.setFont (ConsoleLookAndFeel::uiFont (11.0f, true));
     const int colWidth = (groupEqBox.getWidth() - 8) / Config::numSubs;
     for (int k = 0; k < Config::numSubs; ++k)
@@ -656,7 +663,7 @@ void CentreSection::update()
 }
 
 //==============================================================================
-Desk::Desk (AudioEngine& e) : engine (e), centre (e)
+Desk::Desk (AudioEngine& e, PluginContext* plugins) : engine (e), centre (e, plugins)
 {
     for (auto* s : engine.inputStrips)
         addAndMakeVisible (inputs.add (new StripComponent (*s)));

@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cmath>
+#include <vector>
+#include <algorithm>
 
 /** Small real-time DSP helpers. Nothing here allocates. */
 namespace Dsp
@@ -132,6 +134,33 @@ namespace Dsp
             dst[i] += src[i] * g;
         }
     }
+
+    /** Fixed-capacity delay for latency compensation. Allocated once; process() never allocates. */
+    class DelayLine
+    {
+    public:
+        static constexpr int capacity = 1 << 15;   // 32768 samples: up to ~0.68 s at 48 kHz
+
+        DelayLine() : buffer ((size_t) capacity, 0.0f) {}
+
+        /** Delays x in place by `delay` samples (clamped to the capacity). */
+        void process (float* x, int n, int delay) noexcept
+        {
+            delay = delay < 0 ? 0 : (delay >= capacity ? capacity - 1 : delay);
+            for (int i = 0; i < n; ++i)
+            {
+                buffer[(size_t) write] = x[i];
+                x[i] = buffer[(size_t) ((write - delay) & (capacity - 1))];
+                write = (write + 1) & (capacity - 1);
+            }
+        }
+
+        void clear() noexcept { std::fill (buffer.begin(), buffer.end(), 0.0f); }
+
+    private:
+        std::vector<float> buffer;
+        int write = 0;
+    };
 
     /** Small fast random generator for noise in the audio thread (xorshift32). Returns -1..1. */
     struct Noise

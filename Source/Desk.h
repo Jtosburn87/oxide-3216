@@ -5,6 +5,7 @@
 #include "Widgets.h"
 #include "Cassette.h"
 #include "BusCompPanel.h"
+#include "InsertsUI.h"
 
 /** Fixed console geometry, in desk units (pixels at 100% zoom). */
 namespace DeskLayout
@@ -73,7 +74,7 @@ private:
 class CentreSection : public juce::Component
 {
 public:
-    explicit CentreSection (AudioEngine&);
+    CentreSection (AudioEngine&, PluginContext*);
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -97,6 +98,8 @@ private:
     Fader mainFader;
     juce::Label mainScribble;
     BusCompPanel busPanel;
+    InsertsSection inserts;
+    juce::Rectangle<int> insertsBox;
     juce::OwnedArray<Fader> busFaders;          // Sub 1-4, then A1-A8
     juce::OwnedArray<juce::Label> busScribbles;
     int limitHold = 0;
@@ -112,7 +115,7 @@ class Desk : public juce::Component,
              private juce::Timer
 {
 public:
-    explicit Desk (AudioEngine&);
+    explicit Desk (AudioEngine&, PluginContext* plugins = nullptr);
 
     void paint (juce::Graphics&) override;
     void resized() override;

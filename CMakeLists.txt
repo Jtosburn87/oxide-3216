@@ -32,12 +32,18 @@ add_library(ConsoleTapeCore STATIC
     Source/BusCompressor.cpp
     Source/ChannelStrip.cpp
     Source/Dynamics.cpp
+    Source/InsertChain.cpp
+    Source/PluginManager.cpp
     Source/Params.cpp
     Source/TapeMachine.cpp)
 target_include_directories(ConsoleTapeCore PUBLIC Source "${ASIO_SDK_DIR}/common")
 target_compile_definitions(ConsoleTapeCore PUBLIC
     JUCE_ASIO=1
     JUCE_WASAPI=1
+    JUCE_PLUGINHOST_VST3=1
+    JUCE_PLUGINHOST_AU=0
+    JUCE_PLUGINHOST_LADSPA=0
+    JUCE_PLUGINHOST_LV2=0
     JUCE_DIRECTSOUND=0
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
@@ -64,6 +70,8 @@ target_sources(ConsoleTape PRIVATE
     Source/Main.cpp
     Source/MainComponent.cpp
     Source/PatchBay.cpp
+    Source/PluginWindows.cpp
+    Source/InsertsUI.cpp
     Source/AudioSettingsComponent.cpp
     Source/BusCompPanel.cpp
     Source/Cassette.cpp

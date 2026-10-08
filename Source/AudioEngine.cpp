@@ -33,6 +33,7 @@ AudioEngine::AudioEngine()
     {
         const auto id = "sub" + juce::String (k + 1);
         groupEq.add (new FourBandEq (params, id, 2));
+        subInserts.add (new InsertChain ("Sub " + juce::String (k + 1)));
         subFader[(size_t) k] = &params.add (id + ".fader", "Sub " + juce::String (k + 1) + " fader", 0.0f, 100.0f, 80.0f);
         subPeak[(size_t) k][0].store (0.0f);
         subPeak[(size_t) k][1].store (0.0f);
@@ -40,6 +41,8 @@ AudioEngine::AudioEngine()
     for (int k = 0; k < Config::numAux; ++k)
     {
         auxMaster[(size_t) k] = &params.add ("aux" + juce::String (k + 1) + ".master", "Aux " + juce::String (k + 1) + " master", 0.0f, 100.0f, 80.0f);
+        auxReturn[(size_t) k] = &params.add ("aux" + juce::String (k + 1) + ".return", "Aux " + juce::String (k + 1) + " return", 0.0f, 100.0f, 80.0f);
+        auxInserts.add (new InsertChain ("Aux " + juce::String (k + 1) + " return"));
         auxPeak[(size_t) k].store (0.0f);
     }
 
@@ -236,6 +239,11 @@ void AudioEngine::prepare (double sampleRate, const juce::BigInteger& activeInpu
     tape.prepare (currentSampleRate, reportedRoundTripLatency + recordOffset.load());
     mainGainL.prepare (currentSampleRate, Dsp::faderGain (mainFader->get()));
     busComp.prepare (currentSampleRate);
+    for (auto* c : subInserts) c->prepare (currentSampleRate, Config::maxBlock);
+    for (auto* c : auxInserts) c->prepare (currentSampleRate, Config::maxBlock);
+    masterInserts.prepare (currentSampleRate, Config::maxBlock);
+    for (int k = 0; k < Config::numAux; ++k)
+        auxReturnGain[(size_t) k].prepare (currentSampleRate, 0.0f);
     limiterEnv = 0.0f;
     limiterRelease = (float) std::exp (-1.0 / (0.1 * currentSampleRate));
     for (int k = 0; k < Config::numSubs; ++k)
@@ -359,34 +367,41 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputs, 
             returnStrips[r]->process (patchedInput (Patch::returnIn + r, tapeOut[(size_t) r].data(), 2, n),
                                       returnDirect[(size_t) r].data(), buses, n, anySolo);
 
-        // Subs: group EQ -> sub fader -> main (and optional sub outputs).
+        // Latency compensation: the dry mix, every sub and every active aux return are delayed to line up
+        // with the slowest plug-in chain (latencies as of the previous block).
+        int compensation = 0;
+        for (auto* c : subInserts) compensation = juce::jmax (compensation, c->getLatency());
+        for (auto* c : auxInserts) if (c->isActive()) compensation = juce::jmax (compensation, c->getLatency());
+        compensation = juce::jmin (compensation, Dsp::DelayLine::capacity - 1);
+        mainDelayL.process (mixL.data(), n, compensation);
+        mainDelayR.process (mixR.data(), n, compensation);
+
+        // Subs: group EQ -> inserts -> sub fader -> main (and optional sub outputs).
         for (int k = 0; k < Config::numSubs; ++k)
         {
             auto& eq = *groupEq[k];
             float* l = subL[(size_t) k].data();
             float* r = subR[(size_t) k].data();
+
+            if (! eq.isFlat())
+                for (int i = 0; i < n; ++i)
+                {
+                    l[i] = eq.process (0, l[i]);
+                    r[i] = eq.process (1, r[i]);
+                }
+
+            subInserts[k]->process (l, r, n);
+
             const float target = Dsp::faderGain (subFader[(size_t) k]->get());
             auto& sg = subGain[(size_t) k];
-            const bool eqOn = ! eq.isFlat();
-
             float pl = 0.0f, pr = 0.0f;
             for (int i = 0; i < n; ++i)
             {
                 const float g = sg.next (target);
-                float xl = l[i], xr = r[i];
-                if (eqOn)
-                {
-                    xl = eq.process (0, xl);
-                    xr = eq.process (1, xr);
-                }
-                xl *= g;
-                xr *= g;
-                l[i] = xl;
-                r[i] = xr;
-                mixL[(size_t) i] += xl;
-                mixR[(size_t) i] += xr;
-                pl = juce::jmax (pl, std::abs (xl));
-                pr = juce::jmax (pr, std::abs (xr));
+                l[i] *= g;
+                r[i] *= g;
+                pl = juce::jmax (pl, std::abs (l[i]));
+                pr = juce::jmax (pr, std::abs (r[i]));
             }
             raisePeak (subPeak[(size_t) k][0], pl);
             raisePeak (subPeak[(size_t) k][1], pr);
@@ -394,9 +409,18 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputs, 
                 subMono[(size_t) k][(size_t) i] = 0.5f * (l[i] + r[i]);   // the patch bay sub out is mono
             if (subOut[k][0] != nullptr) juce::FloatVectorOperations::add (subOut[k][0] + start, l, n);
             if (subOut[k][1] != nullptr) juce::FloatVectorOperations::add (subOut[k][1] + start, r, n);
+
+            // Into the main mix, compensated. (The sub buffers themselves stay undelayed for the patch bay.)
+            const int d = compensation - subInserts[k]->getLatency();
+            std::memcpy (returnL.data(), l, sizeof (float) * (size_t) n);
+            std::memcpy (returnR.data(), r, sizeof (float) * (size_t) n);
+            subDelay[(size_t) k * 2].process (returnL.data(), n, d);
+            subDelay[(size_t) k * 2 + 1].process (returnR.data(), n, d);
+            juce::FloatVectorOperations::add (mixL.data(), returnL.data(), n);
+            juce::FloatVectorOperations::add (mixR.data(), returnR.data(), n);
         }
 
-        // Aux masters -> optional aux outputs (returns to main arrive with the plug-in stage).
+        // Aux masters -> optional aux outputs, and the aux return: inserts -> return level -> main.
         for (int k = 0; k < Config::numAux; ++k)
         {
             float* a = aux[(size_t) k].data();
@@ -411,6 +435,27 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputs, 
             raisePeak (auxPeak[(size_t) k], pk);
             if (auxOut[k] != nullptr)
                 juce::FloatVectorOperations::add (auxOut[k] + start, a, n);
+
+            // The return only carries audio when a plug-in is active, so sends are never doubled dry.
+            std::memcpy (returnL.data(), a, sizeof (float) * (size_t) n);
+            std::memcpy (returnR.data(), a, sizeof (float) * (size_t) n);
+            const bool active = auxInserts[k]->process (returnL.data(), returnR.data(), n);
+            const float returnT = active ? Dsp::faderGain (auxReturn[(size_t) k]->get()) : 0.0f;
+            auto& rg = auxReturnGain[(size_t) k];
+            if (active || ! rg.settled (0.0f))
+            {
+                for (int i = 0; i < n; ++i)
+                {
+                    const float g = rg.next (returnT);
+                    returnL[(size_t) i] *= g;
+                    returnR[(size_t) i] *= g;
+                }
+                const int d = compensation - auxInserts[k]->getLatency();
+                returnDelay[(size_t) k * 2].process (returnL.data(), n, d);
+                returnDelay[(size_t) k * 2 + 1].process (returnR.data(), n, d);
+                juce::FloatVectorOperations::add (mixL.data(), returnL.data(), n);
+                juce::FloatVectorOperations::add (mixR.data(), returnR.data(), n);
+            }
         }
 
         if (tone)
@@ -425,8 +470,14 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputs, 
             tonePhase = std::fmod (tonePhase, juce::MathConstants<double>::twoPi);
         }
 
-        // Master section: bus compressor -> [master inserts, stage 7] -> main fader -> limiter -> outputs.
+        // Master section: bus compressor -> master inserts -> main fader -> limiter -> outputs.
         busComp.process (mixL.data(), mixR.data(), n);
+        masterInserts.process (mixL.data(), mixR.data(), n);
+
+        // What you hear is late by the compensation plus the master inserts: overdubs must be too.
+        const int extra = compensation + masterInserts.getLatency();
+        pluginLatency.store (extra, std::memory_order_relaxed);
+        tape.setLatency (reportedLatency.load (std::memory_order_relaxed) + recordOffset.load (std::memory_order_relaxed) + extra);
 
         // Main fader (one smoothed gain for both sides).
         if (mainGainL.settled (mainT))

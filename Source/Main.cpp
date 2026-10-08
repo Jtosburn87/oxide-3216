@@ -1,25 +1,47 @@
-#include <juce_gui_extra/juce_gui_extra.h>
+﻿#include <juce_gui_extra/juce_gui_extra.h>
 #include "AudioEngine.h"
 #include "MainComponent.h"
 #include "AudioSettingsComponent.h"
 #include "PatchBay.h"
+#include "PluginManager.h"
+#include "PluginWindows.h"
+#include "InsertsUI.h"
 
 class ConsoleTapeApplication : public juce::JUCEApplication
 {
 public:
     const juce::String getApplicationName() override    { return JUCE_APPLICATION_NAME_STRING; }
     const juce::String getApplicationVersion() override { return JUCE_APPLICATION_VERSION_STRING; }
-    bool moreThanOneInstanceAllowed() override          { return isSnapshot(); }
+    bool moreThanOneInstanceAllowed() override          { return isSnapshot() || isScanner() || isFolderScan(); }
+
+    /** Developer option: ConsoleTape.exe --scan-folder <folder> <report.txt> scans like the Plugins window does
+        (one child process per plugin) into a throw-away list, and writes what was found and what failed. */
+    static bool isFolderScan() { return getCommandLineParameterArray().contains ("--scan-folder"); }
 
     /** Developer option: ConsoleTape.exe --snapshot out.png [zoom] renders the desk to an image and exits,
         without opening the audio device. Used to check the look without touching a running copy. */
     static bool isSnapshot() { return getCommandLineParameterArray().contains ("--snapshot"); }
+
+    /** Plugin scanner child process (see PluginManager). */
+    static bool isScanner() { return getCommandLineParameterArray().contains ("--scan-plugin"); }
 
     void initialise (const juce::String&) override
     {
         if (isSnapshot())
         {
             writeSnapshot();
+            return;
+        }
+        if (isFolderScan())
+        {
+            scanFolderReport();
+            quit();
+            return;
+        }
+        if (isScanner())
+        {
+            setApplicationReturnValue (PluginManager::runScanner (getCommandLineParameterArray()));
+            quit();
             return;
         }
 
@@ -29,6 +51,7 @@ public:
         options.filenameSuffix = ".settings";
         options.osxLibrarySubFolder = "Application Support";
         properties.setStorageParameters (options);
+        plugins = std::make_unique<PluginManager> (*properties.getUserSettings());
 
         juce::LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);
 
@@ -37,19 +60,44 @@ public:
         engine->initialise (saved.get());
         engine->projectName = properties.getUserSettings()->getValue ("projectName", "Untitled song");
 
-        mainWindow = std::make_unique<MainWindow> (getApplicationName(), *engine, [this] { saveSettings(); });
+        mainWindow = std::make_unique<MainWindow> (getApplicationName(), *engine, *plugins, [this] { saveSettings(); });
+        restoreInserts();
     }
 
     void shutdown() override
     {
         saveSettings();
-        mainWindow = nullptr;
-        engine = nullptr;
+        mainWindow = nullptr;   // closes plugin windows first
+        engine = nullptr;       // then the plugins themselves
+        plugins = nullptr;
         juce::LookAndFeel::setDefaultLookAndFeel (nullptr);
     }
 
     void systemRequestedQuit() override { quit(); }
     void anotherInstanceStarted (const juce::String&) override {}
+
+    void scanFolderReport()
+    {
+        const auto args = getCommandLineParameterArray();
+        const int i = args.indexOf ("--scan-folder");
+        const juce::File folder (args[i + 1]), report (args[i + 2]);
+
+        juce::TemporaryFile tempSettings ("settings");
+        juce::PropertiesFile::Options o;
+        juce::PropertiesFile props (tempSettings.getFile(), o);
+        PluginManager pm (props);
+        juce::PluginDirectoryScanner scanner (pm.known, *pm.formats.getFormat (0), juce::FileSearchPath (folder.getFullPathName()),
+                                             true, tempSettings.getFile().getSiblingFile ("scan-crash.txt"));
+        const auto start = juce::Time::getMillisecondCounter();
+        juce::String name;
+        while (scanner.scanNextFile (true, name)) {}
+
+        juce::String text;
+        text << "Scanned in " << juce::String ((juce::Time::getMillisecondCounter() - start) / 1000.0, 1) << " s\n";
+        text << "Found " << pm.known.getNumTypes() << " plugins, " << pm.effects().size() << " effects\n";
+        text << "Failed " << pm.known.getBlacklistedFiles().size() << ":\n" << pm.known.getBlacklistedFiles().joinIntoString ("\n") << "\n";
+        report.replaceWithText (text);
+    }
 
     void writeSnapshot()
     {
@@ -63,7 +111,34 @@ public:
         {
             // "--snapshot out.png 1.0 settings" renders the audio device window instead of the desk.
             std::unique_ptr<juce::Component> view;
-            if (args.contains ("patchbay"))
+            std::unique_ptr<juce::TemporaryFile> tempSettings;
+            std::unique_ptr<juce::PropertiesFile> tempProps;
+            std::unique_ptr<PluginManager> pm;
+            std::unique_ptr<PluginWindows> windows;
+            std::unique_ptr<PluginContext> context;
+
+            if (args.contains ("inserts"))
+            {
+                // Aux 1 return chain with two real plugins (if installed), as the FX pop-up shows it.
+                tempSettings = std::make_unique<juce::TemporaryFile> ("settings");
+                tempProps = std::make_unique<juce::PropertiesFile> (tempSettings->getFile(), juce::PropertiesFile::Options());
+                pm = std::make_unique<PluginManager> (*tempProps);
+                windows = std::make_unique<PluginWindows>();
+                context.reset (new PluginContext { *pm, *windows, [] { return 48000.0; }, nullptr });
+                int slot = 0;
+                for (auto* name : { "CSR Plate v6.vst3", "Black 76 v6.vst3" })
+                {
+                    juce::OwnedArray<juce::PluginDescription> found;
+                    pm->formats.getFormat (0)->findAllTypesForFile (found, "C:\\Program Files\\Common Files\\VST3\\" + juce::String (name));
+                    juce::String error;
+                    if (! found.isEmpty())
+                        e.auxInserts[0]->setSlot (slot, pm->create (*found[0], 48000.0, Config::maxBlock, error), *found[0]);
+                    slot += 2;
+                }
+                e.auxInserts[0]->setBypassed (2, true);
+                view = std::make_unique<InsertChainEditor> (*e.auxInserts[0], *context, e.auxReturn[0]);
+            }
+            else if (args.contains ("patchbay"))
             {
                 using P = AudioEngine::Patch;
                 e.setPatch (P::returnIn + 5, std::uint64_t (1) << (P::auxOut + 0));   // reverb return
@@ -96,11 +171,11 @@ private:
     class MainWindow : public juce::DocumentWindow
     {
     public:
-        MainWindow (const juce::String& name, AudioEngine& engine, std::function<void()> save)
+        MainWindow (const juce::String& name, AudioEngine& engine, PluginManager& pm, std::function<void()> save)
             : DocumentWindow (name, ConsoleColours::room, DocumentWindow::allButtons)
         {
             setUsingNativeTitleBar (true);
-            setContentOwned (new MainComponent (engine, std::move (save)), true);
+            setContentOwned (new MainComponent (engine, pm, std::move (save)), true);
             setResizable (true, true);
             setResizeLimits (800, 480, 10000, 10000);
             centreWithSize (getWidth(), getHeight());
@@ -113,6 +188,36 @@ private:
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainWindow)
     };
 
+    void forEachChain (const std::function<void (InsertChain&)>& fn)
+    {
+        for (auto* c : engine->subInserts) fn (*c);
+        for (auto* c : engine->auxInserts) fn (*c);
+        fn (engine->masterInserts);
+    }
+
+    /** Reloads the plugins saved last time; says clearly which ones could not be found. */
+    void restoreInserts()
+    {
+        auto xml = properties.getUserSettings()->getXmlValue ("inserts");
+        if (xml == nullptr)
+            return;
+
+        auto* device = engine->getDeviceManager().getCurrentAudioDevice();
+        const double sr = device != nullptr ? device->getCurrentSampleRate() : 48000.0;
+        juce::StringArray missing;
+        forEachChain ([&] (InsertChain& c)
+        {
+            for (auto* e : xml->getChildWithTagNameIterator ("INSERTS"))
+                if (e->getStringAttribute ("name") == c.name)
+                    missing.addArray (plugins->restore (c, *e, sr, Config::maxBlock));
+        });
+
+        if (! missing.isEmpty())
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Missing plugins",
+                "These plugins could not be loaded, so their slots are empty:\n\n" + missing.joinIntoString ("\n")
+                + "\n\nIf they are installed somewhere else, add that folder in Plugins and scan again.");
+    }
+
     void saveSettings()
     {
         if (engine == nullptr)
@@ -120,11 +225,15 @@ private:
         if (auto xml = engine->createStateXml())
             properties.getUserSettings()->setValue ("audio", xml.get());
         properties.getUserSettings()->setValue ("projectName", engine->projectName.toString());
+        juce::XmlElement inserts ("ALL_INSERTS");
+        forEachChain ([&] (InsertChain& c) { inserts.addChildElement (c.toXml().release()); });
+        properties.getUserSettings()->setValue ("inserts", &inserts);
         properties.saveIfNeeded();
     }
 
     ConsoleLookAndFeel lookAndFeel;
     juce::ApplicationProperties properties;
+    std::unique_ptr<PluginManager> plugins;
     std::unique_ptr<AudioEngine> engine;
     std::unique_ptr<MainWindow> mainWindow;
 };

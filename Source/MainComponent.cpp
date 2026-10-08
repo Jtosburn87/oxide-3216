@@ -8,8 +8,12 @@ namespace
     constexpr int topBarH = 48;
 }
 
-MainComponent::MainComponent (AudioEngine& e, std::function<void()> save)
-    : engine (e), saveSettings (std::move (save)), desk (e),
+MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, std::function<void()> save)
+    : engine (e), saveSettings (std::move (save)), pluginManager (pm),
+      pluginContext { pm, pluginWindows,
+                      [this] { auto* d = engine.getDeviceManager().getCurrentAudioDevice(); return d != nullptr ? d->getCurrentSampleRate() : 48000.0; },
+                      [this] { if (saveSettings) saveSettings(); } },
+      desk (e, &pluginContext),
       patchBay (e, [this] { if (saveSettings) saveSettings(); })
 {
     audioButton.onClick = [this] { openAudioSettings(); };
@@ -22,6 +26,11 @@ MainComponent::MainComponent (AudioEngine& e, std::function<void()> save)
     patchButton.onClick = [this] { patchBay.setVisible (true); patchBay.toFront (true); };
     patchBay.onClose = [this] { patchBay.setVisible (false); patchButton.grabKeyboardFocus(); };
     addChildComponent (patchBay);
+
+    pluginsButton.setTooltip ("Scan for VST3 plugins and see the ones that failed");
+    pluginsButton.onClick = [this] { openPluginList(); };
+    // A plugin window must close before its plugin is deleted.
+    forEachChain ([this] (InsertChain& c) { c.beforeDelete = [this] (juce::AudioProcessor* p) { pluginWindows.close (p); }; });
 
     zoomLabel.setText ("Zoom", juce::dontSendNotification);
     zoomLabel.setFont (ConsoleLookAndFeel::uiFont (14.0f));
@@ -44,7 +53,7 @@ MainComponent::MainComponent (AudioEngine& e, std::function<void()> save)
     statusLabel.setJustificationType (juce::Justification::centredRight);
 
     for (juce::Component* c : { (juce::Component*) &audioButton, (juce::Component*) &toneButton, (juce::Component*) &zoomLabel,
-                                (juce::Component*) &zoomSlider, (juce::Component*) &fitButton, (juce::Component*) &patchButton, (juce::Component*) &statusLabel })
+                                (juce::Component*) &zoomSlider, (juce::Component*) &fitButton, (juce::Component*) &patchButton, (juce::Component*) &pluginsButton, (juce::Component*) &statusLabel })
         addAndMakeVisible (c);
 
     deskHolder.addAndMakeVisible (desk);
@@ -62,6 +71,10 @@ MainComponent::MainComponent (AudioEngine& e, std::function<void()> save)
 
 MainComponent::~MainComponent()
 {
+    forEachChain ([] (InsertChain& c) { c.beforeDelete = nullptr; c.onChange = nullptr; });
+    pluginWindows.closeAll();
+    if (pluginListWindow != nullptr)
+        delete pluginListWindow.getComponent();
     engine.getDeviceManager().removeChangeListener (this);
     if (settingsWindow != nullptr)
         delete settingsWindow.getComponent();
@@ -179,6 +192,8 @@ void MainComponent::resized()
     bar.removeFromLeft (8);
     patchButton.setBounds (bar.removeFromLeft (100));
     bar.removeFromLeft (8);
+    pluginsButton.setBounds (bar.removeFromLeft (90));
+    bar.removeFromLeft (8);
     statusLabel.setBounds (bar);
 
     viewport.setBounds (getLocalBounds().withTrimmedTop (topBarH));
@@ -189,4 +204,36 @@ void MainComponent::resized()
         fittedOnce = true;
         fitToWindow();
     }
+}
+
+void MainComponent::forEachChain (const std::function<void (InsertChain&)>& fn)
+{
+    for (auto* c : engine.subInserts) fn (*c);
+    for (auto* c : engine.auxInserts) fn (*c);
+    fn (engine.masterInserts);
+}
+
+void MainComponent::openPluginList()
+{
+    if (pluginListWindow != nullptr)
+    {
+        pluginListWindow->toFront (true);
+        return;
+    }
+
+    // JUCE's plugin list: scan (Options > Scan for new or updated VST3 plug-ins, where extra folders
+    // can be added), see what was found, and see the plugins that failed (shown in red).
+    auto list = std::make_unique<juce::PluginListComponent> (pluginManager.formats, pluginManager.known,
+                                                             pluginManager.deadMansPedalFile(), &pluginManager.settings, true);
+    list->setNumberOfThreadsForScanning (juce::jlimit (1, 4, juce::SystemStats::getNumCpus() / 2));
+    list->setSize (900, 560);
+
+    juce::DialogWindow::LaunchOptions o;
+    o.content.setOwned (list.release());
+    o.dialogTitle = "Plugins (VST3)  -  Options > Scan to find plugins; failed ones are shown in red";
+    o.dialogBackgroundColour = room;
+    o.escapeKeyTriggersCloseButton = true;
+    o.useNativeTitleBar = true;
+    o.resizable = true;
+    pluginListWindow = o.launchAsync();
 }

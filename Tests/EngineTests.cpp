@@ -4,6 +4,7 @@
 
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "AudioEngine.h"
+#include "PluginManager.h"
 #include <cstdio>
 #include <deque>
 #include <vector>
@@ -752,6 +753,170 @@ namespace
         check (std::isfinite (b.out[0][10]), "patching main back in stays stable");
     }
 
+    /** Stand-in for a VST3: gain plus a fixed latency (a pure delay), optionally with a mono input. */
+    struct TestPlugin : juce::AudioProcessor
+    {
+        TestPlugin (float g, int latencySamples, bool monoIn = false)
+            : AudioProcessor (BusesProperties().withInput ("In", monoIn ? juce::AudioChannelSet::mono() : juce::AudioChannelSet::stereo(), true)
+                                               .withOutput ("Out", juce::AudioChannelSet::stereo(), true)),
+              gain (g), delay (latencySamples), mono (monoIn)
+        {
+            setLatencySamples (delay);
+        }
+
+        bool isBusesLayoutSupported (const BusesLayout& l) const override
+        {
+            return l.getMainInputChannelSet() == (mono ? juce::AudioChannelSet::mono() : juce::AudioChannelSet::stereo())
+                && l.getMainOutputChannelSet() == juce::AudioChannelSet::stereo();
+        }
+
+        void prepareToPlay (double, int) override { lines.assign (2, std::vector<float> ((size_t) delay + 1, 0.0f)); pos = 0; }
+        void releaseResources() override {}
+
+        void processBlock (juce::AudioBuffer<float>& b, juce::MidiBuffer&) override
+        {
+            const int n = b.getNumSamples();
+            for (int i = 0; i < n; ++i)
+            {
+                float in[2] = { b.getSample (0, i), mono ? b.getSample (0, i) : b.getSample (1, i) };
+                for (int c = 0; c < 2; ++c)
+                {
+                    auto& line = lines[(size_t) c];
+                    line[(size_t) pos] = in[c];
+                    b.setSample (c, i, gain * line[(size_t) ((pos + 1) % (int) line.size())]);
+                }
+                pos = (pos + 1) % (delay + 1);
+            }
+        }
+
+        const juce::String getName() const override { return "Test plugin"; }
+        double getTailLengthSeconds() const override { return 0.0; }
+        bool acceptsMidi() const override { return false; }
+        bool producesMidi() const override { return false; }
+        juce::AudioProcessorEditor* createEditor() override { return nullptr; }
+        bool hasEditor() const override { return false; }
+        int getNumPrograms() override { return 1; }
+        int getCurrentProgram() override { return 0; }
+        void setCurrentProgram (int) override {}
+        const juce::String getProgramName (int) override { return {}; }
+        void changeProgramName (int, const juce::String&) override {}
+        void getStateInformation (juce::MemoryBlock& m) override { m.append (&gain, sizeof (gain)); }
+        void setStateInformation (const void* d, int size) override { if (size == sizeof (gain)) std::memcpy (&gain, d, sizeof (gain)); }
+
+        float gain;
+        const int delay;
+        const bool mono;
+        std::vector<std::vector<float>> lines;
+        int pos = 0;
+    };
+
+    juce::PluginDescription testDescription (const juce::String& name)
+    {
+        juce::PluginDescription d;
+        d.name = name;
+        d.pluginFormatName = "Test";
+        return d;
+    }
+
+    /** Sends one click into interface input 1 and records main L for `blocks` blocks. */
+    std::vector<float> clickResponse (AudioEngine& e, int blocks)
+    {
+        Buffers b (1, 2, 256);
+        std::vector<float> out;
+        for (int k = 0; k < blocks; ++k)
+        {
+            std::fill (b.in[0].begin(), b.in[0].end(), 0.0f);
+            if (k == 2)
+                b.in[0][10] = 0.25f;   // quiet enough that doubled paths stay under the -3 dBFS limiter
+            b.run (e);
+            out.insert (out.end(), b.out[0].begin(), b.out[0].end());
+        }
+        return out;
+    }
+
+    std::vector<int> peaksAbove (const std::vector<float>& x, float threshold)
+    {
+        std::vector<int> idx;
+        for (size_t i = 0; i < x.size(); ++i)
+            if (std::abs (x[i]) > threshold)
+                idx.push_back ((int) i);
+        return idx;
+    }
+
+    void testInserts()
+    {
+        std::puts ("Insert slots, aux returns, latency compensation");
+        {
+            SineRig r;
+            r.e.masterInserts.setSlot (0, std::make_unique<TestPlugin> (0.5f, 0), testDescription ("Half"));
+            check (nearDb (r.measure (1000.0f, 0.1f) / 0.1f, -6.02f, 0.05f), "master insert (gain 0.5) halves the output");
+            r.e.masterInserts.setBypassed (0, true);
+            check (nearDb (r.measure (1000.0f, 0.1f) / 0.1f, 0.0f, 0.05f), "bypass passes audio untouched");
+            r.e.masterInserts.setBypassed (0, false);
+            r.e.masterInserts.clearSlot (0);
+            check (nearDb (r.measure (1000.0f, 0.1f) / 0.1f, 0.0f, 0.05f), "empty slot passes audio untouched");
+        }
+        {
+            // Strip 1 feeds main directly AND through sub 1, which has a 100-sample plugin on it.
+            AudioEngine e;
+            e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }), 0);
+            mapOnly (e, 0, 0);
+            e.inputStrips[0]->controls.sub[0]->set (1.0f);
+            e.subInserts[0]->setSlot (0, std::make_unique<TestPlugin> (1.0f, 100), testDescription ("Delay 100"));
+            clickResponse (e, 4);   // let the chain report its latency
+            const auto out = clickResponse (e, 12);
+            const auto p = peaksAbove (out, 0.1f);
+            std::printf ("      sub plugin latency 100: click arrives at %s (plugin latency now %d)\n",
+                         p.size() == 1 ? juce::String (p[0]).toRawUTF8() : "several places", e.getPluginLatency());
+            for (auto i : p) std::printf ("      peak at %d = %.4f\n", i, out[(size_t) i]);
+            check (p.size() == 1 && near (out[(size_t) p[0]], 0.25f * 2.0f * pan, 1.0e-3f), "direct and sub paths line up (one click, double height)");
+            check (p.size() == 1 && p[0] == 2 * 256 + 10 + 100, "everything is delayed by the slowest chain (100 samples)");
+            check (e.getPluginLatency() == 100 && e.tape.getLatency() >= 100, "overdub compensation includes the plugin delay");
+        }
+        {
+            // Aux 1 send with a 64-sample "reverb" on the return.
+            AudioEngine e;
+            e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }), 0);
+            mapOnly (e, 0, 0);
+            e.inputStrips[0]->controls.auxLevel[0]->set (1.0f);   // send x 1.5
+            auto silent = peaksAbove (clickResponse (e, 12), 0.1f);
+            check (silent.size() == 1, "no plugin on the return: the send is not added to main");
+
+            e.auxInserts[0]->setSlot (0, std::make_unique<TestPlugin> (1.0f, 64), testDescription ("Verb"));
+            clickResponse (e, 4);
+            const auto out = clickResponse (e, 12);
+            const auto p = peaksAbove (out, 0.1f);
+            check (p.size() == 1 && near (out[(size_t) p[0]], 0.25f * (pan + 1.5f), 1.0e-3f), "aux return lines up with the dry signal");
+
+            e.auxReturn[0]->set (0.0f);
+            clickResponse (e, 8);   // let the return level glide down
+            const auto quiet = clickResponse (e, 12);
+            check (near (quiet[2 * 256 + 10 + 64], 0.25f * pan, 1.0e-3f), "return level at minimum: only the (compensated) dry click");
+        }
+        {
+            // A plugin with a mono input on the stereo master: gets (L+R)/2, output on both sides.
+            AudioEngine e;
+            e.inputStrips[0]->controls.pan->set (-1.0f);
+            e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }), 0);
+            mapOnly (e, 0, 0);
+            e.masterInserts.setSlot (0, std::make_unique<TestPlugin> (1.0f, 0, true), testDescription ("Mono"));
+            Buffers b (1, 2, 256);
+            std::fill (b.in[0].begin(), b.in[0].end(), 0.4f);
+            settle (e, b);
+            check (near (b.out[0][100], 0.2f, 1.0e-3f) && near (b.out[1][100], 0.2f, 1.0e-3f), "mono-input plugin: (L+R)/2 in, both sides out");
+        }
+        {
+            InsertChain chain ("Test");
+            chain.prepare (48000.0, 512);
+            chain.setSlot (0, std::make_unique<TestPlugin> (0.5f, 0), testDescription ("A"));
+            chain.setSlot (2, std::make_unique<TestPlugin> (2.0f, 0), testDescription ("B"));
+            chain.moveSlot (2, 1);
+            check (chain.getDescription (1).name == "B" && chain.getDescription (2).name.isEmpty(), "move a plugin up");
+            const auto xml = chain.toXml();
+            check (xml->getNumChildElements() == 2 && xml->getChildElement (1)->getIntAttribute ("index") == 1, "chain saves its slots");
+        }
+    }
+
     void testNoDeviceIsSafe()
     {
         std::puts ("Callback with zero channels");
@@ -821,6 +986,86 @@ namespace
         std::printf ("  10 s of audio processed in %.2f s: %.0f%% of one CPU core\n", secs, secs / 10.0 * 100.0);
     }
 
+    /** Loads a real VST3 onto the master insert and runs a sine through it. */
+    void hostRealPlugin (const juce::String& path)
+    {
+        std::printf ("\nHosting %s\n", path.toRawUTF8());
+        juce::AudioPluginFormatManager fm;
+        fm.addFormat (new juce::VST3PluginFormat());
+        juce::OwnedArray<juce::PluginDescription> found;
+        fm.getFormat (0)->findAllTypesForFile (found, path);
+        check (! found.isEmpty(), "plugin found");
+        if (found.isEmpty())
+            return;
+
+        SineRig r;
+        juce::String error;
+        auto instance = fm.createPluginInstance (*found[0], 48000.0, Config::maxBlock, error);
+        check (instance != nullptr, "plugin created");
+        if (instance == nullptr)
+        {
+            std::printf ("      %s\n", error.toRawUTF8());
+            return;
+        }
+        auto* raw = instance.get();
+        r.e.masterInserts.setSlot (0, std::move (instance), *found[0]);
+        std::printf ("      %s by %s: main bus %d in / %d out\n", found[0]->name.toRawUTF8(), found[0]->manufacturerName.toRawUTF8(),
+                     raw->getMainBusNumInputChannels(), raw->getMainBusNumOutputChannels());
+
+        const float g = r.measure (1000.0f, 0.1f) / 0.1f;
+        std::printf ("      1 kHz at -20 dBFS through it: %+.1f dB, plugin latency %d samples, overdub compensation +%d\n",
+                     toDb (g), raw->getLatencySamples(), r.e.getPluginLatency());
+        check (std::isfinite (g) && g > 0.001f, "audio passes through the plugin");
+
+        const auto xml = r.e.masterInserts.toXml();
+        check (xml->getNumChildElements() == 1 && xml->getChildElement (0)->getChildByName ("STATE") != nullptr, "plugin state saved");
+        r.e.masterInserts.clearSlot (0);
+        check (r.e.masterInserts.numLoaded() == 0, "plugin removed cleanly");
+    }
+
+    /** Save a chain with a real plugin, restore it into a fresh chain, and check a missing plugin is reported. */
+    void testRestoreInserts (const juce::String& realPluginPath)
+    {
+        std::puts ("\nRestoring saved inserts");
+        juce::TemporaryFile settingsFile ("settings");
+        juce::PropertiesFile props (settingsFile.getFile(), {});
+        PluginManager pm (props);
+
+        juce::OwnedArray<juce::PluginDescription> found;
+        pm.formats.getFormat (0)->findAllTypesForFile (found, realPluginPath);
+        if (found.isEmpty())
+        {
+            check (false, "real plugin found for the restore test");
+            return;
+        }
+
+        InsertChain original ("Master");
+        original.prepare (48000.0, Config::maxBlock);
+        juce::String error;
+        original.setSlot (2, pm.create (*found[0], 48000.0, Config::maxBlock, error), *found[0]);
+        original.setBypassed (2, true);
+        auto saved = original.toXml();
+
+        // Add a slot for a plugin that is not installed.
+        auto* ghost = saved->createNewChildElement ("SLOT");
+        ghost->setAttribute ("index", 0);
+        juce::PluginDescription missing;
+        missing.name = "Imaginary Verb";
+        missing.manufacturerName = "Nobody";
+        missing.pluginFormatName = "VST3";
+        missing.fileOrIdentifier = "C:\\nowhere\\Imaginary Verb.vst3";
+        ghost->addChildElement (missing.createXml().release());
+
+        InsertChain restored ("Master");
+        restored.prepare (48000.0, Config::maxBlock);
+        const auto notFound = pm.restore (restored, *saved, 48000.0, Config::maxBlock);
+        std::printf ("      missing: %s\n", notFound.joinIntoString (", ").toRawUTF8());
+        check (restored.getProcessor (2) != nullptr && restored.getDescription (2).name == found[0]->name, "real plugin restored into its slot");
+        check (restored.isBypassed (2), "bypass restored");
+        check (notFound.size() == 1 && notFound[0].contains ("Imaginary Verb"), "missing plugin reported by name");
+        check (restored.getProcessor (0) == nullptr, "missing plugin's slot left empty");
+    }
+
     void listDevices()
     {
         std::puts ("\nAudio drivers and devices on this PC:");
@@ -860,12 +1105,15 @@ int main (int argc, char** argv)
     testBusCompressor();
     testMasterSection();
     testPatchBay();
+    testInserts();
     testNoDeviceIsSafe();
 
     for (int i = 1; i < argc; ++i)
     {
         if (juce::String (argv[i]) == "--devices") listDevices();
         if (juce::String (argv[i]) == "--bench")   benchmark();
+        if (juce::String (argv[i]) == "--vst3" && i + 1 < argc) hostRealPlugin (argv[++i]);
+        if (juce::String (argv[i]) == "--restore" && i + 1 < argc) testRestoreInserts (argv[++i]);
     }
 
     std::printf ("\n%s (%d failure%s)\n", failures == 0 ? "ALL TESTS PASSED" : "TESTS FAILED", failures, failures == 1 ? "" : "s");

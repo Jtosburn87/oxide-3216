@@ -9,6 +9,7 @@
 #include "ChannelStrip.h"
 #include "TapeMachine.h"
 #include "BusCompressor.h"
+#include "InsertChain.h"
 
 /** Owns the audio device, the console's parameters and its DSP, and runs the real-time callback.
 
@@ -81,6 +82,14 @@ public:
     std::array<Param*, Config::numSubs> subFader {};       // 0..100, unity at 80 (faders arrive in stage 5)
     std::array<Param*, Config::numAux> auxMaster {};       // 0..100, unity at 80
     BusCompressor busComp { params };
+
+    // VST3 inserts: 4 slots on each sub (after the group EQ), each aux return, and the master bus.
+    juce::OwnedArray<InsertChain> subInserts, auxInserts;
+    InsertChain masterInserts { "Master" };
+    std::array<Param*, Config::numAux> auxReturn {};   // 0..100, unity at 80
+
+    /** Extra delay added by plugins (latency compensation + master inserts), in samples. */
+    int getPluginLatency() const noexcept { return pluginLatency.load (std::memory_order_relaxed); }
     Param* mainFader = nullptr;
 
     static constexpr float limiterCeiling = 0.70795f;   // -3 dBFS
@@ -135,6 +144,8 @@ private:
     Dsp::Smoothed mainGainL;
     std::array<Dsp::Smoothed, Config::numSubs> subGain;
     std::array<Dsp::Smoothed, Config::numAux> auxGain;
+    std::array<Dsp::Smoothed, Config::numAux> auxReturnGain;
+    std::atomic<int> pluginLatency { 0 };
 
     // Scratch buffers, allocated once.
     using Block = std::array<float, Config::maxBlock>;
@@ -150,6 +161,10 @@ private:
     std::array<Block, Patch::numSources> patchPrevious {};      // last block of each source, for patches that point backwards
     std::array<Block, Patch::numDestinations> patchInput {};    // summed cables into each destination
     std::array<Block, Config::numSubs> subMono {};
+    Block returnL {}, returnR {};
+    Dsp::DelayLine mainDelayL, mainDelayR;
+    std::array<Dsp::DelayLine, Config::numSubs * 2> subDelay;
+    std::array<Dsp::DelayLine, Config::numAux * 2> returnDelay;
     const float* patchSource (int source, int phase) const noexcept;
     /** The signal arriving at a patch destination: the normal (or, for channel inputs, the interface input)
         when nothing is plugged in; otherwise the cables, summed. Channel inputs keep the interface input too. */
