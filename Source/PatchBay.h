@@ -15,6 +15,10 @@ public:
 
     void paint (juce::Graphics&) override;
     void paintOverChildren (juce::Graphics&) override;
+    void mouseDown (const juce::MouseEvent&) override;
+
+    /** Puts down a picked-up output. Returns false if nothing was picked up. */
+    bool cancelSelection();
 
     /** Re-reads the patch and the interface's inputs (the number of Interface in jacks follows the device). */
     void refresh();
@@ -44,6 +48,7 @@ private:
     void rebuild (int interfaceJacks);
     void placeGroup (const juce::String& title, juce::OwnedArray<Jack>&, int first, int count, int x, int y);
     void jackClicked (Kind, int index);
+    void pullCables (Kind, int index);
     bool accepts (const Jack& destination) const;
     bool isPlugged (Kind, int index) const;
     void changed();

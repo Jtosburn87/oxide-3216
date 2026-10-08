@@ -52,7 +52,23 @@ public:
         setWantsKeyboardFocus (true);
     }
 
-    void clicked() override { field.jackClicked (kind, index); }
+    void clicked (const juce::ModifierKeys& mods) override
+    {
+        if (mods.isPopupMenu() && kind != Kind::destination)
+            field.pullCables (kind, index);   // right-click an output to pull all of its cables
+        else
+            field.jackClicked (kind, index);
+    }
+
+    bool keyPressed (const juce::KeyPress& k) override
+    {
+        if ((k == juce::KeyPress::deleteKey || k == juce::KeyPress::backspaceKey) && kind != Kind::destination)
+        {
+            field.pullCables (kind, index);
+            return true;
+        }
+        return juce::Button::keyPressed (k);
+    }
 
     void paintButton (juce::Graphics& g, bool over, bool) override
     {
@@ -260,23 +276,42 @@ void PatchBayField::mapInterfaceOneToOne()
     changed();
 }
 
+void PatchBayField::pullCables (Kind kind, int index)
+{
+    if (kind == Kind::source)
+        for (int d = 0; d < Patch::numDestinations; ++d)
+            engine.setPatch (d, engine.getPatch (d) & ~(std::uint64_t (1) << index));
+    else if (kind == Kind::interfaceIn)
+        for (int c = 0; c < AudioEngine::numConsoleInputs; ++c)
+            if (engine.getInputSource (c) == index)
+                engine.setInputSource (c, -1);
+    if (selected && selected->kind == kind && selected->index == index)
+        selected.reset();
+    changed();
+}
+
+bool PatchBayField::cancelSelection()
+{
+    if (! selected)
+        return false;
+    selected.reset();
+    changed();
+    return true;
+}
+
+void PatchBayField::mouseDown (const juce::MouseEvent&)
+{
+    cancelSelection();   // click the bare field to put a picked-up output down
+}
+
 void PatchBayField::jackClicked (Kind kind, int index)
 {
-    // Click an output (or an interface input), then an input below, to plug a cable.
-    // Click a plugged jack to pull its cables (unless an output is waiting for an input).
+    // Click an output (or an interface input) to pick it up, then click inputs below to plug cables from it.
+    // It stays picked up so one output can feed several inputs; click it again (or press Escape) to put it down.
+    // With an output picked up, clicking an input it already feeds pulls that one cable.
     if (kind != Kind::destination)
     {
-        if (! selected && isPlugged (kind, index))
-        {
-            if (kind == Kind::source)
-                for (int d = 0; d < Patch::numDestinations; ++d)
-                    engine.setPatch (d, engine.getPatch (d) & ~(std::uint64_t (1) << index));
-            else
-                for (int c = 0; c < AudioEngine::numConsoleInputs; ++c)
-                    if (engine.getInputSource (c) == index)
-                        engine.setInputSource (c, -1);
-        }
-        else if (selected && selected->kind == kind && selected->index == index)
+        if (selected && selected->kind == kind && selected->index == index)
             selected.reset();
         else
             selected = Selection { kind, index };
@@ -285,16 +320,13 @@ void PatchBayField::jackClicked (Kind kind, int index)
     }
 
     if (selected && selected->kind == Kind::source)
-    {
-        engine.setPatch (index, engine.getPatch (index) | (std::uint64_t (1) << selected->index));
-        selected.reset();
-    }
+        engine.setPatch (index, engine.getPatch (index) ^ (std::uint64_t (1) << selected->index));
     else if (selected && selected->kind == Kind::interfaceIn)
     {
         if (index < Patch::channelIn)
             return;   // interface inputs only feed channel strips
-        engine.setInputSource (index - Patch::channelIn, selected->index);
-        selected.reset();
+        const int c = index - Patch::channelIn;
+        engine.setInputSource (c, engine.getInputSource (c) == selected->index ? -1 : selected->index);
     }
     else if (engine.getPatch (index) != 0)
         engine.setPatch (index, 0);   // patch cables come out first, then the interface input
@@ -379,9 +411,9 @@ PatchBayPanel::PatchBayPanel (AudioEngine& e, std::function<void()> changed)
 {
     addAndMakeVisible (field);
 
-    help.setText ("Click an output, then an input below it, to plug a cable. Click a plugged jack to pull its cable. "
-                  "Dashed lines are normals (a cable breaks them). Thin lines are the interface inputs: "
-                  "click an Interface in jack, then a Channel strip in.",
+    help.setText ("Click an output, then as many inputs below it as you like (click the output again or press Escape when done). "
+                  "Click an input to pull its cable; right-click an output to pull all of its cables. "
+                  "Dashed lines are normals. Thin lines are interface inputs, which feed Channel strip ins.",
                   juce::dontSendNotification);
     help.setFont (ConsoleLookAndFeel::uiFont (13.0f));
     help.setColour (juce::Label::textColourId, bridgeText.withAlpha (0.8f));
@@ -481,6 +513,8 @@ void PatchBayPanel::mouseDown (const juce::MouseEvent& e)
 
 bool PatchBayPanel::keyPressed (const juce::KeyPress& k)
 {
+    if (k == juce::KeyPress::escapeKey && field.cancelSelection())
+        return true;   // the first Escape puts a picked-up output down
     if (k == juce::KeyPress::escapeKey && onClose)
     {
         onClose();
