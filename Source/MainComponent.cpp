@@ -31,7 +31,8 @@ MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionControll
     pluginsButton.onClick = [this] { openPluginList(); };
     sessionButton.setTooltip ("New, open, save, save as, export the mix");
     sessionButton.onClick = [this] { showSessionMenu(); };
-    sectionsButton.setTooltip ("Take sections of the console out into windows of their own, or put them back");
+    sectionsButton.setTooltip ("Sections of the console in windows of their own; unlock the channel chain order");
+    desk.setChainUnlocked (settings.getBoolValue ("chainUnlocked"));
     sectionsButton.onClick = [this] { showSectionsMenu(); };
     // Minimised strip sections are remembered between launches.
     desk.setCollapsed (Desk::inputSection, settings.getIntValue ("collapsed.input"));
@@ -349,6 +350,14 @@ void MainComponent::showSectionsMenu()
     {
         for (int i = 0; i < Desk::numSections; ++i)
             putBack ((Desk::Section) i);
+    });
+    m.addSeparator();
+    const bool unlocked = settings.getBoolValue ("chainUnlocked");
+    m.addItem ("Unlock chain order (EQ, gate, compressor per channel)", true, unlocked, [this, unlocked]
+    {
+        settings.setValue ("chainUnlocked", ! unlocked);
+        desk.setChainUnlocked (! unlocked);
+        if (saveSettings) saveSettings();
     });
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (sectionsButton));
 }

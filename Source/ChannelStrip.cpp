@@ -19,6 +19,7 @@ ChannelStrip::ChannelStrip (ParamSet& params, const juce::String& prefix, const 
     controls.trim  = &params.add (id ("trim"), "Trim", -20.0f, 30.0f, 0.0f);
     controls.hpf   = &params.add (id ("hpf"), "HPF", 20.0f, 300.0f, 20.0f, Param::Scale::log);
     controls.pan   = &params.add (id ("pan"), "Pan", -1.0f, 1.0f, 0.0f);
+    controls.order = &params.addStepped (id ("order"), "Chain order", (int) chainOrders.size(), 0);
     controls.main  = &params.addToggle (id ("main"), "Main", true);
     controls.mute  = &params.addToggle (id ("mute"), "Mute", false);
     controls.solo  = &params.addToggle (id ("solo"), "Solo", false);
@@ -32,6 +33,13 @@ ChannelStrip::ChannelStrip (ParamSet& params, const juce::String& prefix, const 
         controls.auxLevel[k] = &params.add (id ("aux" + juce::String (k + 1)), "Aux " + juce::String (k + 1), 0.0f, 1.0f, 0.0f);
         controls.auxPre[k] = &params.addToggle (id ("aux" + juce::String (k + 1) + ".pre"), "Aux " + juce::String (k + 1) + " pre", false);
     }
+}
+
+void ChannelStrip::setChain (const Chain& c)
+{
+    for (size_t i = 0; i < chainOrders.size(); ++i)
+        if (chainOrders[i] == c)
+            controls.order->set ((float) i);
 }
 
 float ChannelStrip::targetFader() const noexcept
@@ -110,6 +118,7 @@ void ChannelStrip::process (const float* in, float* direct, const BusPointers& b
     const bool eqOn = ! eq.isFlat();
     const bool gateOn = ! gate.isOff() || ! gate.isIdle();
     const bool compOn = comp.isIn();
+    const auto order = chain();
 
     float pk = 0.0f, inPk = 0.0f;
     for (int i = 0; i < n; ++i)
@@ -118,9 +127,12 @@ void ChannelStrip::process (const float* in, float* direct, const BusPointers& b
         x *= trimGain.next (trimT);
         inPk = juce::jmax (inPk, std::abs (x));
         if (hpOn)   x = hp.process (x);
-        if (eqOn)   x = eq.process (0, x);
-        if (gateOn) x = gate.process (x);
-        if (compOn) x = comp.process (x);
+        for (const int stage : order)
+        {
+            if (stage == eqStage)        { if (eqOn)   x = eq.process (0, x); }
+            else if (stage == gateStage) { if (gateOn) x = gate.process (x); }
+            else                         { if (compOn) x = comp.process (x); }
+        }
 
         pre[(size_t) i] = x;
         x *= faderGain.next (faderT);

@@ -34,7 +34,7 @@ private:
     PluginWindows pluginWindows;
     PluginContext pluginContext;
 
-    juce::TextButton audioButton { "Audio device" }, toneButton { "Test tone" }, fitButton { "Fit" }, patchButton { "Patch bay" }, pluginsButton { "Plugins" }, sessionButton { "Session" }, sectionsButton { "Sections" };
+    juce::TextButton audioButton { "Audio device" }, toneButton { "Test tone" }, fitButton { "Fit" }, patchButton { "Patch bay" }, pluginsButton { "Plugins" }, sessionButton { "Session" }, sectionsButton { "Options" };
     juce::Slider zoomSlider;
     juce::Label zoomLabel, statusLabel;
 

@@ -40,6 +40,9 @@ public:
     static int heightFor (int collapsedMask);
     std::function<void (int bit)> onToggleSection;
 
+    /** Unlocked: EQ, gate and compressor show a button to move them earlier in this channel's chain. */
+    void setChainUnlocked (bool);
+
 private:
     ChannelStrip& strip;
 
@@ -64,6 +67,10 @@ private:
     bool meterInput = false;
     int collapsed = 0;
     std::array<juce::TextButton, 4> foldButtons;
+    std::array<juce::TextButton, 3> moveButtons;   // EQ, gate, compressor
+    bool chainUnlocked = false;
+    ChannelStrip::Chain shownChain {};
+    void moveEarlier (int stage);
     std::vector<juce::Component*> sectionComponents (int bit);
 
     struct Section { juce::String title; juce::Rectangle<int> box; };
@@ -140,6 +147,7 @@ public:
     int getCollapsed() const noexcept { return collapsed; }
     void setCollapsed (int mask);
     std::function<void()> onCollapseChanged;   // the user minimised or restored a section
+    void setChainUnlocked (bool);
 
 private:
     juce::OwnedArray<StripComponent> strips;
@@ -172,6 +180,9 @@ public:
     int getCollapsed (Section) const;
     void setCollapsed (Section, int mask);
     std::function<void()> onCollapseChanged;
+
+    /** Lets every channel's EQ, gate and compressor be reordered (Options > Unlock chain order). */
+    void setChainUnlocked (bool);
 
     /** The desk's size changed because a section left or came back. */
     std::function<void()> onSizeChanged;

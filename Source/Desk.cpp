@@ -201,6 +201,17 @@ StripComponent::StripComponent (ChannelStrip& s)
         add (b);
     }
 
+    // Chain order buttons (shown only when the chain is unlocked).
+    for (int i = 0; i < (int) moveButtons.size(); ++i)
+    {
+        auto& b = moveButtons[(size_t) i];
+        b.setButtonText (juce::CharPointer_UTF8 ("\xe2\x96\xb2"));   // up triangle
+        b.setTitle ("Move " + juce::String (foldNames[i]) + " earlier");
+        b.setTooltip ("Move the " + juce::String (foldNames[i]).toLowerCase() + " one place earlier in this channel's signal chain");
+        b.onClick = [this, i] { moveEarlier (i); };
+        addChildComponent (b);
+    }
+
     fader.slider.setTitle (strip.name + " fader");
     setTitle (strip.name);
     setFocusContainerType (FocusContainerType::focusContainer);
@@ -213,6 +224,23 @@ namespace
     // height a minimised one keeps: just its title line.
     constexpr int expandedH[] = { 10 + 4 * 52 + 4, 10 + 50 + 4 + 18 + 6, 10 + 2 * 52 + 2 + 17 + 4 + 16 + 6, 10 + 4 * 44 + 4 };
     constexpr int collapsedH = 8;
+}
+
+void StripComponent::setChainUnlocked (bool unlocked)
+{
+    chainUnlocked = unlocked;
+    resized();
+}
+
+void StripComponent::moveEarlier (int stage)
+{
+    auto c = strip.chain();
+    for (size_t p = 1; p < c.size(); ++p)
+        if (c[p] == stage)
+            std::swap (c[p], c[p - 1]);
+    strip.setChain (c);
+    resized();
+    repaint();
 }
 
 int StripComponent::heightFor (int mask)
@@ -279,51 +307,66 @@ void StripComponent::resized()
     y = box.getBottom() + 14;
 
     // The sections that can be minimised: a minimised one keeps only its title line (and its button).
+    // EQ, gate and compressor are placed in the channel's chain order, so the strip shows the signal path.
+    const auto chain = strip.chain();
     const auto foldable = [&] (int i, const char* title, const std::function<void (juce::Rectangle<int>)>& layout)
     {
         const bool folded = (collapsed & (1 << i)) != 0;
         box = { bx, y, bw, folded ? collapsedH : expandedH[i] };
         sections.push_back ({ title, box });
         foldButtons[(size_t) i].setBounds (bx + bw - 20, box.getY() - 7, 18, 14);
+        if (i < 3)
+        {
+            // Unlocked chain: a button to move this section one place earlier (not on the first one).
+            auto& up = moveButtons[(size_t) i];
+            up.setBounds (bx + bw - 40, box.getY() - 7, 18, 14);
+            up.setVisible (chainUnlocked && chain[0] != i);
+        }
         if (! folded)
             layout (box);
         y = box.getBottom() + 14;
     };
 
-    foldable (0, "Equaliser", [&] (juce::Rectangle<int> b)
+    // With the chain unlocked, two buttons share the title line: "Compressor" would not fit.
+    const char* const stageTitles[] = { "Equaliser", "Gate", chainUnlocked ? "Comp" : "Compressor" };
+    const std::function<void (juce::Rectangle<int>)> stageLayouts[] =
     {
-        for (int band = 0; band < FourBandEq::numBands; ++band)
+        [&] (juce::Rectangle<int> b)
         {
-            eqKnobs[band * 2]->setBounds (knobAt (left, b.getY() + 10 + band * 52));
-            eqKnobs[band * 2 + 1]->setBounds (knobAt (right, b.getY() + 10 + band * 52));
+            for (int band = 0; band < FourBandEq::numBands; ++band)
+            {
+                eqKnobs[band * 2]->setBounds (knobAt (left, b.getY() + 10 + band * 52));
+                eqKnobs[band * 2 + 1]->setBounds (knobAt (right, b.getY() + 10 + band * 52));
+            }
+        },
+        [&] (juce::Rectangle<int> b)
+        {
+            gateThr.setBounds (knobAt (left, b.getY() + 10));
+            gateRange.setBounds (knobAt (right, b.getY() + 10));
+            gateFast.setBounds (bx + 5, b.getY() + 64, bw - 10, 18);
+        },
+        [&] (juce::Rectangle<int> b)
+        {
+            compInput.setBounds (knobAt (left, b.getY() + 10));
+            compOutput.setBounds (knobAt (right, b.getY() + 10));
+            compAttack.setBounds (knobAt (left, b.getY() + 62));
+            compRelease.setBounds (knobAt (right, b.getY() + 62));
+
+            auto row = juce::Rectangle<int> (bx + 4, b.getY() + 116, bw - 8, 17);
+            const int w = row.getWidth() / 5;
+            for (auto* r : ratioButtons)
+                r->setBounds (row.removeFromLeft (w).reduced (1, 0));
+            compAll.setBounds (row.reduced (1, 0));
+
+            auto row2 = juce::Rectangle<int> (bx + 4, b.getY() + 137, bw - 8, 16);
+            compIn.setBounds (row2.removeFromLeft (30));
+            row2.removeFromLeft (4);
+            grMeter.setBounds (row2.withSizeKeepingCentre (row2.getWidth(), 8));
         }
-    });
-
-    foldable (1, "Gate", [&] (juce::Rectangle<int> b)
-    {
-        gateThr.setBounds (knobAt (left, b.getY() + 10));
-        gateRange.setBounds (knobAt (right, b.getY() + 10));
-        gateFast.setBounds (bx + 5, b.getY() + 64, bw - 10, 18);
-    });
-
-    foldable (2, "Compressor", [&] (juce::Rectangle<int> b)
-    {
-        compInput.setBounds (knobAt (left, b.getY() + 10));
-        compOutput.setBounds (knobAt (right, b.getY() + 10));
-        compAttack.setBounds (knobAt (left, b.getY() + 62));
-        compRelease.setBounds (knobAt (right, b.getY() + 62));
-
-        auto row = juce::Rectangle<int> (bx + 4, b.getY() + 116, bw - 8, 17);
-        const int w = row.getWidth() / 5;
-        for (auto* r : ratioButtons)
-            r->setBounds (row.removeFromLeft (w).reduced (1, 0));
-        compAll.setBounds (row.reduced (1, 0));
-
-        auto row2 = juce::Rectangle<int> (bx + 4, b.getY() + 137, bw - 8, 16);
-        compIn.setBounds (row2.removeFromLeft (30));
-        row2.removeFromLeft (4);
-        grMeter.setBounds (row2.withSizeKeepingCentre (row2.getWidth(), 8));
-    });
+    };
+    for (const int stage : chain)
+        foldable (stage, stageTitles[stage], stageLayouts[stage]);
+    shownChain = chain;
 
     foldable (3, "Aux sends", [&] (juce::Rectangle<int> b)
     {
@@ -383,6 +426,13 @@ void StripComponent::update()
     // A loaded session may have renamed the strip.
     if (! scribble.isBeingEdited() && scribble.getText() != strip.name)
         scribble.setText (strip.name, juce::dontSendNotification);
+
+    // A loaded session may have changed the chain order.
+    if (strip.chain() != shownChain)
+    {
+        resized();
+        repaint();
+    }
 
     // Take both peaks every frame, so flipping never shows a stale one.
     const float out = strip.takePeak(), in = strip.takeInputPeak();
@@ -869,6 +919,12 @@ StripBank::StripBank (const juce::OwnedArray<ChannelStrip>& channelStrips)
     setSize (strips.size() * stripW, totalH);
 }
 
+void StripBank::setChainUnlocked (bool unlocked)
+{
+    for (auto* s : strips)
+        s->setChainUnlocked (unlocked);
+}
+
 void StripBank::setCollapsed (int mask)
 {
     collapsed = mask & 15;
@@ -926,6 +982,12 @@ void Desk::componentMovedOrResized (juce::Component&, bool, bool wasResized)
 {
     if (wasResized)
         relayout();
+}
+
+void Desk::setChainUnlocked (bool unlocked)
+{
+    inputs.setChainUnlocked (unlocked);
+    returns.setChainUnlocked (unlocked);
 }
 
 int Desk::getCollapsed (Section s) const

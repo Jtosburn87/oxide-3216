@@ -26,9 +26,12 @@ The small "-" on the Equaliser, Gate, Compressor and Aux sends titles minimises 
 the whole bank ("+" brings it back); the bank gets shorter and its faders stay in line.
 The IN/OUT button above each bank switches its meters between the input (after the trim) and
 the output (after the fader).
-"Sections" moves the input bank, centre section or return bank into a window of its own (for a
+"Options" moves the input bank, centre section or return bank into a window of its own (for a
 second monitor). Close that window, or press "Put back", to return it to the console. Windows
 that are out stay out, in the same place, the next time ConsoleTape starts.
+"Options" > "Unlock chain order" adds a small up arrow to the EQ, gate and compressor titles of
+every channel: it moves that section earlier in the channel's signal chain, and the strip shows
+the sections in the order the signal passes through them. The order is saved with the session.
 
 Every strip: trim, high-pass filter, 4-band EQ, gate (Fast atk = fast attack with the pop),
 1176-style compressor, 8 aux sends (P = pre-fader), sub assigns S1-S4, main assign, pan,

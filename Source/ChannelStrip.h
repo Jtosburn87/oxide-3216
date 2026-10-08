@@ -32,7 +32,15 @@ public:
         Param* sub[Config::numSubs];        // sub assigns
         Param* auxLevel[Config::numAux];    // 0..1
         Param* auxPre[Config::numAux];      // pre-fader send
+        Param* order;                       // processing order of EQ, gate and compressor (chainOrders)
     } controls;
+
+    /** The six orders the EQ, gate and compressor can run in (stage numbers below). Order 0 is the default. */
+    enum Stage { eqStage, gateStage, compStage };
+    using Chain = std::array<int, 3>;
+    static constexpr std::array<Chain, 6> chainOrders { { { 0, 1, 2 }, { 0, 2, 1 }, { 1, 0, 2 }, { 1, 2, 0 }, { 2, 0, 1 }, { 2, 1, 0 } } };
+    Chain chain() const noexcept { return chainOrders[(size_t) juce::jlimit (0, 5, juce::roundToInt (controls.order->get()))]; }
+    void setChain (const Chain&);
 
     FourBandEq eq;
     Gate gate;

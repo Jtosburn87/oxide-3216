@@ -472,6 +472,24 @@ namespace
             quiet.run (1000.0f, 0.05f, 4);       // -26 dBFS: opens, but below the -12 dBFS pop trigger
             check (g2.popCount.load() == 0, "quiet transient opens without a pop");
         }
+        {
+            // Chain order: an EQ boost ahead of the gate opens it; with the gate first, it stays shut.
+            const auto level = [] (int order)
+            {
+                auto rig = std::make_unique<SineRig>();   // an engine is too big for another one on the stack
+                auto& r = *rig;
+                auto& s = *r.e.inputStrips[0];
+                s.gate.threshold->set (-30.0f);
+                s.gate.range->set (-40.0f);
+                s.eq.freq[FourBandEq::HMF]->set (1000.0f);
+                s.eq.gain[FourBandEq::HMF]->set (15.0f);
+                s.controls.order->set ((float) order);
+                return toDb (r.measure (1000.0f, 0.01f, 400) / 0.01f);
+            };
+            const float eqFirst = level (0), gateFirst = level (2);   // EQ-gate-comp, gate-EQ-comp
+            std::printf ("      EQ first: %+.1f dB, gate first: %+.1f dB\n", eqFirst, gateFirst);
+            check (eqFirst > 10.0f && gateFirst < eqFirst - 30.0f, "chain order: EQ before the gate opens it, gate first keeps it shut");
+        }
     }
 
     void testFetCompressor()
