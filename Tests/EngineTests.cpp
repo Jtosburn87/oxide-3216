@@ -165,6 +165,18 @@ namespace
         b.run (e);
         check (near (b.out[0][300], 0.5f) && near (b.out[1][300], 0.0f), "trim +6 dB, pan hard left");
 
+        // Meters: input after the trim, output after the fader.
+        s1.fader->set (0.0f);
+        settle (e, b);
+        e.inputStrips[0]->takePeak();        // forget the fade-down
+        e.inputStrips[0]->takeInputPeak();
+        b.run (e);
+        const float inPk = e.inputStrips[0]->takeInputPeak(), outPk = e.inputStrips[0]->takePeak();
+        check (near (inPk, 0.5f) && near (outPk, 0.0f, 1.0e-5f),
+               "input meter reads after the trim, output meter after the fader");
+        s1.fader->set (80.0f);
+        settle (e, b);
+
         s1.mute->set (1.0f);
         settle (e, b);
         check (near (b.out[0][511], 0.0f, 1.0e-5f), "mute silences main");

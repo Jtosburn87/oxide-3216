@@ -281,10 +281,21 @@ void StripComponent::paint (juce::Graphics& g)
     for (auto& s : sections)
         paintSection (g, s.title, s.box, stripGrey);
 
+    // What the bridge meter shows.
+    g.setFont (ConsoleLookAndFeel::uiFont (9.0f));
+    g.setColour (meterInput ? amber : bridgeText.withAlpha (0.6f));
+    g.drawText (meterInput ? "in" : "out", juce::Rectangle<int> (0, meter.getBottom() + 1, getWidth(), 9), juce::Justification::centred, false);
+
     g.setColour (juce::Colour (0xff2c2f31));
     g.fillRect (0, 0, 1, getHeight());
     g.setColour (juce::Colours::black);
     g.fillRect (getWidth() - 1, 0, 1, getHeight());
+}
+
+void StripComponent::setMeterInput (bool input)
+{
+    meterInput = input;
+    repaint (0, 0, getWidth(), bridgeH);
 }
 
 void StripComponent::update()
@@ -293,7 +304,9 @@ void StripComponent::update()
     if (! scribble.isBeingEdited() && scribble.getText() != strip.name)
         scribble.setText (strip.name, juce::dontSendNotification);
 
-    meter.setLevel (strip.takePeak());
+    // Take both peaks every frame, so flipping never shows a stale one.
+    const float out = strip.takePeak(), in = strip.takeInputPeak();
+    meter.setLevel (meterInput ? in : out);
     grMeter.setReduction (strip.comp.isIn() ? strip.comp.takeGainReduction() : 0.0f);
 
     const auto pops = strip.gate.popCount.load();
@@ -750,6 +763,21 @@ StripBank::StripBank (const juce::OwnedArray<ChannelStrip>& channelStrips)
 {
     for (auto* s : channelStrips)
         addAndMakeVisible (strips.add (new StripComponent (*s)));
+
+    meterButton.setTooltip ("Meters show each channel's output (after the fader). Click to show the input (after the trim) instead");
+    meterButton.setColour (juce::TextButton::buttonOnColourId, amber);
+    meterButton.setColour (juce::TextButton::textColourOnId, juce::Colours::black);
+    meterButton.onClick = [this]
+    {
+        meterInput = ! meterInput;
+        meterButton.setButtonText (meterInput ? "IN" : "OUT");
+        meterButton.setToggleState (meterInput, juce::dontSendNotification);
+        meterButton.setTooltip (meterInput ? "Meters show each channel's input (after the trim). Click to show the output (after the fader) instead"
+                                           : "Meters show each channel's output (after the fader). Click to show the input (after the trim) instead");
+        for (auto* s : strips)
+            s->setMeterInput (meterInput);
+    };
+    addAndMakeVisible (meterButton);
     setSize (strips.size() * stripW, totalH);
 }
 
@@ -761,6 +789,8 @@ void StripBank::resized()
         s->setBounds (x, 0, stripW, totalH);
         x += stripW;
     }
+    meterButton.setBounds (6, 8, 38, 20);   // in the first strip's bridge, left of its meter
+    meterButton.toFront (false);
 }
 
 void StripBank::update()

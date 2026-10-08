@@ -43,7 +43,8 @@ public:
     /** in may be null (silence). direct receives the post-fader, post-mute signal (the direct out). */
     void process (const float* in, float* direct, const BusPointers& buses, int numSamples, bool anySoloActive) noexcept;
 
-    float takePeak() noexcept { return peak.exchange (0.0f); }
+    float takePeak() noexcept { return peak.exchange (0.0f); }             // output: post-fader
+    float takeInputPeak() noexcept { return inputPeak.exchange (0.0f); }   // input: after the trim
 
     /** Aux send gain law from the prototype: level^2 x 1.5 (about +3.5 dB at full). */
     static float auxGain (float level) noexcept { return level * level * 1.5f; }
@@ -53,7 +54,7 @@ private:
     Dsp::Biquad hp;
     float hpFreqSet = -1.0f;
     Dsp::Smoothed trimGain, faderGain;
-    std::atomic<float> peak { 0.0f };
+    std::atomic<float> peak { 0.0f }, inputPeak { 0.0f };
 
     std::array<float, Config::maxBlock> pre {};
     float lastMain[2] {}, lastSub[Config::numSubs][2] {}, lastAux[Config::numAux] {};

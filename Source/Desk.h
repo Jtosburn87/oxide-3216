@@ -31,6 +31,9 @@ public:
     void resized() override;
     void update();   // meters and pop flash, from the desk timer
 
+    /** true: the bridge meter shows the input (after the trim); false: the output (post-fader). */
+    void setMeterInput (bool);
+
 private:
     ChannelStrip& strip;
 
@@ -52,6 +55,7 @@ private:
     juce::Label scribble;
 
     std::uint32_t lastPops = 0;
+    bool meterInput = false;
 
     struct Section { juce::String title; juce::Rectangle<int> box; };
     std::vector<Section> sections;
@@ -125,6 +129,8 @@ public:
 
 private:
     juce::OwnedArray<StripComponent> strips;
+    juce::TextButton meterButton { "OUT" };   // flips the whole bank's meters between input and output
+    bool meterInput = false;
 };
 
 /** The console at a fixed size, made of three sections that can each be taken out into a window of

@@ -111,11 +111,12 @@ void ChannelStrip::process (const float* in, float* direct, const BusPointers& b
     const bool gateOn = ! gate.isOff() || ! gate.isIdle();
     const bool compOn = comp.isIn();
 
-    float pk = 0.0f;
+    float pk = 0.0f, inPk = 0.0f;
     for (int i = 0; i < n; ++i)
     {
         float x = in != nullptr ? in[i] : 0.0f;
         x *= trimGain.next (trimT);
+        inPk = juce::jmax (inPk, std::abs (x));
         if (hpOn)   x = hp.process (x);
         if (eqOn)   x = eq.process (0, x);
         if (gateOn) x = gate.process (x);
@@ -128,6 +129,7 @@ void ChannelStrip::process (const float* in, float* direct, const BusPointers& b
     }
     comp.finishBlock();
     raisePeak (peak, pk);
+    raisePeak (inputPeak, inPk);
 
     // Bus sends, each with its gain ramped across the block.
     const auto t = targets (anySoloActive);
