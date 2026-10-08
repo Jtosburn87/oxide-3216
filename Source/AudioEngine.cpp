@@ -41,7 +41,7 @@ AudioEngine::AudioEngine()
     for (int k = 0; k < Config::numAux; ++k)
     {
         auxMaster[(size_t) k] = &params.add ("aux" + juce::String (k + 1) + ".master", "Aux " + juce::String (k + 1) + " master", 0.0f, 100.0f, 80.0f);
-        auxReturn[(size_t) k] = &params.add ("aux" + juce::String (k + 1) + ".return", "Aux " + juce::String (k + 1) + " return", 0.0f, 100.0f, 80.0f);
+        auxReturnPan[(size_t) k] = &params.add ("aux" + juce::String (k + 1) + ".returnPan", "Aux " + juce::String (k + 1) + " return pan", -1.0f, 1.0f, 0.0f);
         auxInserts.add (new InsertChain ("Aux " + juce::String (k + 1) + " return"));
         auxPeak[(size_t) k].store (0.0f);
     }
@@ -235,7 +235,10 @@ void AudioEngine::prepare (double sampleRate, const juce::BigInteger& activeInpu
     for (auto* c : auxInserts) c->prepare (currentSampleRate, Config::maxBlock);
     masterInserts.prepare (currentSampleRate, Config::maxBlock);
     for (int k = 0; k < Config::numAux; ++k)
-        auxReturnGain[(size_t) k].prepare (currentSampleRate, 0.0f);
+    {
+        auxReturnGainL[(size_t) k].prepare (currentSampleRate, 0.0f);
+        auxReturnGainR[(size_t) k].prepare (currentSampleRate, 0.0f);
+    }
     limiterEnv = 0.0f;
     limiterRelease = (float) std::exp (-1.0 / (0.1 * currentSampleRate));
     for (int k = 0; k < Config::numSubs; ++k)
@@ -451,15 +454,18 @@ void AudioEngine::render (const float* const* inputs, int numInputs, float* cons
             std::memcpy (returnL.data(), a, sizeof (float) * (size_t) n);
             std::memcpy (returnR.data(), a, sizeof (float) * (size_t) n);
             const bool active = auxInserts[k]->process (returnL.data(), returnR.data(), n);
-            const float returnT = active ? Dsp::faderGain (auxReturn[(size_t) k]->get()) : 0.0f;
-            auto& rg = auxReturnGain[(size_t) k];
-            if (active || ! rg.settled (0.0f))
+            // Return pan is a balance: centre leaves both sides at unity, turning it lowers the other side.
+            const float pan = auxReturnPan[(size_t) k]->get();
+            const float targetL = active ? juce::jmin (1.0f, 1.0f - pan) : 0.0f;
+            const float targetR = active ? juce::jmin (1.0f, 1.0f + pan) : 0.0f;
+            auto& gl = auxReturnGainL[(size_t) k];
+            auto& gr = auxReturnGainR[(size_t) k];
+            if (active || ! gl.settled (0.0f) || ! gr.settled (0.0f))
             {
                 for (int i = 0; i < n; ++i)
                 {
-                    const float g = rg.next (returnT);
-                    returnL[(size_t) i] *= g;
-                    returnR[(size_t) i] *= g;
+                    returnL[(size_t) i] *= gl.next (targetL);
+                    returnR[(size_t) i] *= gr.next (targetR);
                 }
                 const int d = compensation - auxInserts[k]->getLatency();
                 returnDelay[(size_t) k * 2].process (returnL.data(), n, d);

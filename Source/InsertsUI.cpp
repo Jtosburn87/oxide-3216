@@ -2,20 +2,11 @@
 #include "PluginManager.h"
 #include "PluginWindows.h"
 #include "ConsoleLookAndFeel.h"
-#include "Dsp.h"
 
 using namespace ConsoleColours;
 
-namespace
-{
-    juce::String faderDbText (float v)
-    {
-        return v <= 0.0f ? juce::String ("off") : juce::String (Dsp::faderDb (v), 1);
-    }
-}
-
 //==============================================================================
-InsertChainEditor::InsertChainEditor (InsertChain& c, PluginContext& ctx, Param* returnLevel)
+InsertChainEditor::InsertChainEditor (InsertChain& c, PluginContext& ctx, Param* returnPan)
     : chain (c), context (ctx)
 {
     for (int i = 0; i < InsertChain::numSlots; ++i)
@@ -45,10 +36,10 @@ InsertChainEditor::InsertChainEditor (InsertChain& c, PluginContext& ctx, Param*
             addAndMakeVisible (b);
     }
 
-    if (returnLevel != nullptr)
+    if (returnPan != nullptr)
     {
-        returnKnob = std::make_unique<Knob> (*returnLevel, "Return", juce::Colour (0xffd9d6cc));
-        returnKnob->setFormatter ([] (float v) { return faderDbText (v); });
+        returnKnob = std::make_unique<Knob> (*returnPan, "Return pan", juce::Colour (0xffd9d6cc));
+        returnKnob->setEndLabels ("L", "R");
         addAndMakeVisible (*returnKnob);
     }
 
@@ -175,7 +166,7 @@ InsertsSection::InsertsSection (AudioEngine& e, PluginContext* ctx) : engine (e)
     for (int k = 0; k < Config::numSubs; ++k)
         cells.push_back ({ engine.subInserts[k], nullptr, "Sub " + juce::String (k + 1), nullptr, nullptr });
     for (int k = 0; k < Config::numAux; ++k)
-        cells.push_back ({ engine.auxInserts[k], engine.auxReturn[(size_t) k], "A" + juce::String (k + 1), nullptr, nullptr });
+        cells.push_back ({ engine.auxInserts[k], engine.auxReturnPan[(size_t) k], "A" + juce::String (k + 1), nullptr, nullptr });
     cells.push_back ({ &engine.masterInserts, nullptr, "Master", nullptr, nullptr });
 
     for (auto& c : cells)
@@ -187,10 +178,10 @@ InsertsSection::InsertsSection (AudioEngine& e, PluginContext* ctx) : engine (e)
         c.fx->onClick = [this, &c] { openChain (c); };
         addAndMakeVisible (*c.fx);
 
-        if (c.returnLevel != nullptr)
+        if (c.returnPan != nullptr)
         {
-            c.knob = std::make_unique<Knob> (*c.returnLevel, "Return", juce::Colour (0xffd9d6cc));
-            c.knob->setFormatter ([] (float v) { return faderDbText (v); });
+            c.knob = std::make_unique<Knob> (*c.returnPan, "Pan", juce::Colour (0xffd9d6cc));
+            c.knob->setEndLabels ("L", "R");
             addAndMakeVisible (*c.knob);
         }
     }
@@ -201,7 +192,7 @@ void InsertsSection::openChain (Cell& c)
 {
     if (context == nullptr)
         return;
-    auto editor = std::make_unique<InsertChainEditor> (*c.chain, *context, c.returnLevel);
+    auto editor = std::make_unique<InsertChainEditor> (*c.chain, *context, c.returnPan);
     juce::CallOutBox::launchAsynchronously (std::move (editor), c.fx->getScreenBounds(), nullptr);
 }
 

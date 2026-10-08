@@ -86,7 +86,7 @@ public:
     // VST3 inserts: 4 slots on each sub (after the group EQ), each aux return, and the master bus.
     juce::OwnedArray<InsertChain> subInserts, auxInserts;
     InsertChain masterInserts { "Master" };
-    std::array<Param*, Config::numAux> auxReturn {};   // 0..100, unity at 80
+    std::array<Param*, Config::numAux> auxReturnPan {};   // -1..1: balance of the stereo return (it comes back at unity)
 
     /** Extra delay added by plugins (latency compensation + master inserts), in samples. */
     int getPluginLatency() const noexcept { return pluginLatency.load (std::memory_order_relaxed); }
@@ -148,7 +148,7 @@ private:
     Dsp::Smoothed mainGainL;
     std::array<Dsp::Smoothed, Config::numSubs> subGain;
     std::array<Dsp::Smoothed, Config::numAux> auxGain;
-    std::array<Dsp::Smoothed, Config::numAux> auxReturnGain;
+    std::array<Dsp::Smoothed, Config::numAux> auxReturnGainL, auxReturnGainR;
     std::atomic<int> pluginLatency { 0 };
 
     // Scratch buffers, allocated once.

@@ -17,11 +17,11 @@ struct PluginContext
 };
 
 /** Pop-up editor for one insert chain: four slots, each with plugin picker, bypass,
-    open-window button and up/down order buttons; plus the return level on an aux return. */
+    open-window button and up/down order buttons; plus the return pan on an aux return. */
 class InsertChainEditor : public juce::Component
 {
 public:
-    InsertChainEditor (InsertChain&, PluginContext&, Param* returnLevel);
+    InsertChainEditor (InsertChain&, PluginContext&, Param* returnPan);
     ~InsertChainEditor() override;
 
     void paint (juce::Graphics&) override;
@@ -45,7 +45,7 @@ private:
 };
 
 /** Row of cells in the centre section: an FX button for each sub, aux return and the master,
-    and a return level knob for each aux. */
+    and a return pan knob for each aux. */
 class InsertsSection : public juce::Component,
                        private juce::Timer
 {
@@ -59,7 +59,7 @@ private:
     struct Cell
     {
         InsertChain* chain;
-        Param* returnLevel;
+        Param* returnPan;
         juce::String title;
         std::unique_ptr<juce::TextButton> fx;
         std::unique_ptr<Knob> knob;

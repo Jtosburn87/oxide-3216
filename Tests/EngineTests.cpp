@@ -890,10 +890,15 @@ namespace
             const auto p = peaksAbove (out, 0.1f);
             check (p.size() == 1 && near (out[(size_t) p[0]], 0.25f * (pan + 1.5f), 1.0e-3f), "aux return lines up with the dry signal");
 
-            e.auxReturn[0]->set (0.0f);
-            clickResponse (e, 8);   // let the return level glide down
+            e.auxReturnPan[0]->set (-1.0f);
+            clickResponse (e, 8);
+            const auto left = clickResponse (e, 12);
+            check (near (left[2 * 256 + 10 + 64], 0.25f * (pan + 1.5f), 1.0e-3f), "return panned left: the left side keeps the whole return");
+
+            e.auxReturnPan[0]->set (1.0f);
+            clickResponse (e, 8);   // let the left side of the return glide down
             const auto quiet = clickResponse (e, 12);
-            check (near (quiet[2 * 256 + 10 + 64], 0.25f * pan, 1.0e-3f), "return level at minimum: only the (compensated) dry click");
+            check (near (quiet[2 * 256 + 10 + 64], 0.25f * pan, 1.0e-3f), "return panned right: only the (compensated) dry click on the left");
         }
         {
             // A plugin with a mono input on the stereo master: gets (L+R)/2, output on both sides.

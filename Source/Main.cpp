@@ -170,7 +170,7 @@ public:
                     slot += 2;
                 }
                 e.auxInserts[0]->setBypassed (2, true);
-                view = std::make_unique<InsertChainEditor> (*e.auxInserts[0], *context, e.auxReturn[0]);
+                view = std::make_unique<InsertChainEditor> (*e.auxInserts[0], *context, e.auxReturnPan[0]);
             }
             else if (args.contains ("patchbay"))
             {
