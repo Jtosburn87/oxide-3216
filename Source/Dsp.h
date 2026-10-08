@@ -59,6 +59,20 @@ namespace Dsp
             a2 = (float) ((1.0 - alpha) / a0);
         }
 
+        void setLowPass (double sampleRate, double freq, double q) noexcept
+        {
+            const double w = 2.0 * 3.141592653589793 * freq / sampleRate;
+            const double cs = std::cos (w), alpha = std::sin (w) / (2.0 * q), a0 = 1.0 + alpha;
+            b0 = (float) ((1.0 - cs) * 0.5 / a0);
+            b1 = (float) ((1.0 - cs) / a0);
+            b2 = b0;
+            a1 = (float) (-2.0 * cs / a0);
+            a2 = (float) ((1.0 - alpha) / a0);
+        }
+
+        /** Takes another filter's coefficients but keeps this filter's state (no click). */
+        void copyCoefficients (const Biquad& o) noexcept { b0 = o.b0; b1 = o.b1; b2 = o.b2; a1 = o.a1; a2 = o.a2; }
+
         /** Shelves use the cookbook's shelf slope S = 1 (as the prototype's Web Audio filters do). */
         void setLowShelf (double sampleRate, double freq, double gainDb) noexcept  { setShelf (sampleRate, freq, gainDb, false); }
         void setHighShelf (double sampleRate, double freq, double gainDb) noexcept { setShelf (sampleRate, freq, gainDb, true); }

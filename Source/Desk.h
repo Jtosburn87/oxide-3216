@@ -3,6 +3,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "AudioEngine.h"
 #include "Widgets.h"
+#include "Cassette.h"
 
 /** Fixed console geometry, in desk units (pixels at 100% zoom). */
 namespace DeskLayout
@@ -81,7 +82,9 @@ private:
     AudioEngine& engine;
     TapeMachine& tape;
 
+    Cassette cassette;
     TapeClock clock;
+    juce::OwnedArray<RadioParamButton> speedButtons;
     juce::TextButton power { "Power" }, rew { "Rew" }, stop { "Stop" }, play { "Play" }, rec { "Rec" }, erase { "Erase" };
     Knob recordLevel;
     juce::OwnedArray<ParamButton> armButtons;

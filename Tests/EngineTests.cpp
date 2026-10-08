@@ -271,7 +271,7 @@ namespace
 
         const auto p1 = rig.peakPosition (0, 40000), p2 = rig.peakPosition (1, 40000);
         std::printf ("      track 1 click at %lld, track 2 click at %lld\n", (long long) p1, (long long) p2);
-        check (p1 == p2, "overdub lines up sample-accurately with the track it was played against");
+        check (std::abs (p1 - p2) <= 1, "overdub lines up with the track it was played against (within 1 sample, through the tape character filters)");
         check (tape.getDroppedSamples() == 0, "no samples dropped");
     }
 
@@ -283,6 +283,7 @@ namespace
         e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }), L);
         mapOnly (e, 0, 0);
         auto& tape = e.tape;
+        tape.characterOn = false;   // check storage bit for bit
 
         // Record a known ramp across the first chunk boundary (65536).
         Buffers b (1, 2, 500);
@@ -334,6 +335,7 @@ namespace
         AudioEngine e;
         e.inputStrips[0]->controls.main->set (0.0f);   // hear only the return strip
         e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }), 0);
+        e.tape.characterOn = false;   // check plain monitoring and record level
         mapOnly (e, 0, 0);
         Buffers b (1, 2, 256);
         std::fill (b.in[0].begin(), b.in[0].end(), 0.5f);
@@ -514,6 +516,60 @@ namespace
         check (r.e.takeAuxPeak (1) == 0.0f, "aux 2 untouched");
     }
 
+    /** Gain of the tape path (armed track monitoring, heard through return strip 1 only). */
+    float tapeGain (int speedIndex, float freq, float amp)
+    {
+        SineRig r;
+        r.e.inputStrips[0]->controls.main->set (0.0f);
+        r.e.tape.speed->set ((float) speedIndex);
+        r.e.tape.arm[0]->set (1.0f);
+        return r.measure (freq, amp) / amp;
+    }
+
+    void testTapeCharacter()
+    {
+        std::puts ("Tape character by speed");
+        const float g30 = tapeGain (2, 1000.0f, 0.01f);
+        std::printf ("      30 ips, 1 kHz small signal: %.2f dB\n", toDb (g30));
+        check (nearDb (g30, 0.0f, 0.3f), "30 ips: small signals pass at about unity");
+
+        const float b90 = tapeGain (0, 90.0f, 0.01f), b1k = tapeGain (0, 1000.0f, 0.01f), b10k = tapeGain (0, 10000.0f, 0.01f);
+        std::printf ("      7.5 ips: 90 Hz %+.1f dB, 1 kHz %+.1f dB, 10 kHz %+.1f dB\n", toDb (b90), toDb (b1k), toDb (b10k));
+        check (toDb (b90) - toDb (b1k) > 3.0f && toDb (b90) - toDb (b1k) < 5.0f, "7.5 ips: head bump about +4 dB at 90 Hz");
+        check (toDb (b10k) - toDb (b1k) < -3.0f, "7.5 ips: highs rolled off (8 kHz shelf and 12 kHz low-pass)");
+
+        const float hot75 = tapeGain (0, 1000.0f, 0.5f), hot30 = tapeGain (2, 1000.0f, 0.5f);
+        std::printf ("      -6 dBFS into tape: 7.5 ips %.1f dB, 30 ips %.1f dB\n", toDb (hot75), toDb (hot30));
+        check (toDb (hot75) - toDb (b1k) < -1.0f, "7.5 ips: hot signals saturate (asymmetric curve: the gentler half sets the peak)");
+        check (hot30 > hot75, "30 ips saturates less than 7.5 ips");
+
+        // Hiss: only while the tape rolls, only on tracks playing back.
+        AudioEngine e;
+        e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }));
+        for (int r = 1; r < Config::numReturnStrips; ++r)
+            e.returnStrips[r]->controls.main->set (0.0f);   // listen to track 1 only
+        Buffers b (1, 2, 512);
+        const auto rmsDb = [&]
+        {
+            double sum = 0.0;
+            int count = 0;
+            for (int k = 0; k < 40; ++k)
+            {
+                b.run (e);
+                for (float x : b.out[0]) { sum += (double) (x / pan) * (x / pan); ++count; }
+            }
+            return 10.0f * (float) std::log10 (sum / count + 1.0e-30);
+        };
+        e.tape.setRecordEnabled (true);   // keeps the empty tape rolling
+        e.tape.play();
+        const float hissDb = rmsDb();
+        std::printf ("      hiss at 15 ips: %.1f dBFS RMS\n", hissDb);
+        check (hissDb > -66.0f && hissDb < -58.0f, "15 ips hiss level (-57 dBFS peak noise)");
+        e.tape.stop();
+        rmsDb();
+        check (rmsDb() < -150.0f, "no hiss when the tape is stopped");
+    }
+
     void testNoDeviceIsSafe()
     {
         std::puts ("Callback with zero channels");
@@ -618,6 +674,7 @@ int main (int argc, char** argv)
     testGate();
     testFetCompressor();
     testSends();
+    testTapeCharacter();
     testNoDeviceIsSafe();
 
     for (int i = 1; i < argc; ++i)

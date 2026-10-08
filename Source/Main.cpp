@@ -33,6 +33,7 @@ public:
         auto saved = properties.getUserSettings()->getXmlValue ("audio");
         engine = std::make_unique<AudioEngine>();
         engine->initialise (saved.get());
+        engine->projectName = properties.getUserSettings()->getValue ("projectName", "Untitled song");
 
         mainWindow = std::make_unique<MainWindow> (getApplicationName(), *engine, [this] { saveSettings(); });
     }
@@ -95,6 +96,7 @@ private:
             return;
         if (auto xml = engine->createStateXml())
             properties.getUserSettings()->setValue ("audio", xml.get());
+        properties.getUserSettings()->setValue ("projectName", engine->projectName.toString());
         properties.saveIfNeeded();
     }
 

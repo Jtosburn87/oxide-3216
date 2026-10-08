@@ -1,4 +1,4 @@
-#include "Desk.h"
+﻿#include "Desk.h"
 #include "ConsoleLookAndFeel.h"
 
 using namespace ConsoleColours;
@@ -342,8 +342,17 @@ CentreSection::CentreSection (AudioEngine& e)
       recordLevel (*e.tape.recordLevel, "Level", juce::Colour (0xffd6392d)),
       mainFader (*e.mainFader)
 {
+    cassette.projectName().referTo (engine.projectName);
+    addAndMakeVisible (cassette);
     addAndMakeVisible (clock);
     clock.setTitle ("Tape clock");
+
+    for (int i = 0; i < 3; ++i)
+    {
+        auto* b = speedButtons.add (new RadioParamButton (*tape.speed, i, TapeMachine::speeds[i].name));
+        b->setTooltip (juce::String (TapeMachine::speeds[i].name) + " inches per second");
+        addAndMakeVisible (b);
+    }
 
     styleTransport (power, juce::Colour (0xffc9a23a));
     styleTransport (rew, juce::Colour (0xff8a9094));
@@ -452,9 +461,11 @@ void CentreSection::resized()
     mainMeters[1].setBounds (mainCx + 2, my, 10, mh);
 
     // Tape machine panel, left column.
-    deckBox = { 12, bridgeH + 12, 300, 300 };
+    deckBox = { 12, bridgeH + 12, 300, 476 };
     auto d = deckBox.reduced (10);
     d.removeFromTop (18);   // title
+    cassette.setBounds (d.removeFromTop (Cassette::height).withSizeKeepingCentre (Cassette::width, Cassette::height));
+    d.removeFromTop (8);
     clock.setBounds (d.removeFromTop (44));
     d.removeFromTop (8);
 
@@ -468,7 +479,17 @@ void CentreSection::resized()
 
     d.removeFromTop (16);
     levelBox = d.removeFromTop (70);
-    recordLevel.setBounds (juce::Rectangle<int> (Knob::preferredWidth, Knob::preferredHeight).withCentre (levelBox.getCentre().translated (0, 4)));
+    {
+        auto inner = levelBox.reduced (10, 0).withTrimmedTop (10);
+        recordLevel.setBounds (inner.removeFromRight (Knob::preferredWidth + 20).withSizeKeepingCentre (Knob::preferredWidth, Knob::preferredHeight));
+        auto speedRow = inner.withSizeKeepingCentre (inner.getWidth(), 26);
+        const int w = (speedRow.getWidth() - 8) / 3;
+        for (auto* b : speedButtons)
+        {
+            b->setBounds (speedRow.removeFromLeft (w));
+            speedRow.removeFromLeft (4);
+        }
+    }
 
     d.removeFromTop (14);
     armBox = d.removeFromTop (72);
@@ -479,7 +500,7 @@ void CentreSection::resized()
 
     // Group EQ: full centre width under the tape machine and (stage 5) the bus compressor.
     // One column per sub, four bands down, gain and frequency side by side.
-    groupEqBox = { 12, bridgeH + 470, centreW - 24, 24 + 4 * 52 + 4 };
+    groupEqBox = { 12, bridgeH + 512, centreW - 24, 24 + 4 * 52 + 4 };
     const int colWidth = (groupEqBox.getWidth() - 8) / Config::numSubs;
     for (int k = 0; k < Config::numSubs; ++k)
     {
@@ -523,7 +544,7 @@ void CentreSection::paint (juce::Graphics& g)
     g.drawText ("Tape machine, " + juce::String (TapeMachine::numTracks) + " track",
                 deckBox.reduced (10).withHeight (16), juce::Justification::centredLeft, false);
 
-    paintSection (g, "Record level", levelBox, faderArea);
+    paintSection (g, "Tape speed (ips) and record level", levelBox, faderArea);
     paintSection (g, "Record arm", armBox, faderArea);
 
     // Group EQ.
@@ -570,6 +591,11 @@ void CentreSection::update()
 
     const double sr = tape.getSampleRate();
     clock.setTime (sr > 0 ? (double) tape.getPosition() / sr : 0.0, recording);
+
+    const auto& sp = tape.currentSpeed();
+    const auto len = tape.getLength();
+    const float progress = len > (juce::int64) sr ? (float) ((double) tape.getPosition() / (double) len) : 0.0f;
+    cassette.update (1.0 / 30.0, tape.isPlaying(), sp.secondsPerTurn, progress, juce::String (sp.name) + " ips");
 
     power.setToggleState (engine.isPowered(), juce::dontSendNotification);
     play.setToggleState (tape.isPlaying(), juce::dontSendNotification);

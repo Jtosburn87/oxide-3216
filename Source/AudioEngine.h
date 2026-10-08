@@ -1,6 +1,7 @@
-#pragma once
+﻿#pragma once
 
 #include <juce_audio_devices/juce_audio_devices.h>
+#include <juce_data_structures/juce_data_structures.h>
 #include <array>
 #include <atomic>
 #include "Config.h"
@@ -65,6 +66,9 @@ public:
 
     /** Number of audio callbacks so far: lets the UI tell whether audio is actually running. */
     std::uint64_t getCallbackCount() const noexcept { return callbackCount.load (std::memory_order_relaxed); }
+
+    /** Project name, written on the cassette label (message thread only). */
+    juce::Value projectName { juce::var ("Untitled song") };
 
     std::atomic<bool> testToneOn { false };   // 440 Hz at -18 dBFS into main
 

@@ -63,6 +63,7 @@ target_sources(ConsoleTape PRIVATE
     Source/Main.cpp
     Source/MainComponent.cpp
     Source/AudioSettingsComponent.cpp
+    Source/Cassette.cpp
     Source/ConsoleLookAndFeel.cpp
     Source/Desk.cpp
     Source/Widgets.cpp)
