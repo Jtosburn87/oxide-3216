@@ -9,7 +9,8 @@ namespace
 }
 
 MainComponent::MainComponent (AudioEngine& e, std::function<void()> save)
-    : engine (e), saveSettings (std::move (save)), desk (e)
+    : engine (e), saveSettings (std::move (save)), desk (e),
+      patchBay (e, [this] { if (saveSettings) saveSettings(); })
 {
     audioButton.onClick = [this] { openAudioSettings(); };
     toneButton.setClickingTogglesState (true);
@@ -17,6 +18,10 @@ MainComponent::MainComponent (AudioEngine& e, std::function<void()> save)
     toneButton.onClick = [this] { engine.testToneOn.store (toneButton.getToggleState()); };
     fitButton.setTooltip ("Zoom so the whole console fits the window");
     fitButton.onClick = [this] { fitToWindow(); };
+    patchButton.setTooltip ("Open the patch bay");
+    patchButton.onClick = [this] { patchBay.setVisible (true); patchBay.toFront (true); };
+    patchBay.onClose = [this] { patchBay.setVisible (false); patchButton.grabKeyboardFocus(); };
+    addChildComponent (patchBay);
 
     zoomLabel.setText ("Zoom", juce::dontSendNotification);
     zoomLabel.setFont (ConsoleLookAndFeel::uiFont (14.0f));
@@ -39,7 +44,7 @@ MainComponent::MainComponent (AudioEngine& e, std::function<void()> save)
     statusLabel.setJustificationType (juce::Justification::centredRight);
 
     for (juce::Component* c : { (juce::Component*) &audioButton, (juce::Component*) &toneButton, (juce::Component*) &zoomLabel,
-                                (juce::Component*) &zoomSlider, (juce::Component*) &fitButton, (juce::Component*) &statusLabel })
+                                (juce::Component*) &zoomSlider, (juce::Component*) &fitButton, (juce::Component*) &patchButton, (juce::Component*) &statusLabel })
         addAndMakeVisible (c);
 
     deskHolder.addAndMakeVisible (desk);
@@ -172,9 +177,12 @@ void MainComponent::resized()
     bar.removeFromLeft (6);
     fitButton.setBounds (bar.removeFromLeft (60));
     bar.removeFromLeft (8);
+    patchButton.setBounds (bar.removeFromLeft (100));
+    bar.removeFromLeft (8);
     statusLabel.setBounds (bar);
 
     viewport.setBounds (getLocalBounds().withTrimmedTop (topBarH));
+    patchBay.setBounds (getLocalBounds());
 
     if (! fittedOnce && viewport.getWidth() > 0)
     {

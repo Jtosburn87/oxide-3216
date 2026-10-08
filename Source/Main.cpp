@@ -2,6 +2,7 @@
 #include "AudioEngine.h"
 #include "MainComponent.h"
 #include "AudioSettingsComponent.h"
+#include "PatchBay.h"
 
 class ConsoleTapeApplication : public juce::JUCEApplication
 {
@@ -62,7 +63,18 @@ public:
         {
             // "--snapshot out.png 1.0 settings" renders the audio device window instead of the desk.
             std::unique_ptr<juce::Component> view;
-            if (args.contains ("settings"))
+            if (args.contains ("patchbay"))
+            {
+                using P = AudioEngine::Patch;
+                e.setPatch (P::returnIn + 5, std::uint64_t (1) << (P::auxOut + 0));   // reverb return
+                e.setPatch (P::tapeIn + 2, std::uint64_t (1) << (P::channelOut + 7));
+                e.setPatch (P::channelIn + 15, (std::uint64_t (1) << (P::subOut + 1)) | (std::uint64_t (1) << P::mainL));
+                e.setPatch (P::returnIn + 12, std::uint64_t (1) << (P::tapeOut + 3));
+                auto panel = std::make_unique<PatchBayPanel> (e, nullptr);
+                panel->setSize (1500, 520);
+                view = std::move (panel);
+            }
+            else if (args.contains ("settings"))
             {
                 auto settings = std::make_unique<AudioSettingsComponent> (e, nullptr);
                 if (args.contains ("outputs"))

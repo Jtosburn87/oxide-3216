@@ -12,6 +12,8 @@ AudioEngine::AudioEngine()
         inputSource[(size_t) c].store (c);
     mainOutput[0].store (0);
     mainOutput[1].store (1);
+    for (auto& p : patch)
+        p.store (0);
     for (auto& o : auxOutput)
         o.store (-1);
     for (auto& pair : subOutput)
@@ -85,6 +87,10 @@ void AudioEngine::initialise (const juce::XmlElement* savedState)
                 setSubOutput (k, side, routing->getIntAttribute ("sub" + juce::String (k + 1) + (side == 0 ? "L" : "R"), -1));
     }
 
+    if (auto* p = savedState != nullptr ? savedState->getChildByName ("PATCH") : nullptr)
+        for (int d = 0; d < Patch::numDestinations; ++d)
+            setPatch (d, (std::uint64_t) p->getStringAttribute ("d" + juce::String (d), "0").getHexValue64());
+
     deviceManager.addAudioCallback (this);
 }
 
@@ -106,6 +112,10 @@ std::unique_ptr<juce::XmlElement> AudioEngine::createStateXml() const
     for (int k = 0; k < Config::numSubs; ++k)
         for (int side = 0; side < 2; ++side)
             routing->setAttribute ("sub" + juce::String (k + 1) + (side == 0 ? "L" : "R"), getSubOutput (k, side));
+    auto* p = xml->createNewChildElement ("PATCH");
+    for (int d = 0; d < Patch::numDestinations; ++d)
+        if (const auto m = getPatch (d); m != 0)
+            p->setAttribute ("d" + juce::String (d), juce::String::toHexString ((juce::int64) m));
     return xml;
 }
 
@@ -313,6 +323,10 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputs, 
     for (auto* eq : groupEq)
         eq->update();
 
+    std::uint64_t patchedSources = 0;
+    for (auto& p : patch)
+        patchedSources |= p.load (std::memory_order_relaxed);
+
     for (int start = 0; start < numSamples; start += maxBlock)
     {
         const int n = juce::jmin (maxBlock, numSamples - start);
@@ -326,22 +340,24 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputs, 
         for (auto& a : aux)
             juce::FloatVectorOperations::clear (a.data(), n);
 
-        // Input bank.
+        // Input bank: interface input, plus any cables patched into the channel strip input.
         for (int c = 0; c < Config::numInputStrips; ++c)
-            inputStrips[c]->process (sources[c] != nullptr ? sources[c] + start : nullptr,
+            inputStrips[c]->process (patchedInput (Patch::channelIn + c, sources[c] != nullptr ? sources[c] + start : nullptr, 0, n),
                                      inputDirect[(size_t) c].data(), buses, n, anySolo);
 
-        // Tape: channel direct outs are normalled to tape ins.
+        // Tape: channel direct outs are normalled to tape ins; a cable breaks the normal.
         for (int t = 0; t < Config::numTracks; ++t)
         {
-            tapeInPtrs[t] = t < Config::numInputStrips ? inputDirect[(size_t) t].data() : nullptr;
+            const float* normal = t < Config::numInputStrips ? inputDirect[(size_t) t].data() : nullptr;
+            tapeInPtrs[t] = patchedInput (Patch::tapeIn + t, normal, 1, n);
             tapeOutPtrs[t] = tapeOut[(size_t) t].data();
         }
         tape.process (tapeInPtrs, tapeOutPtrs, n);
 
-        // Return bank: tape outs are normalled to return strip ins.
+        // Return bank: tape outs are normalled to return strip ins; a cable breaks the normal.
         for (int r = 0; r < Config::numReturnStrips; ++r)
-            returnStrips[r]->process (tapeOut[(size_t) r].data(), returnDirect[(size_t) r].data(), buses, n, anySolo);
+            returnStrips[r]->process (patchedInput (Patch::returnIn + r, tapeOut[(size_t) r].data(), 2, n),
+                                      returnDirect[(size_t) r].data(), buses, n, anySolo);
 
         // Subs: group EQ -> sub fader -> main (and optional sub outputs).
         for (int k = 0; k < Config::numSubs; ++k)
@@ -374,6 +390,8 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputs, 
             }
             raisePeak (subPeak[(size_t) k][0], pl);
             raisePeak (subPeak[(size_t) k][1], pr);
+            for (int i = 0; i < n; ++i)
+                subMono[(size_t) k][(size_t) i] = 0.5f * (l[i] + r[i]);   // the patch bay sub out is mono
             if (subOut[k][0] != nullptr) juce::FloatVectorOperations::add (subOut[k][0] + start, l, n);
             if (subOut[k][1] != nullptr) juce::FloatVectorOperations::add (subOut[k][1] + start, r, n);
         }
@@ -452,5 +470,61 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputs, 
             if (mainOut[side] != nullptr)
                 juce::FloatVectorOperations::add (mainOut[side] + start, mix[side], n);
         }
+
+        // Keep this block of every patched source for cables that point backwards in the signal flow.
+        if (patchedSources != 0)
+            for (int s = 0; s < Patch::numSources; ++s)
+                if ((patchedSources >> s) & 1u)
+                    std::memcpy (patchPrevious[(size_t) s].data(), patchSource (s, 4), sizeof (float) * (size_t) n);
     }
+}
+
+//==============================================================================
+void AudioEngine::setPatch (int dest, std::uint64_t sources)
+{
+    if (juce::isPositiveAndBelow (dest, Patch::numDestinations))
+        patch[(size_t) dest].store (sources & ((std::uint64_t (1) << Patch::numSources) - 1));
+}
+
+std::uint64_t AudioEngine::getPatch (int dest) const
+{
+    return juce::isPositiveAndBelow (dest, Patch::numDestinations) ? patch[(size_t) dest].load() : 0;
+}
+
+void AudioEngine::clearPatch()
+{
+    for (auto& p : patch)
+        p.store (0);
+}
+
+const float* AudioEngine::patchSource (int s, int phase) const noexcept
+{
+    // phase: 0 = nothing processed yet this block, 1 = input strips done, 2 = tape done, 3 = returns done, 4 = all.
+    // Anything not processed yet comes from the previous block.
+    const float* previous = patchPrevious[(size_t) s].data();
+    if (s < Patch::returnOut) return phase >= 1 ? inputDirect[(size_t) s].data() : previous;
+    if (s < Patch::tapeOut)   return phase >= 3 ? returnDirect[(size_t) (s - Patch::returnOut)].data() : previous;
+    if (s < Patch::auxOut)    return phase >= 2 ? tapeOut[(size_t) (s - Patch::tapeOut)].data() : previous;
+    if (s < Patch::subOut)    return phase >= 4 ? aux[(size_t) (s - Patch::auxOut)].data() : previous;
+    if (s < Patch::mainL)     return phase >= 4 ? subMono[(size_t) (s - Patch::subOut)].data() : previous;
+    return phase >= 4 ? (s == Patch::mainL ? mixL.data() : mixR.data()) : previous;
+}
+
+const float* AudioEngine::patchedInput (int dest, const float* normal, int phase, int n) noexcept
+{
+    const auto cables = patch[(size_t) dest].load (std::memory_order_relaxed);
+    if (cables == 0)
+        return normal;
+
+    // A cable breaks a normal. Channel strip inputs are not normalled: the interface input stays.
+    float* d = patchInput[(size_t) dest].data();
+    if (! Patch::isNormalled (dest) && normal != nullptr)
+        std::memcpy (d, normal, sizeof (float) * (size_t) n);
+    else
+        std::memset (d, 0, sizeof (float) * (size_t) n);
+
+    for (int s = 0; s < Patch::numSources; ++s)
+        if ((cables >> s) & 1u)
+            juce::FloatVectorOperations::add (d, patchSource (s, phase), n);
+    return d;
 }

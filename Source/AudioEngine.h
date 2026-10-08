@@ -49,6 +49,25 @@ public:
     void setSubOutput (int sub, int side, int deviceOutput);      // optional, -1 = none
     int  getSubOutput (int sub, int side) const;
 
+    //==========================================================================
+    // Patch bay. Sources (top row) and destinations (bottom row), as in the prototype.
+    struct Patch
+    {
+        // Sources
+        static constexpr int channelOut = 0, returnOut = 16, tapeOut = 32, auxOut = 48, subOut = 56, mainL = 60, mainR = 61;
+        static constexpr int numSources = 62;
+        // Destinations
+        static constexpr int tapeIn = 0, returnIn = 16, channelIn = 32;
+        static constexpr int numDestinations = 48;
+
+        static bool isNormalled (int dest) noexcept { return dest < channelIn; }   // tape ins and return strip ins
+    };
+
+    /** Which sources are plugged into a destination (bit n = source n). Message thread. */
+    void setPatch (int destination, std::uint64_t sources);
+    std::uint64_t getPatch (int destination) const;
+    void clearPatch();
+
     /** Extra recording offset in samples, added to the latency the driver reports.
         Positive = the driver under-reports its latency. */
     void setRecordOffset (int samples);
@@ -125,6 +144,16 @@ private:
     Block mixL {}, mixR {};
     std::array<Block, Config::numSubs> subL {}, subR {};
     std::array<Block, Config::numAux> aux {};
+
+    // Patch bay.
+    std::array<std::atomic<std::uint64_t>, Patch::numDestinations> patch;
+    std::array<Block, Patch::numSources> patchPrevious {};      // last block of each source, for patches that point backwards
+    std::array<Block, Patch::numDestinations> patchInput {};    // summed cables into each destination
+    std::array<Block, Config::numSubs> subMono {};
+    const float* patchSource (int source, int phase) const noexcept;
+    /** The signal arriving at a patch destination: the normal (or, for channel inputs, the interface input)
+        when nothing is plugged in; otherwise the cables, summed. Channel inputs keep the interface input too. */
+    const float* patchedInput (int dest, const float* normal, int phase, int n) noexcept;
 
     static void raisePeak (std::atomic<float>& peak, float value) noexcept;
 

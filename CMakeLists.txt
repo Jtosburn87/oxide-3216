@@ -63,6 +63,7 @@ juce_add_gui_app(ConsoleTape
 target_sources(ConsoleTape PRIVATE
     Source/Main.cpp
     Source/MainComponent.cpp
+    Source/PatchBay.cpp
     Source/AudioSettingsComponent.cpp
     Source/BusCompPanel.cpp
     Source/Cassette.cpp

@@ -688,6 +688,70 @@ namespace
         }
     }
 
+    void testPatchBay()
+    {
+        using P = AudioEngine::Patch;
+        std::puts ("Patch bay");
+        const auto bit = [] (int source) { return std::uint64_t (1) << source; };
+
+        AudioEngine e;
+        e.prepare (48000.0, channels ({ 0, 1 }), channels ({ 0, 1, 2 }));
+        e.setInputSource (0, 0);
+        e.setInputSource (1, 1);
+        for (int c = 2; c < AudioEngine::numConsoleInputs; ++c)
+            e.setInputSource (c, -1);
+        for (auto* s : e.inputStrips)  s->controls.main->set (0.0f);   // listen to the return bank only
+        for (auto* s : e.returnStrips) s->controls.main->set (0.0f);
+        e.tape.characterOn = false;
+        e.tape.arm[0]->set (1.0f);                                     // track 1 passes its input through
+        e.tape.arm[1]->set (1.0f);
+        Buffers b (2, 3, 256);
+        std::fill (b.in[0].begin(), b.in[0].end(), 0.25f);
+        std::fill (b.in[1].begin(), b.in[1].end(), 0.5f);
+
+        const auto returnLevel = [&] (int r) { e.returnStrips[r]->takePeak(); settle (e, b); return e.returnStrips[r]->takePeak(); };
+
+        check (near (returnLevel (0), 0.25f), "normalled: input 1 -> tape 1 -> return 1");
+
+        // Channel 2's direct out into return strip in 1 breaks the tape 1 normal.
+        e.setPatch (P::returnIn + 0, bit (P::channelOut + 1));
+        check (near (returnLevel (0), 0.5f), "cable into return in 1 replaces tape out 1");
+
+        // Two cables into one input are summed.
+        e.setPatch (P::returnIn + 0, bit (P::channelOut + 0) | bit (P::channelOut + 1));
+        check (near (returnLevel (0), 0.75f), "two cables into one input add up");
+
+        // Channel 1 into tape in 2 breaks channel 2's normal to tape 2.
+        e.setPatch (P::returnIn + 0, 0);
+        e.setPatch (P::tapeIn + 1, bit (P::channelOut + 0));
+        check (near (returnLevel (1), 0.25f), "cable into tape in 2 replaces channel 2");
+        e.setPatch (P::tapeIn + 1, 0);
+        check (near (returnLevel (1), 0.5f), "pulling the cable restores the normal");
+
+        // Channel strip ins are not normalled: a cable adds to the interface input.
+        e.setPatch (P::channelIn + 1, bit (P::channelOut + 0));
+        check (near (returnLevel (1), 0.75f), "cable into channel strip in 2 adds to interface input 2");
+        e.setPatch (P::channelIn + 1, 0);
+
+        // Backwards patch: tape out 1 into channel strip in 3 (one block later), on to return 3 via tape 3.
+        e.tape.arm[2]->set (1.0f);
+        e.setPatch (P::channelIn + 2, bit (P::tapeOut + 0));
+        check (near (returnLevel (2), 0.25f), "backwards patch (tape out 1 -> channel in 3) works");
+
+        // Mono sub out = (L + R) / 2: channel 1 panned hard left into sub 1, patched into return in 4.
+        e.setPatch (P::channelIn + 2, 0);
+        auto& c1 = e.inputStrips[0]->controls;
+        c1.sub[0]->set (1.0f);
+        c1.pan->set (-1.0f);
+        e.setPatch (P::returnIn + 3, bit (P::subOut + 0));
+        check (near (returnLevel (3), 0.125f, 2.0e-3f), "sub 1 out is mono (L + R) / 2");
+
+        // Main L patched back into a return (feedback-safe: main is off for every strip here).
+        e.setPatch (P::returnIn + 4, bit (P::mainL));
+        settle (e, b);
+        check (std::isfinite (b.out[0][10]), "patching main back in stays stable");
+    }
+
     void testNoDeviceIsSafe()
     {
         std::puts ("Callback with zero channels");
@@ -795,6 +859,7 @@ int main (int argc, char** argv)
     testTapeCharacter();
     testBusCompressor();
     testMasterSection();
+    testPatchBay();
     testNoDeviceIsSafe();
 
     for (int i = 1; i < argc; ++i)

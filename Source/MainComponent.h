@@ -4,6 +4,7 @@
 #include "AudioEngine.h"
 #include "ConsoleLookAndFeel.h"
 #include "Desk.h"
+#include "PatchBay.h"
 
 /** Top bar (name plate, audio device, zoom, Fit, status) above the zoomable desk. */
 class MainComponent : public juce::Component,
@@ -21,13 +22,14 @@ private:
     AudioEngine& engine;
     std::function<void()> saveSettings;
 
-    juce::TextButton audioButton { "Audio device" }, toneButton { "Test tone" }, fitButton { "Fit" };
+    juce::TextButton audioButton { "Audio device" }, toneButton { "Test tone" }, fitButton { "Fit" }, patchButton { "Patch bay" };
     juce::Slider zoomSlider;
     juce::Label zoomLabel, statusLabel;
 
     Desk desk;
     juce::Component deskHolder;   // sized to the zoomed desk, so the viewport scrolls correctly
     juce::Viewport viewport;
+    PatchBayPanel patchBay;
     bool fittedOnce = false;
 
     juce::Component::SafePointer<juce::DialogWindow> settingsWindow;
