@@ -129,7 +129,8 @@ StripComponent::StripComponent (ChannelStrip& s)
         add (*f);
     }
 
-    gateThr.setFormatter ([] (float db) { return db <= -79.0f ? juce::String ("off") : juce::String (juce::roundToInt (db)); });
+    gateThr.setEndLabels ("off", "-10");
+    gateRange.setEndLabels ("-60", "0");
     gateFast.setTooltip ("Fast attack: opens in 0.1 ms. A loud transient makes the gate pop.");
     gateFast.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffd9dbd8));
     gateFast.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff0b0b0b));
