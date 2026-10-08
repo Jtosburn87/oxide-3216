@@ -1043,6 +1043,59 @@ namespace
         return hi - lo;
     }
 
+    void testWinding()
+    {
+        std::puts ("Tape: rewind and fast forward wind up and brake like a real transport");
+        AudioEngine e;
+        e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }), 0);
+        auto& tape = e.tape;
+        Buffers b (1, 2, 480);   // 10 ms blocks
+        const double sr = 48000.0;
+        const auto seconds = [&] { return (double) tape.getPosition() / sr; };
+        const auto runFor = [&] (double s) { for (int i = 0; i < juce::roundToInt (s * 100.0); ++i) b.run (e); };
+        const auto runUntilStopped = [&] { for (int i = 0; i < 6000 && tape.isWinding(); ++i) b.run (e); };
+
+        tape.setLength ((juce::int64) (60.0 * sr));   // a minute of recording
+        tape.locate (0);
+        tape.fastForward();
+        runFor (1.0);
+        // Speeding up by 20x over 3 s: after 1 s it runs at 6.7x and has wound 3.3 s of tape.
+        check (std::abs (tape.getWindSpeed() - 6.67f) < 0.1f && std::abs (seconds() - 3.33) < 0.1, "fast forward speeds up gradually");
+        runFor (2.5);
+        check (std::abs (tape.getWindSpeed() - 20.0f) < 0.01f, "full winding speed is 20x play speed");
+        runUntilStopped();
+        check (tape.getPosition() == tape.getLength() && ! tape.isWinding() && tape.getWindDirection() == 0,
+               "fast forward arrives exactly at the end of the recording and stops");
+
+        tape.rewind();
+        runFor (1.0);
+        check (std::abs (seconds() - (60.0 - 3.33)) < 0.1 && tape.getWindSpeed() < 0.0f, "rewind speeds up the same way");
+        runFor (3.0);
+        const double atStop = seconds();
+        tape.stop();
+        runUntilStopped();
+        // From 20x, braking over 0.6 s: v^2 / 2b = 6 s of tape.
+        check (std::abs ((atStop - seconds()) - 6.0) < 0.3 && tape.getWindSpeed() == 0.0f, "stop brakes the tape over about 6 s of tape");
+
+        tape.rewind();
+        runUntilStopped();
+        check (tape.getPosition() == 0 && tape.getWindSpeed() == 0.0f, "rewind arrives exactly at the start and stops");
+
+        tape.fastForward();
+        runFor (0.5);
+        tape.play();
+        b.run (e);
+        check (tape.isPlaying() && ! tape.isWinding(), "play takes over from a wind at once");
+        tape.stop();
+
+        tape.locate ((juce::int64) (30.0 * sr));
+        tape.rewind();
+        runFor (0.5);
+        tape.locate (0);
+        b.run (e);
+        check (tape.getPosition() == 0 && ! tape.isWinding(), "locate cancels a wind");
+    }
+
     void testWowFlutter()
     {
         std::puts ("Tape: wow and flutter");
@@ -1333,6 +1386,7 @@ int main (int argc, char** argv)
     testPatchBay();
     testInserts();
     testPunchAndLoop();
+    testWinding();
     testWowFlutter();
     testSessions();
     testNoDeviceIsSafe();

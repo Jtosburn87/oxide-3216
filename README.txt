@@ -41,6 +41,8 @@ Main: bus compressor -> master inserts -> main fader -> limiter at -3 dBFS -> ou
 TAPE
 ----
 Arm tracks to monitor and record their input; unarmed tracks play back.
+Rew and FF wind like a real machine: they speed up over 3 seconds to 20x play speed and slow
+down to arrive at the start or the end of the recording. Stop brakes; Play takes over at once.
 Rec arms recording; Play rolls the tape. Recording is shifted by the interface's latency
 (plus any plugin delay) so overdubs line up with what you heard. If they still land early
 or late with your interface, correct it under Audio device > Recording offset.
@@ -55,7 +57,7 @@ Locate: "Set In" / "Set Out" mark a region at the current position.
 
 Click the cassette label to rename the project; it is the default session and export name.
 
-Keyboard: Space play/stop, Home rewind, Ctrl+N new, Ctrl+O open, Ctrl+S save,
+Keyboard: Space play/stop, Home rewind to the start, Ctrl+N new, Ctrl+O open, Ctrl+S save,
 Ctrl+Shift+S save as, Ctrl+E export.
 
 

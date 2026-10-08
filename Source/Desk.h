@@ -87,7 +87,7 @@ private:
     Cassette cassette;
     TapeClock clock;
     juce::OwnedArray<RadioParamButton> speedButtons;
-    juce::TextButton power { "Power" }, rew { "Rew" }, stop { "Stop" }, play { "Play" }, rec { "Rec" }, erase { "Erase" };
+    juce::TextButton power { "Power" }, rew { "Rew" }, ff { "FF" }, stop { "Stop" }, play { "Play" }, rec { "Rec" }, erase { "Erase" };
     Knob recordLevel;
     juce::OwnedArray<ParamButton> armButtons;
     juce::TextButton setIn { "Set In" }, setOut { "Set Out" }, loopButton { "Loop" }, punchButton { "Punch" };

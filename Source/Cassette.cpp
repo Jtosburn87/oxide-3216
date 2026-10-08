@@ -71,7 +71,7 @@ void Cassette::update (double seconds, bool running, float secondsPerTurn, float
         label.setText (name.toString(), false);
 
     bool changed = false;
-    if (running && secondsPerTurn > 0.0f)
+    if (running && secondsPerTurn != 0.0f)   // negative: the reels turn the other way (rewinding)
     {
         hubAngle = std::fmod (hubAngle - (float) seconds / secondsPerTurn * 2.0f * pi, 2.0f * pi);   // turns anticlockwise
         changed = true;

@@ -65,8 +65,21 @@ bool TapeMachine::isRecording (int track) const noexcept
 }
 
 //==============================================================================
-void TapeMachine::play()  { playing.store (true); }
-void TapeMachine::stop()  { playing.store (false); }
+void TapeMachine::play()
+{
+    windRequest.store (0);
+    windReset.store (true);
+    playing.store (true);
+}
+
+void TapeMachine::stop()
+{
+    playing.store (false);
+    windRequest.store (0);   // a wind brakes to a stop
+}
+
+void TapeMachine::rewind()      { playing.store (false); windRequest.store (-1); }
+void TapeMachine::fastForward() { playing.store (false); windRequest.store (1); }
 void TapeMachine::setRecordEnabled (bool on) { recordEnabled.store (on); }
 
 void TapeMachine::locate (juce::int64 p)
@@ -75,6 +88,8 @@ void TapeMachine::locate (juce::int64 p)
     for (int t = 0; t < numTracks; ++t)
         if (arm[(size_t) t]->on())
             ensureChunks (t, p - recordDelay() - chunkSize, p + (juce::int64) (allocateAheadSeconds * sampleRate));
+    windRequest.store (0);
+    windReset.store (true);
     position.store (p);
     locateRequest.store (p);
 }
@@ -264,6 +279,11 @@ void TapeMachine::process (const float* const* tapeIn, float* const* tapeOut, in
     const auto req = locateRequest.exchange (-1);
     if (req >= 0)
         pos = req;
+    if (windReset.exchange (false))
+    {
+        windVel = 0.0;
+        windSpeed.store (0.0f);
+    }
 
     const bool isPlay = playing.load();
     const bool rec = recordEnabled.load() && ! exporting.load();
@@ -348,8 +368,54 @@ void TapeMachine::process (const float* const* tapeIn, float* const* tapeOut, in
         if (endOfTape || (! rec && ! looping && pos >= length.load()))
             playing.store (false);
     }
+    else
+    {
+        wind (n);
+    }
 
     position.store (pos);
+}
+
+void TapeMachine::wind (int n) noexcept
+{
+    const int dir = windRequest.load();
+    if (dir == 0 && windVel == 0.0)
+        return;
+    if (windVel == 0.0)
+        windPos = (double) pos;
+
+    // Speed up towards full winding speed, or brake (Stop, or a change of direction).
+    const double dt = n / sampleRate;
+    const double accel = windMaxSpeed / windRampSeconds, brake = windMaxSpeed / windBrakeSeconds;
+    if (dir != 0 && (windVel == 0.0 || (windVel > 0.0) == (dir > 0)))
+        windVel = juce::jlimit (-windMaxSpeed, windMaxSpeed, windVel + dir * accel * dt);
+    else
+        windVel = windVel > 0.0 ? juce::jmax (0.0, windVel - brake * dt) : juce::jmin (0.0, windVel + brake * dt);
+
+    // Rewind ends at the start, fast forward at the end of the recording. Never faster than the speed that
+    // can still brake in time, so the tape arrives there gently.
+    const double end = windVel < 0.0 ? 0.0 : (double) length.load();
+    const double before = windPos;
+    const bool alreadyThere = windVel < 0.0 ? before <= end : before >= end;
+    if (! alreadyThere)
+    {
+        const double arrival = std::sqrt (2.0 * brake * std::abs (end - before) / sampleRate) + 0.5;
+        windVel = juce::jlimit (-arrival, arrival, windVel);
+        windPos += windVel * n;
+    }
+
+    const bool arrived = alreadyThere || (windVel < 0.0 ? windPos <= end : windPos >= end);
+    if (arrived && windVel != 0.0)
+    {
+        if (! alreadyThere)
+            windPos = end;
+        windVel = 0.0;
+        auto expected = dir;
+        windRequest.compare_exchange_strong (expected, 0);   // unless a new request came in meanwhile
+    }
+
+    pos = (juce::int64) windPos;
+    windSpeed.store ((float) windVel);
 }
 
 void TapeMachine::processSegment (float* const* tapeOut, int offset, int count,

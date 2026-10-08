@@ -299,7 +299,7 @@ bool MainComponent::keyPressed (const juce::KeyPress& k)
         return false;
     }
 
-    // Transport: Space plays / stops, Home rewinds (when no text field has the keyboard).
+    // Transport: Space plays / stops, Home rewinds to the start (when no text field has the keyboard).
     if (code == juce::KeyPress::spaceKey)
     {
         if (engine.tape.isPlaying()) engine.tape.stop(); else engine.tape.play();
@@ -307,8 +307,7 @@ bool MainComponent::keyPressed (const juce::KeyPress& k)
     }
     if (code == juce::KeyPress::homeKey)
     {
-        engine.tape.stop();
-        engine.tape.locate (0);
+        engine.tape.rewind();
         return true;
     }
     return false;

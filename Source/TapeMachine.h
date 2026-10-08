@@ -66,6 +66,16 @@ public:
     void play();
     void stop();
     void locate (juce::int64 samplePosition);
+
+    /** Rewind and fast forward wind like a real transport: they speed up over windRampSeconds to windMaxSpeed
+        times play speed, and brake (windBrakeSeconds from full speed) to stop, or to arrive at the start or at
+        the end of the recording. Stop brakes; Play and locate take over at once. Message thread. */
+    void rewind();
+    void fastForward();
+    int  getWindDirection() const noexcept { return windRequest.load(); }   // -1 rewind, +1 fast forward, 0 none
+    bool isWinding() const noexcept { return windRequest.load() != 0 || windSpeed.load() != 0.0f; }
+    float getWindSpeed() const noexcept { return windSpeed.load(); }        // signed, times play speed
+    static constexpr double windMaxSpeed = 20.0, windRampSeconds = 3.0, windBrakeSeconds = 0.6;
     void setRecordEnabled (bool);
     void eraseAll();
 
@@ -128,6 +138,11 @@ private:
     std::atomic<juce::int64> position { 0 }, length { 0 }, locateRequest { -1 }, dropped { 0 };
     std::atomic<std::uint64_t> blocksProcessed { 0 };
     juce::int64 pos = 0;   // audio thread's own copy of the position
+    std::atomic<int> windRequest { 0 };
+    std::atomic<float> windSpeed { 0.0f };
+    std::atomic<bool> windReset { false };
+    double windVel = 0.0, windPos = 0.0;   // audio thread: signed speed (times play speed), fractional position
+    void wind (int numSamples) noexcept;
     std::atomic<juce::int64> inPoint { 0 }, outPoint { 0 };
     std::array<std::atomic<std::uint32_t>, numTracks> trackRevision {};
 

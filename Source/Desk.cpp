@@ -364,18 +364,21 @@ CentreSection::CentreSection (AudioEngine& e, PluginContext* plugins)
 
     styleTransport (power, juce::Colour (0xffc9a23a));
     styleTransport (rew, juce::Colour (0xff8a9094));
+    styleTransport (ff, juce::Colour (0xff8a9094));
     styleTransport (stop, juce::Colour (0xffd8dadb));
     styleTransport (play, juce::Colour (0xff3fae3f));
     styleTransport (rec, juce::Colour (0xffc8413a));
     styleTransport (erase, juce::Colour (0xff8a9094));
 
     power.setTooltip ("Switches the audio interface on and off (off frees the driver for other programs)");
-    rew.setTooltip ("Stop and return to the start");
+    rew.setTooltip ("Rewind: winds back to the start, speeding up like a real tape machine (Stop brakes)");
+    ff.setTooltip ("Fast forward: winds on to the end of the recording (Stop brakes)");
     rec.setTooltip ("Record enable: armed tracks record while the tape plays");
     erase.setTooltip ("Erase all tracks");
 
     power.onClick = [this] { engine.setPower (! engine.isPowered()); };
-    rew.onClick   = [this] { tape.stop(); tape.locate (0); };
+    rew.onClick   = [this] { tape.rewind(); };
+    ff.onClick    = [this] { tape.fastForward(); };
     stop.onClick  = [this] { tape.stop(); };
     play.onClick  = [this] { tape.play(); };
     rec.onClick   = [this] { tape.setRecordEnabled (! tape.isRecordEnabled()); };
@@ -523,11 +526,13 @@ void CentreSection::resized()
     d.removeFromTop (8);
 
     auto row = d.removeFromTop (32);
-    const int bw = (row.getWidth() - 5 * 4) / 6;
-    for (auto* b : { &power, &rew, &stop, &play, &rec, &erase })
+    const int bw = (row.getWidth() - 6 * 3) / 7;
+    for (auto* b : { &power, &rew, &ff, &stop, &play, &rec, &erase })
     {
-        b->setBounds (row.removeFromLeft (bw));
-        row.removeFromLeft (4);
+        // FF needs less room than the others; Power gets it.
+        const int w = b == &power ? bw + 8 : b == &ff ? bw - 8 : bw;
+        b->setBounds (row.removeFromLeft (w));
+        row.removeFromLeft (3);
     }
 
     d.removeFromTop (16);
@@ -719,10 +724,16 @@ void CentreSection::update()
     const auto& sp = tape.currentSpeed();
     const auto len = tape.getLength();
     const float progress = len > (juce::int64) sr ? (float) ((double) tape.getPosition() / (double) len) : 0.0f;
-    cassette.update (1.0 / 30.0, tape.isPlaying(), sp.secondsPerTurn, progress, juce::String (sp.name) + " ips");
+    // Winding spins the reels faster (capped, so they do not strobe), backwards when rewinding.
+    const float windSpeed = tape.getWindSpeed();
+    const float turn = windSpeed == 0.0f ? sp.secondsPerTurn
+                                         : std::copysign (juce::jmax (0.09f, sp.secondsPerTurn / std::abs (windSpeed)), windSpeed);
+    cassette.update (1.0 / 30.0, tape.isPlaying() || windSpeed != 0.0f, turn, progress, juce::String (sp.name) + " ips");
 
     power.setToggleState (engine.isPowered(), juce::dontSendNotification);
     play.setToggleState (tape.isPlaying(), juce::dontSendNotification);
+    rew.setToggleState (tape.getWindDirection() < 0, juce::dontSendNotification);
+    ff.setToggleState (tape.getWindDirection() > 0, juce::dontSendNotification);
     rec.setToggleState (tape.isRecordEnabled(), juce::dontSendNotification);
     loopButton.setToggleState (tape.loopOn.load(), juce::dontSendNotification);
     punchButton.setToggleState (tape.punchOn.load(), juce::dontSendNotification);
