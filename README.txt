@@ -22,6 +22,9 @@ THE CONSOLE
 Left bank: 16 input channels. Right bank: 16 tape-return channels. Centre: tape machine,
 group EQs, bus compressor, inserts and aux returns, bus faders and the main fader.
 Zoom with the slider; "Fit" shows the whole console.
+"Sections" moves the input bank, centre section or return bank into a window of its own (for a
+second monitor). Close that window, or press "Put back", to return it to the console. Windows
+that are out stay out, in the same place, the next time ConsoleTape starts.
 
 Every strip: trim, high-pass filter, 4-band EQ, gate (Fast atk = fast attack with the pop),
 1176-style compressor, 8 aux sends (P = pre-fader), sub assigns S1-S4, main assign, pan,
