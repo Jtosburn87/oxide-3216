@@ -185,10 +185,7 @@ public:
             }
             else if (args.contains ("settings"))
             {
-                auto settings = std::make_unique<AudioSettingsComponent> (e, nullptr);
-                if (args.contains ("outputs"))
-                    settings->showOutputsTab();
-                view = std::move (settings);
+                view = std::make_unique<AudioSettingsComponent> (e, nullptr);
             }
             else
                 view = std::make_unique<Desk> (e);

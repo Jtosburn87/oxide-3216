@@ -85,24 +85,6 @@ AudioSettingsComponent::AudioSettingsComponent (AudioEngine& e, std::function<vo
 {
     addAndMakeVisible (selector);
 
-    std::vector<MappingPage::Row> inRows;
-    for (int c = 0; c < AudioEngine::numConsoleInputs; ++c)
-        inRows.push_back ({ "Input " + juce::String (c + 1),
-                            [this, c] { return engine.getInputSource (c); },
-                            [this, c] (int ch) { engine.setInputSource (c, ch); } });
-    inputsPage = std::make_unique<MappingPage> ("Which interface input feeds each console input channel", std::move (inRows), 2);
-    inputsPage->onChanged = [this] { changed(); };
-    autoMapButton.setTooltip ("Input channel 1 from interface input 1, channel 2 from input 2, and so on");
-    autoMapButton.onClick = [this]
-    {
-        for (int c = 0; c < AudioEngine::numConsoleInputs; ++c)
-            engine.setInputSource (c, c);
-        refresh();
-        changed();
-    };
-    inputsPage->addAndMakeVisible (autoMapButton);
-    inputsPage->extra = &autoMapButton;
-
     std::vector<MappingPage::Row> outRows;
     outRows.push_back ({ "Main L", [this] { return engine.getMainOutput (0); }, [this] (int ch) { engine.setMainOutput (0, ch); } });
     outRows.push_back ({ "Main R", [this] { return engine.getMainOutput (1); }, [this] (int ch) { engine.setMainOutput (1, ch); } });
@@ -118,12 +100,7 @@ AudioSettingsComponent::AudioSettingsComponent (AudioEngine& e, std::function<vo
     outputsPage = std::make_unique<MappingPage> ("Interface outputs for main, and optionally for each aux master and sub", std::move (outRows), 2);
     outputsPage->onChanged = [this] { changed(); };
 
-    const auto tabColour = ConsoleColours::room;
-    tabs.addTab ("Inputs", tabColour, inputsPage.get(), false);
-    tabs.addTab ("Outputs", tabColour, outputsPage.get(), false);
-    tabs.setTabBarDepth (30);
-    tabs.setOutline (0);
-    addAndMakeVisible (tabs);
+    addAndMakeVisible (*outputsPage);
 
     latencyLabel.setFont (ConsoleLookAndFeel::uiFont (13.0f));
     latencyLabel.setColour (juce::Label::textColourId, ConsoleColours::legend.withAlpha (0.75f));
@@ -175,15 +152,13 @@ void AudioSettingsComponent::changeListenerCallback (juce::ChangeBroadcaster*)
 
 void AudioSettingsComponent::refresh()
 {
-    juce::StringArray inNames, outNames;
-    juce::BigInteger activeIn, activeOut;
+    juce::StringArray outNames;
+    juce::BigInteger activeOut;
     juce::String status = "No audio device open.";
 
     if (auto* device = engine.getDeviceManager().getCurrentAudioDevice())
     {
-        inNames = device->getInputChannelNames();
         outNames = device->getOutputChannelNames();
-        activeIn = device->getActiveInputChannels();
         activeOut = device->getActiveOutputChannels();
 
         const double sr = device->getCurrentSampleRate();
@@ -197,7 +172,6 @@ void AudioSettingsComponent::refresh()
     }
 
     latencyLabel.setText (status, juce::dontSendNotification);
-    inputsPage->refresh (inNames, activeIn);
     outputsPage->refresh (outNames, activeOut);
 }
 
@@ -222,5 +196,5 @@ void AudioSettingsComponent::resized()
     offsetHelp.setBounds (offset);
 
     area.removeFromBottom (10);
-    tabs.setBounds (area);
+    outputsPage->setBounds (area);
 }

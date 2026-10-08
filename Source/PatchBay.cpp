@@ -1,12 +1,14 @@
-﻿#include "PatchBay.h"
+#include "PatchBay.h"
 #include "ConsoleLookAndFeel.h"
 
 using namespace ConsoleColours;
 
 namespace
 {
-    constexpr int jackW = 28, groupGap = 16, pad = 14, rowH = 64;
-    constexpr int topRowY = 10, bottomRowY = 250, fieldH = 330;
+    constexpr int jackW = 28, groupGap = 16, pad = 14;
+    constexpr int row1Top = 10, row1Bottom = 116, row2Top = 250, row2Bottom = 356, fieldH = 490;   // room below for hanging cables
+    constexpr int dividerY = (row1Bottom + 58 + row2Top) / 2;
+    const juce::Colour wiringColour { 0xffe8dcc0 };
 
     juce::String sourceName (int s)
     {
@@ -26,24 +28,38 @@ namespace
         if (d < P::channelIn) return "Return strip in " + juce::String (d - P::returnIn + 1);
         return "Channel strip in " + juce::String (d - P::channelIn + 1);
     }
+
+    /** A cable hangs below both of its ends. */
+    juce::Path cablePath (juce::Point<float> a, juce::Point<float> b)
+    {
+        const float low = juce::jmax (a.y, b.y) + 22.0f + 0.08f * a.getDistanceFrom (b);
+        juce::Path p;
+        p.startNewSubPath (a);
+        p.cubicTo ({ a.x, low }, { b.x, low }, b);
+        return p;
+    }
 }
 
 //==============================================================================
 class PatchBayField::Jack : public juce::Button
 {
 public:
-    Jack (PatchBayField& f, bool src, int i, juce::String number)
-        : juce::Button (src ? sourceName (i) : destinationName (i)), field (f), isSource (src), index (i), label (std::move (number))
+    Jack (PatchBayField& f, Kind k, int i, const juce::String& name, juce::String number)
+        : juce::Button (name), field (f), kind (k), index (i), label (std::move (number))
     {
         setTitle (getName());
         setTooltip (getName());
         setWantsKeyboardFocus (true);
     }
 
-    void clicked() override { field.jackClicked (isSource, index); }
+    void clicked() override { field.jackClicked (kind, index); }
 
     void paintButton (juce::Graphics& g, bool over, bool) override
     {
+        const bool dim = ! isEnabled() || (kind == Kind::destination && ! field.accepts (*this));
+        if (dim)
+            g.beginTransparencyLayer (0.35f);
+
         const auto hole = juce::Rectangle<float> (20.0f, 20.0f).withCentre ({ getWidth() * 0.5f, 12.0f });
 
         // TRS jack: nickel ring with a black hole, or a coloured plug when patched.
@@ -54,12 +70,12 @@ public:
         g.fillEllipse (hole);
         g.setColour (plugColour.isTransparent() ? juce::Colour (0xff050607) : plugColour);
         g.fillEllipse (hole.reduced (plugColour.isTransparent() ? 6.0f : 4.5f));
-        if (over)
+        if (over && ! dim)
         {
             g.setColour (juce::Colours::white.withAlpha (0.25f));
             g.drawEllipse (hole.expanded (1.0f), 1.0f);
         }
-        if (selected)
+        if (field.selected && field.selected->kind == kind && field.selected->index == index)
         {
             g.setColour (focus);
             g.drawEllipse (hole.expanded (2.0f), 2.0f);
@@ -77,14 +93,16 @@ public:
         g.setColour (juce::Colour (0xff111111));
         g.setFont (ConsoleLookAndFeel::uiFont (10.0f, true));
         g.drawText (label, strip, juce::Justification::centred, false);
+
+        if (dim)
+            g.endTransparencyLayer();
     }
 
     PatchBayField& field;
-    const bool isSource;
+    const Kind kind;
     const int index;
     const juce::String label;
     juce::Colour plugColour { juce::Colours::transparentBlack };
-    bool selected = false;
 };
 
 //==============================================================================
@@ -98,8 +116,8 @@ juce::Colour PatchBayField::sourceColour (int s)
     return juce::Colour (0xff9aa0a3);                             // main: grey
 }
 
-PatchBayField::PatchBayField (AudioEngine& e, std::function<void()> changed)
-    : engine (e), onChanged (std::move (changed))
+PatchBayField::PatchBayField (AudioEngine& e, std::function<void()> changedCallback)
+    : engine (e), onChanged (std::move (changedCallback))
 {
     for (int s = 0; s < Patch::numSources; ++s)
     {
@@ -108,35 +126,61 @@ PatchBayField::PatchBayField (AudioEngine& e, std::function<void()> changed)
         else if (s >= Patch::subOut)    number = juce::String (s - Patch::subOut + 1);
         else if (s >= Patch::auxOut)    number = juce::String (s - Patch::auxOut + 1);
         else                            number = juce::String (s % 16 + 1);
-        addAndMakeVisible (sources.add (new Jack (*this, true, s, number)));
+        addAndMakeVisible (sources.add (new Jack (*this, Kind::source, s, sourceName (s), number)));
     }
     for (int d = 0; d < Patch::numDestinations; ++d)
-        addAndMakeVisible (destinations.add (new Jack (*this, false, d, juce::String (d % 16 + 1))));
+        addAndMakeVisible (destinations.add (new Jack (*this, Kind::destination, d, destinationName (d), juce::String (d % 16 + 1))));
 
-    groups.clear();
-    layoutRow (sources, { { "Channel direct out", 16 }, { "Return direct out", 16 }, { "Tape out", 16 },
-                          { "Aux out", 8 }, { "Sub out", 4 }, { "Main", 2 } }, topRowY);
-    layoutRow (destinations, { { "Tape in", 16 }, { "Return strip in", 16 }, { "Channel strip in", 16 } }, bottomRowY);
-
-    int width = 0;
-    for (auto& gr : groups)
-        width = juce::jmax (width, gr.area.getRight());
-    setSize (width + pad, fieldH);
     refresh();
 }
 
 PatchBayField::~PatchBayField() = default;
 
-void PatchBayField::layoutRow (juce::OwnedArray<Jack>& jacks, const std::vector<std::pair<juce::String, int>>& groupSizes, int y)
+void PatchBayField::placeGroup (const juce::String& title, juce::OwnedArray<Jack>& jacks, int first, int count, int x, int y)
 {
-    int x = pad, i = 0;
-    for (auto& [title, count] : groupSizes)
+    if (count <= 0)
+        return;
+    groups.push_back ({ title, { x, y, count * jackW, 58 } });
+    for (int k = 0; k < count; ++k)
+        jacks[first + k]->setBounds (x + k * jackW, y + 18, jackW, 40);
+}
+
+void PatchBayField::rebuild (int interfaceJacks)
+{
+    numInterfaceJacks = interfaceJacks;
+    interfaceIns.clear();
+    for (int i = 0; i < interfaceJacks; ++i)
     {
-        groups.push_back ({ title, { x, y, count * jackW, rowH } });
-        for (int k = 0; k < count; ++k, ++i)
-            jacks[i]->setBounds (x + k * jackW, y + 18, jackW, 40);
-        x += count * jackW + groupGap;
+        const auto deviceName = interfaceNames[i];
+        auto name = "Interface in " + juce::String (i + 1);
+        if (deviceName.isNotEmpty() && deviceName != juce::String (i + 1))
+            name << " (" << deviceName << ")";
+        addAndMakeVisible (interfaceIns.add (new Jack (*this, Kind::interfaceIn, i, name, juce::String (i + 1))));
     }
+
+    groups.clear();
+    using P = Patch;
+
+    // Pair 1. Tape in sits under the channel direct outs that are normalled to it.
+    const int x2 = pad + juce::jmax (interfaceJacks, 16) * jackW + groupGap;
+    placeGroup ("Interface in", interfaceIns, 0, interfaceJacks, pad, row1Top);
+    placeGroup ("Channel direct out", sources, P::channelOut, 16, x2, row1Top);
+    placeGroup ("Channel strip in", destinations, P::channelIn, 16, pad, row1Bottom);
+    placeGroup ("Tape in", destinations, P::tapeIn, 16, x2, row1Bottom);
+
+    // Pair 2. Return strip in sits under the tape outs that are normalled to it.
+    int x = pad;
+    placeGroup ("Tape out", sources, P::tapeOut, 16, x, row2Top);          x += 16 * jackW + groupGap;
+    placeGroup ("Return direct out", sources, P::returnOut, 16, x, row2Top); x += 16 * jackW + groupGap;
+    placeGroup ("Aux out", sources, P::auxOut, 8, x, row2Top);             x += 8 * jackW + groupGap;
+    placeGroup ("Sub out", sources, P::subOut, 4, x, row2Top);             x += 4 * jackW + groupGap;
+    placeGroup ("Main", sources, P::mainL, 2, x, row2Top);
+    placeGroup ("Return strip in", destinations, P::returnIn, 16, pad, row2Bottom);
+
+    int width = 0;
+    for (auto& gr : groups)
+        width = juce::jmax (width, gr.area.getRight());
+    setSize (width + pad, fieldH);
 }
 
 juce::Point<float> PatchBayField::holeCentre (const Jack& j) const
@@ -144,66 +188,128 @@ juce::Point<float> PatchBayField::holeCentre (const Jack& j) const
     return j.getBounds().toFloat().getTopLeft().translated (jackW * 0.5f, 12.0f);
 }
 
+bool PatchBayField::isPlugged (Kind kind, int index) const
+{
+    if (kind == Kind::source)
+    {
+        for (int d = 0; d < Patch::numDestinations; ++d)
+            if ((engine.getPatch (d) >> index) & 1u)
+                return true;
+        return false;
+    }
+    if (kind == Kind::interfaceIn)
+    {
+        for (int c = 0; c < AudioEngine::numConsoleInputs; ++c)
+            if (engine.getInputSource (c) == index)
+                return true;
+        return false;
+    }
+    return engine.getPatch (index) != 0
+        || (index >= Patch::channelIn && engine.getInputSource (index - Patch::channelIn) >= 0);
+}
+
+bool PatchBayField::accepts (const Jack& destination) const
+{
+    // Interface inputs can only feed channel strips.
+    return ! (selected && selected->kind == Kind::interfaceIn && destination.index < Patch::channelIn);
+}
+
 void PatchBayField::refresh()
 {
-    for (auto* j : sources)
+    juce::StringArray names;
+    auto* device = engine.getDeviceManager().getCurrentAudioDevice();
+    if (device != nullptr)
+        names = device->getInputChannelNames();
+    const int wanted = device != nullptr ? juce::jmin (names.size(), maxInterfaceJacks) : 16;
+    if (wanted != numInterfaceJacks || names != interfaceNames)
     {
-        bool used = false;
-        for (int d = 0; d < Patch::numDestinations; ++d)
-            used = used || ((engine.getPatch (d) >> j->index) & 1u);
-        j->plugColour = used ? sourceColour (j->index) : juce::Colours::transparentBlack;
-        j->selected = j->index == selectedSource;
+        interfaceNames = names;
+        rebuild (wanted);
+        if (auto* parent = getParentComponent())
+            parent->resized();
     }
+    for (auto* j : interfaceIns)
+        j->setEnabled (device != nullptr);
+
+    for (auto* j : sources)
+        j->plugColour = isPlugged (Kind::source, j->index) ? sourceColour (j->index) : juce::Colours::transparentBlack;
+    for (auto* j : interfaceIns)
+        j->plugColour = isPlugged (Kind::interfaceIn, j->index) ? wiringColour : juce::Colours::transparentBlack;
     for (auto* j : destinations)
     {
         const auto mask = engine.getPatch (j->index);
         j->plugColour = juce::Colours::transparentBlack;
+        if (j->index >= Patch::channelIn && engine.getInputSource (j->index - Patch::channelIn) >= 0)
+            j->plugColour = wiringColour;
         for (int s = 0; s < Patch::numSources; ++s)
             if ((mask >> s) & 1u) { j->plugColour = sourceColour (s); break; }
     }
     repaint();
 }
 
-void PatchBayField::jackClicked (bool isSource, int index)
+void PatchBayField::changed()
 {
-    // As in the prototype: click an output, then an input, to plug a cable.
-    // Click a plugged jack to pull its cables (unless an output is waiting for an input).
-    if (isSource)
-    {
-        bool plugged = false;
-        for (int d = 0; d < Patch::numDestinations; ++d)
-            plugged = plugged || ((engine.getPatch (d) >> index) & 1u);
-
-        if (plugged && selectedSource < 0)
-        {
-            for (int d = 0; d < Patch::numDestinations; ++d)
-                engine.setPatch (d, engine.getPatch (d) & ~(std::uint64_t (1) << index));
-        }
-        else
-        {
-            selectedSource = selectedSource == index ? -1 : index;
-        }
-    }
-    else
-    {
-        if (selectedSource >= 0)
-        {
-            engine.setPatch (index, engine.getPatch (index) | (std::uint64_t (1) << selectedSource));
-            selectedSource = -1;
-        }
-        else if (engine.getPatch (index) != 0)
-        {
-            engine.setPatch (index, 0);
-        }
-    }
-
     refresh();
     if (onChanged) onChanged();
+}
+
+void PatchBayField::mapInterfaceOneToOne()
+{
+    for (int c = 0; c < AudioEngine::numConsoleInputs; ++c)
+        engine.setInputSource (c, c);
+    changed();
+}
+
+void PatchBayField::jackClicked (Kind kind, int index)
+{
+    // Click an output (or an interface input), then an input below, to plug a cable.
+    // Click a plugged jack to pull its cables (unless an output is waiting for an input).
+    if (kind != Kind::destination)
+    {
+        if (! selected && isPlugged (kind, index))
+        {
+            if (kind == Kind::source)
+                for (int d = 0; d < Patch::numDestinations; ++d)
+                    engine.setPatch (d, engine.getPatch (d) & ~(std::uint64_t (1) << index));
+            else
+                for (int c = 0; c < AudioEngine::numConsoleInputs; ++c)
+                    if (engine.getInputSource (c) == index)
+                        engine.setInputSource (c, -1);
+        }
+        else if (selected && selected->kind == kind && selected->index == index)
+            selected.reset();
+        else
+            selected = Selection { kind, index };
+        changed();
+        return;
+    }
+
+    if (selected && selected->kind == Kind::source)
+    {
+        engine.setPatch (index, engine.getPatch (index) | (std::uint64_t (1) << selected->index));
+        selected.reset();
+    }
+    else if (selected && selected->kind == Kind::interfaceIn)
+    {
+        if (index < Patch::channelIn)
+            return;   // interface inputs only feed channel strips
+        engine.setInputSource (index - Patch::channelIn, selected->index);
+        selected.reset();
+    }
+    else if (engine.getPatch (index) != 0)
+        engine.setPatch (index, 0);   // patch cables come out first, then the interface input
+    else if (index >= Patch::channelIn)
+        engine.setInputSource (index - Patch::channelIn, -1);
+
+    changed();
 }
 
 void PatchBayField::paint (juce::Graphics& g)
 {
     g.fillAll (juce::Colour (0xff0e0f10));
+    g.setColour (juce::Colour (0xff2a2d30));
+    g.fillRect (0, dividerY - 1, getWidth(), 3);
+
     g.setFont (ConsoleLookAndFeel::uiFont (12.0f));
     for (auto& gr : groups)
     {
@@ -216,15 +322,9 @@ void PatchBayField::paint (juce::Graphics& g)
 
 void PatchBayField::paintOverChildren (juce::Graphics& g)
 {
-    const auto cablePath = [this] (juce::Point<float> a, juce::Point<float> b)
-    {
-        juce::Path p;
-        p.startNewSubPath (a);
-        p.cubicTo (a.translated (0.0f, 80.0f), b.translated (0.0f, -80.0f), b);
-        return p;
-    };
-
-    // Normals (dashed) where no cable breaks them.
+    // Normals: dashed, straight down from the output's label to the input below, unless a cable breaks them.
+    const float dashes[] = { 3.0f, 4.0f };
+    g.setColour (juce::Colour (0xff6c7174).withAlpha (0.8f));
     for (int i = 0; i < 16; ++i)
     {
         const std::pair<int, int> normals[] = { { Patch::channelOut + i, Patch::tapeIn + i }, { Patch::tapeOut + i, Patch::returnIn + i } };
@@ -232,12 +332,24 @@ void PatchBayField::paintOverChildren (juce::Graphics& g)
         {
             if (engine.getPatch (d) != 0)
                 continue;
-            juce::Path dashed;
-            const float dashes[] = { 3.0f, 4.0f };
-            juce::PathStrokeType (1.5f).createDashedStroke (dashed, cablePath (holeCentre (*sources[s]), holeCentre (*destinations[d])), dashes, 2);
-            g.setColour (juce::Colour (0xff6c7174).withAlpha (0.7f));
+            const auto from = holeCentre (*sources[s]).translated (0.0f, 26.0f);
+            const auto to = holeCentre (*destinations[d]).translated (0.0f, -11.0f);
+            juce::Path line, dashed;
+            line.startNewSubPath (from);
+            line.lineTo (to);
+            juce::PathStrokeType (1.5f).createDashedStroke (dashed, line, dashes, 2);
             g.fillPath (dashed);
         }
+    }
+
+    // Interface inputs: thin wiring into the channel strips.
+    g.setColour (wiringColour.withAlpha (0.75f));
+    for (int c = 0; c < AudioEngine::numConsoleInputs; ++c)
+    {
+        const int dev = engine.getInputSource (c);
+        if (juce::isPositiveAndBelow (dev, interfaceIns.size()))
+            g.strokePath (cablePath (holeCentre (*interfaceIns[dev]), holeCentre (*destinations[Patch::channelIn + c])),
+                          juce::PathStrokeType (1.5f));
     }
 
     // Cables: shadows first, then the cables, coloured by source.
@@ -265,15 +377,15 @@ void PatchBayField::paintOverChildren (juce::Graphics& g)
 PatchBayPanel::PatchBayPanel (AudioEngine& e, std::function<void()> changed)
     : field (e, changed)
 {
-    viewport.setViewedComponent (&field, false);
-    viewport.setScrollBarsShown (false, true);
-    addAndMakeVisible (viewport);
+    addAndMakeVisible (field);
 
-    help.setText ("Click an output on the top row, then an input on the bottom row. Click a plugged jack to pull its cable. "
-                  "Dashed lines are the normalled paths; a cable into a normalled input breaks the normal.",
+    help.setText ("Click an output, then an input below it, to plug a cable. Click a plugged jack to pull its cable. "
+                  "Dashed lines are normals (a cable breaks them). Thin lines are the interface inputs: "
+                  "click an Interface in jack, then a Channel strip in.",
                   juce::dontSendNotification);
     help.setFont (ConsoleLookAndFeel::uiFont (13.0f));
     help.setColour (juce::Label::textColourId, bridgeText.withAlpha (0.8f));
+    help.setMinimumHorizontalScale (0.8f);
     addAndMakeVisible (help);
 
     closeButton.onClick = [this] { if (onClose) onClose(); };
@@ -283,9 +395,12 @@ PatchBayPanel::PatchBayPanel (AudioEngine& e, std::function<void()> changed)
         field.refresh();
         if (changed) changed();
     };
-    clearButton.setTooltip ("Remove every cable (the normals stay)");
+    clearButton.setTooltip ("Remove every patch cable (the normals and the interface inputs stay)");
+    mapButton.onClick = [this] { field.mapInterfaceOneToOne(); };
+    mapButton.setTooltip ("Channel strip 1 from interface input 1, channel strip 2 from input 2, and so on");
     addAndMakeVisible (closeButton);
     addAndMakeVisible (clearButton);
+    addAndMakeVisible (mapButton);
 
     setWantsKeyboardFocus (true);
     setTitle ("Patch bay");
@@ -302,20 +417,32 @@ void PatchBayPanel::visibilityChanged()
 
 void PatchBayPanel::resized()
 {
-    const int w = juce::jmin (getWidth() - 40, field.getWidth() + 24);
-    frame = juce::Rectangle<int> (w, fieldH + 84).withCentre (getLocalBounds().getCentre());
+    constexpr int margin = 20, inset = 12, headerH = 48, helpH = 22;
 
-    auto r = frame.reduced (12);
-    auto header = r.removeFromTop (48);
+    // The field scales down (never up) to fit the panel.
+    const int availW = getWidth() - 2 * (margin + inset);
+    const int availH = getHeight() - 2 * (margin + inset) - headerH - helpH;
+    const float scale = juce::jlimit (0.3f, 1.0f, juce::jmin ((float) availW / (float) field.getWidth(),
+                                                              (float) availH / (float) field.getHeight()));
+    const int fieldW = juce::roundToInt ((float) field.getWidth() * scale);
+    const int scaledH = juce::roundToInt ((float) field.getHeight() * scale);
+
+    frame = juce::Rectangle<int> (juce::jmax (fieldW, 900) + 2 * inset, scaledH + headerH + helpH + 2 * inset)
+                .withCentre (getLocalBounds().getCentre());
+
+    auto r = frame.reduced (inset);
+    auto header = r.removeFromTop (headerH);
     header.removeFromLeft (28);
     header.removeFromRight (28);
     closeButton.setBounds (header.removeFromRight (80).withSizeKeepingCentre (80, 28));
     header.removeFromRight (8);
     clearButton.setBounds (header.removeFromRight (120).withSizeKeepingCentre (120, 28));
-    header.removeFromLeft (90);
-    help.setBounds (header);
+    header.removeFromRight (8);
+    mapButton.setBounds (header.removeFromRight (130).withSizeKeepingCentre (130, 28));
+    help.setBounds (r.removeFromTop (helpH).withTrimmedLeft (16));
 
-    viewport.setBounds (r.withTrimmedTop (4));
+    const auto fieldArea = r.withSizeKeepingCentre (fieldW, scaledH);
+    field.setTransform (juce::AffineTransform::scale (scale).translated ((float) fieldArea.getX(), (float) fieldArea.getY()));
 }
 
 void PatchBayPanel::paint (juce::Graphics& g)

@@ -10,8 +10,8 @@ Unzip anywhere and run ConsoleTape.exe. Nothing to install: it needs no extra ru
 
 First time:
   1. Click "Audio device" and pick your interface's ASIO driver, sample rate and buffer size.
-     Map interface inputs to the 16 input channels (Inputs tab) and choose the main outputs
-     (Outputs tab; aux and sub outputs are optional).
+     Choose the main outputs there (aux and sub outputs are optional). Interface inputs are
+     patched to the input channels in the patch bay ("Interface 1 to 1" does the usual setup).
   2. Click "Plugins", then Options > "Scan for new or updated VST3 plug-ins" (the standard folder
      is C:\Program Files\Common Files\VST3; add others in the scan dialog). Each plugin is scanned
      in its own process, so a bad plugin cannot crash the console. Failed ones are shown in red.
@@ -61,9 +61,15 @@ Ctrl+Shift+S save as, Ctrl+E export.
 
 PATCH BAY
 ---------
-"Patch bay" opens it. Click an output (top row), then an input (bottom row). Click a plugged
-jack to pull its cables. Dashed lines are the normals; a cable into a tape or return input
-breaks its normal. A cable into a channel strip input adds to the interface input.
+"Patch bay" opens it. It has two pairs of rows, outputs above inputs. Click an output, then an
+input, to plug a cable. Click a plugged jack to pull its cables. Dashed lines are the normals;
+a cable into a tape or return input breaks its normal. A cable into a channel strip input adds
+to the interface input.
+
+The Interface in jacks (top left) are your interface's inputs. The thin lines show which one
+feeds each channel strip: click an Interface in jack, then a Channel strip in jack, to change it.
+Click a channel strip jack to unplug it (patch cables come out first). "Interface 1 to 1" feeds
+channel 1 from input 1, channel 2 from input 2, and so on. "Pull all cables" leaves these alone.
 
 
 PLUGINS (VST3)

@@ -1,9 +1,12 @@
-﻿#pragma once
+#pragma once
 
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "AudioEngine.h"
 
-/** The jack field: outputs on the top row, inputs on the bottom, cables drawn between them. */
+/** The jack field, laid out like a rack: two pairs of rows, outputs above inputs.
+    Pair 1: interface inputs and channel direct outs over the channel strip ins and tape ins.
+    Pair 2: tape outs, return direct outs, aux, sub and main over the return strip ins.
+    Every normal runs straight down from an output to the input under it. */
 class PatchBayField : public juce::Component
 {
 public:
@@ -12,28 +15,42 @@ public:
 
     void paint (juce::Graphics&) override;
     void paintOverChildren (juce::Graphics&) override;
+
+    /** Re-reads the patch and the interface's inputs (the number of Interface in jacks follows the device). */
     void refresh();
 
+    /** Every console input channel from the interface input with the same number. */
+    void mapInterfaceOneToOne();
+
     static juce::Colour sourceColour (int source);
+    static constexpr int maxInterfaceJacks = 32;
 
 private:
     class Jack;
     using Patch = AudioEngine::Patch;
+    enum class Kind { source, destination, interfaceIn };
+    struct Selection { Kind kind; int index; };
 
     AudioEngine& engine;
     std::function<void()> onChanged;
-    juce::OwnedArray<Jack> sources, destinations;
-    int selectedSource = -1;
+    juce::OwnedArray<Jack> sources, destinations, interfaceIns;
+    std::optional<Selection> selected;
+    int numInterfaceJacks = -1;
+    juce::StringArray interfaceNames;
 
     struct Group { juce::String title; juce::Rectangle<int> area; };
     std::vector<Group> groups;
 
-    void jackClicked (bool isSource, int index);
+    void rebuild (int interfaceJacks);
+    void placeGroup (const juce::String& title, juce::OwnedArray<Jack>&, int first, int count, int x, int y);
+    void jackClicked (Kind, int index);
+    bool accepts (const Jack& destination) const;
+    bool isPlugged (Kind, int index) const;
+    void changed();
     juce::Point<float> holeCentre (const Jack&) const;
-    void layoutRow (juce::OwnedArray<Jack>&, const std::vector<std::pair<juce::String, int>>& groupSizes, int y);
 };
 
-/** Pop-up panel over the console holding the patch bay. */
+/** Pop-up panel over the console holding the patch bay. The field scales down to fit the panel. */
 class PatchBayPanel : public juce::Component
 {
 public:
@@ -49,8 +66,7 @@ public:
 
 private:
     PatchBayField field;
-    juce::Viewport viewport;
-    juce::TextButton closeButton { "Close" }, clearButton { "Pull all cables" };
+    juce::TextButton closeButton { "Close" }, clearButton { "Pull all cables" }, mapButton { "Interface 1 to 1" };
     juce::Label help;
     juce::Rectangle<int> frame;
 };

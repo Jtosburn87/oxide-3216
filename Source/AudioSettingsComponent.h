@@ -4,16 +4,14 @@
 #include "AudioEngine.h"
 
 /** Audio device window: driver, device, sample rate and buffer size on the left;
-    on the right, tabs mapping interface inputs to the 16 input channels and interface outputs to
-    main, aux and sub; below them, the reported latency and the recording offset. */
+    on the right, the interface outputs for main, aux and sub (the interface inputs are patched in the
+    patch bay); below them, the reported latency and the recording offset. */
 class AudioSettingsComponent : public juce::Component,
                                private juce::ChangeListener
 {
 public:
     AudioSettingsComponent (AudioEngine&, std::function<void()> onChanged);
     ~AudioSettingsComponent() override;
-
-    void showOutputsTab() { tabs.setCurrentTabIndex (1); }
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -49,9 +47,7 @@ private:
     std::function<void()> onChanged;
 
     juce::AudioDeviceSelectorComponent selector;
-    juce::TabbedComponent tabs { juce::TabbedButtonBar::TabsAtTop };
-    std::unique_ptr<MappingPage> inputsPage, outputsPage;
-    juce::TextButton autoMapButton { "Map 1 to 1" };
+    std::unique_ptr<MappingPage> outputsPage;
     juce::Label latencyLabel, offsetTitle, offsetHelp;
     juce::Slider offsetSlider;
 
