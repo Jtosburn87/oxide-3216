@@ -706,44 +706,154 @@ void CentreSection::update()
 }
 
 //==============================================================================
-Desk::Desk (AudioEngine& e, PluginContext* plugins) : engine (e), centre (e, plugins)
+StripBank::StripBank (const juce::OwnedArray<ChannelStrip>& channelStrips)
 {
-    for (auto* s : engine.inputStrips)
-        addAndMakeVisible (inputs.add (new StripComponent (*s)));
-    addAndMakeVisible (centre);
-    for (auto* s : engine.returnStrips)
-        addAndMakeVisible (returns.add (new StripComponent (*s)));
+    for (auto* s : channelStrips)
+        addAndMakeVisible (strips.add (new StripComponent (*s)));
+    setSize (strips.size() * stripW, totalH);
+}
 
-    setSize (2 * cheekW + (inputs.size() + returns.size()) * stripW + centreW, totalH);
+void StripBank::resized()
+{
+    int x = 0;
+    for (auto* s : strips)
+    {
+        s->setBounds (x, 0, stripW, totalH);
+        x += stripW;
+    }
+}
+
+void StripBank::update()
+{
+    for (auto* s : strips)
+        s->update();
+}
+
+//==============================================================================
+Desk::Desk (AudioEngine& e, PluginContext* plugins)
+    : engine (e), inputs (e.inputStrips), returns (e.returnStrips), centre (e, plugins)
+{
+    centre.setSize (centreW, totalH);
+    centre.setTitle ("Centre section");
+    inputs.setTitle ("Input bank");
+    returns.setTitle ("Return bank");
+    for (int s = 0; s < numSections; ++s)
+        addAndMakeVisible (getSection ((Section) s));
+    relayout();
     startTimerHz (30);
+}
+
+juce::Component& Desk::getSection (Section s)
+{
+    if (s == inputSection)  return inputs;
+    if (s == centreSection) return centre;
+    return returns;
+}
+
+juce::String Desk::sectionName (Section s)
+{
+    if (s == inputSection)  return "Input bank";
+    if (s == centreSection) return "Centre section";
+    return "Return bank";
+}
+
+void Desk::setDocked (Section s, bool shouldBeDocked)
+{
+    if (docked[(size_t) s] == shouldBeDocked)
+        return;
+
+    docked[(size_t) s] = shouldBeDocked;
+    auto& c = getSection (s);
+    if (shouldBeDocked)
+        addAndMakeVisible (c);   // takes it back from its window
+    else
+        removeChildComponent (&c);
+    relayout();
+}
+
+void Desk::relayout()
+{
+    int width = 2 * cheekW;
+    for (int s = 0; s < numSections; ++s)
+        if (docked[(size_t) s])
+            width += getSection ((Section) s).getWidth();
+    if (width == 2 * cheekW)
+        width += 600;   // everything is out: room for a short message
+
+    setSize (width, totalH);
+    resized();
+    if (onSizeChanged)
+        onSizeChanged();
 }
 
 void Desk::resized()
 {
     int x = cheekW;
-    for (auto* s : inputs)  { s->setBounds (x, 0, stripW, totalH); x += stripW; }
-    centre.setBounds (x, 0, centreW, totalH);
-    x += centreW;
-    for (auto* s : returns) { s->setBounds (x, 0, stripW, totalH); x += stripW; }
+    for (int s = 0; s < numSections; ++s)
+    {
+        if (! docked[(size_t) s])
+            continue;
+        auto& c = getSection ((Section) s);
+        c.setBounds (x, 0, c.getWidth(), totalH);
+        x += c.getWidth();
+    }
 }
 
-void Desk::paint (juce::Graphics& g)
+void Desk::paintCheeks (juce::Graphics& g, juce::Rectangle<int> area)
 {
-    g.fillAll (bridge);
-    for (auto cheek : { juce::Rectangle<int> (0, 0, cheekW, getHeight()), juce::Rectangle<int> (getWidth() - cheekW, 0, cheekW, getHeight()) })
+    for (auto cheek : { area.withWidth (cheekW), area.withTrimmedLeft (area.getWidth() - cheekW) })
     {
         g.setGradientFill (juce::ColourGradient (juce::Colour (0xff222324), (float) cheek.getX(), 0.0f,
                                                  juce::Colour (0xff060607), (float) cheek.getX() + cheekW * 0.45f, 0.0f, false));
         g.fillRect (cheek);
         g.setColour (juce::Colour (0xff3b3e41));
-        g.fillRect (cheek.getX(), 0, 1, getHeight());
-        g.fillRect (cheek.getRight() - 1, 0, 1, getHeight());
+        g.fillRect (cheek.getX(), cheek.getY(), 1, cheek.getHeight());
+        g.fillRect (cheek.getRight() - 1, cheek.getY(), 1, cheek.getHeight());
+    }
+}
+
+void Desk::paint (juce::Graphics& g)
+{
+    g.fillAll (bridge);
+    paintCheeks (g, getLocalBounds());
+
+    if (std::none_of (docked.begin(), docked.end(), [] (bool d) { return d; }))
+    {
+        g.setColour (bridgeText.withAlpha (0.7f));
+        g.setFont (ConsoleLookAndFeel::uiFont (22.0f));
+        g.drawFittedText ("Every section is in its own window.\nUse Sections in the top bar to put them back.",
+                          getLocalBounds().reduced (cheekW + 20, 0).withSizeKeepingCentre (getWidth() - 2 * cheekW - 40, 200),
+                          juce::Justification::centred, 3);
     }
 }
 
 void Desk::timerCallback()
 {
-    for (auto* s : inputs)  s->update();
-    for (auto* s : returns) s->update();
+    // Sections keep updating whether they are docked or in their own windows.
+    inputs.update();
+    returns.update();
     centre.update();
+}
+
+//==============================================================================
+SectionFrame::SectionFrame (juce::Component& s) : section (s)
+{
+    addAndMakeVisible (section);   // takes it from the console
+    setSize (section.getWidth() + 2 * cheekW, totalH);
+}
+
+SectionFrame::~SectionFrame()
+{
+    removeChildComponent (&section);   // the console owns the section, not the window
+}
+
+void SectionFrame::paint (juce::Graphics& g)
+{
+    g.fillAll (bridge);
+    Desk::paintCheeks (g, getLocalBounds());
+}
+
+void SectionFrame::resized()
+{
+    section.setBounds (cheekW, 0, section.getWidth(), totalH);
 }

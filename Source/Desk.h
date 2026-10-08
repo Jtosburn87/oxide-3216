@@ -114,20 +114,66 @@ private:
     void confirmErase();
 };
 
-/** The whole console at a fixed size. MainComponent scales it for zoom. */
+/** A bank of 16 channel strips (the inputs or the tape returns). */
+class StripBank : public juce::Component
+{
+public:
+    explicit StripBank (const juce::OwnedArray<ChannelStrip>&);
+
+    void resized() override;
+    void update();
+
+private:
+    juce::OwnedArray<StripComponent> strips;
+};
+
+/** The console at a fixed size, made of three sections that can each be taken out into a window of
+    their own. Whatever is docked is laid out between the two end cheeks. MainComponent scales it for zoom. */
 class Desk : public juce::Component,
              private juce::Timer
 {
 public:
+    enum Section { inputSection, centreSection, returnSection, numSections };
+
     explicit Desk (AudioEngine&, PluginContext* plugins = nullptr);
+
+    juce::Component& getSection (Section);
+    static juce::String sectionName (Section);
+
+    bool isDocked (Section s) const { return docked[(size_t) s]; }
+
+    /** false: the section leaves the console (the caller shows it in a window); true: it comes back. */
+    void setDocked (Section, bool);
+
+    /** The desk's size changed because a section left or came back. */
+    std::function<void()> onSizeChanged;
+
+    void paint (juce::Graphics&) override;
+    void resized() override;
+
+    /** Draws the black end cheeks at both sides of an area. */
+    static void paintCheeks (juce::Graphics&, juce::Rectangle<int> area);
+
+private:
+    AudioEngine& engine;
+    StripBank inputs, returns;
+    CentreSection centre;
+    std::array<bool, numSections> docked { true, true, true };
+
+    void relayout();
+    void timerCallback() override;
+};
+
+/** One section with end cheeks either side, shown in its own window. */
+class SectionFrame : public juce::Component
+{
+public:
+    explicit SectionFrame (juce::Component& section);
+    ~SectionFrame() override;
 
     void paint (juce::Graphics&) override;
     void resized() override;
 
 private:
-    AudioEngine& engine;
-    juce::OwnedArray<StripComponent> inputs, returns;
-    CentreSection centre;
-
-    void timerCallback() override;
+    juce::Component& section;
 };

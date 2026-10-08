@@ -62,7 +62,7 @@ public:
         engine->initialise (saved.get());
         sessions = std::make_unique<SessionController> (*engine, *plugins, *properties.getUserSettings());
 
-        mainWindow = std::make_unique<MainWindow> (getApplicationName(), *engine, *plugins, *sessions, [this] { saveSettings(); });
+        mainWindow = std::make_unique<MainWindow> (getApplicationName(), *engine, *plugins, *sessions, *properties.getUserSettings(), [this] { saveSettings(); });
         sessions->startUp();   // recover after a crash, or reopen the last session
     }
 
@@ -205,11 +205,12 @@ private:
     class MainWindow : public juce::DocumentWindow
     {
     public:
-        MainWindow (const juce::String& name, AudioEngine& engine, PluginManager& pm, SessionController& sc, std::function<void()> save)
+        MainWindow (const juce::String& name, AudioEngine& engine, PluginManager& pm, SessionController& sc,
+                    juce::PropertiesFile& settings, std::function<void()> save)
             : DocumentWindow (name, ConsoleColours::room, DocumentWindow::allButtons)
         {
             setUsingNativeTitleBar (true);
-            setContentOwned (new MainComponent (engine, pm, sc, std::move (save)), true);
+            setContentOwned (new MainComponent (engine, pm, sc, settings, std::move (save)), true);
             setResizable (true, true);
             setResizeLimits (800, 480, 10000, 10000);
             centreWithSize (getWidth(), getHeight());

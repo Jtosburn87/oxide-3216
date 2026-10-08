@@ -9,6 +9,7 @@
 #include "PluginWindows.h"
 #include "InsertsUI.h"
 #include "SessionController.h"
+#include "SectionWindow.h"
 
 /** Top bar (name plate, audio device, zoom, Fit, status) above the zoomable desk. */
 class MainComponent : public juce::Component,
@@ -16,7 +17,7 @@ class MainComponent : public juce::Component,
                       private juce::ChangeListener
 {
 public:
-    MainComponent (AudioEngine&, PluginManager&, SessionController&, std::function<void()> saveSettings);
+    MainComponent (AudioEngine&, PluginManager&, SessionController&, juce::PropertiesFile& settings, std::function<void()> saveSettings);
 
     bool keyPressed (const juce::KeyPress&) override;
     ~MainComponent() override;
@@ -27,12 +28,13 @@ public:
 private:
     AudioEngine& engine;
     std::function<void()> saveSettings;
+    juce::PropertiesFile& settings;
     PluginManager& pluginManager;
     SessionController& sessions;
     PluginWindows pluginWindows;
     PluginContext pluginContext;
 
-    juce::TextButton audioButton { "Audio device" }, toneButton { "Test tone" }, fitButton { "Fit" }, patchButton { "Patch bay" }, pluginsButton { "Plugins" }, sessionButton { "Session" };
+    juce::TextButton audioButton { "Audio device" }, toneButton { "Test tone" }, fitButton { "Fit" }, patchButton { "Patch bay" }, pluginsButton { "Plugins" }, sessionButton { "Session" }, sectionsButton { "Sections" };
     juce::Slider zoomSlider;
     juce::Label zoomLabel, statusLabel;
 
@@ -41,6 +43,14 @@ private:
     juce::Viewport viewport;
     PatchBayPanel patchBay;
     bool fittedOnce = false;
+
+    // Sections of the console that are out in windows of their own.
+    std::array<std::unique_ptr<SectionWindow>, Desk::numSections> sectionWindows;
+    void showSectionsMenu();
+    void takeOut (Desk::Section);
+    void putBack (Desk::Section);
+    void restoreSections();
+    void saveSections();
 
     juce::Component::SafePointer<juce::DialogWindow> settingsWindow;
     juce::Component::SafePointer<juce::DialogWindow> pluginListWindow;

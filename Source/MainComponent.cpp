@@ -8,8 +8,8 @@ namespace
     constexpr int topBarH = 48;
 }
 
-MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionController& sc, std::function<void()> save)
-    : engine (e), saveSettings (std::move (save)), pluginManager (pm), sessions (sc),
+MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionController& sc, juce::PropertiesFile& s, std::function<void()> save)
+    : engine (e), saveSettings (std::move (save)), settings (s), pluginManager (pm), sessions (sc),
       pluginContext { pm, pluginWindows,
                       [this] { auto* d = engine.getDeviceManager().getCurrentAudioDevice(); return d != nullptr ? d->getCurrentSampleRate() : 48000.0; },
                       [this] { if (saveSettings) saveSettings(); } },
@@ -31,6 +31,9 @@ MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionControll
     pluginsButton.onClick = [this] { openPluginList(); };
     sessionButton.setTooltip ("New, open, save, save as, export the mix");
     sessionButton.onClick = [this] { showSessionMenu(); };
+    sectionsButton.setTooltip ("Take sections of the console out into windows of their own, or put them back");
+    sectionsButton.onClick = [this] { showSectionsMenu(); };
+    desk.onSizeChanged = [this] { if (viewport.getWidth() > 0) fitToWindow(); else applyZoom(); };
     sessions.onTitleChanged = [this] { if (auto* w = getTopLevelComponent()) w->setName (sessions.windowTitle()); };
     setWantsKeyboardFocus (true);
     // A plugin window must close before its plugin is deleted.
@@ -57,7 +60,7 @@ MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionControll
     statusLabel.setJustificationType (juce::Justification::centredRight);
 
     for (juce::Component* c : { (juce::Component*) &sessionButton, (juce::Component*) &audioButton, (juce::Component*) &toneButton, (juce::Component*) &zoomLabel,
-                                (juce::Component*) &zoomSlider, (juce::Component*) &fitButton, (juce::Component*) &patchButton, (juce::Component*) &pluginsButton, (juce::Component*) &statusLabel })
+                                (juce::Component*) &zoomSlider, (juce::Component*) &fitButton, (juce::Component*) &patchButton, (juce::Component*) &pluginsButton, (juce::Component*) &sectionsButton, (juce::Component*) &statusLabel })
         addAndMakeVisible (c);
 
     deskHolder.addAndMakeVisible (desk);
@@ -71,10 +74,16 @@ MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionControll
     startTimerHz (2);
 
     setSize (1400, 820);
+
+    // Once the main window is up, bring back the section windows that were out last time.
+    juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<MainComponent> (this)] { if (safe != nullptr) safe->restoreSections(); });
 }
 
 MainComponent::~MainComponent()
 {
+    saveSections();
+    for (auto& w : sectionWindows)
+        w = nullptr;
     forEachChain ([] (InsertChain& c) { c.beforeDelete = nullptr; c.onChange = nullptr; });
     pluginWindows.closeAll();
     if (pluginListWindow != nullptr)
@@ -200,6 +209,8 @@ void MainComponent::resized()
     bar.removeFromLeft (8);
     pluginsButton.setBounds (bar.removeFromLeft (90));
     bar.removeFromLeft (8);
+    sectionsButton.setBounds (bar.removeFromLeft (90));
+    bar.removeFromLeft (8);
     statusLabel.setBounds (bar);
 
     viewport.setBounds (getLocalBounds().withTrimmedTop (topBarH));
@@ -301,4 +312,97 @@ bool MainComponent::keyPressed (const juce::KeyPress& k)
         return true;
     }
     return false;
+}
+
+//==============================================================================
+namespace
+{
+    juce::String sectionKey (Desk::Section s)
+    {
+        static const char* const names[] = { "input", "centre", "return" };
+        return juce::String ("sectionWindow.") + names[(int) s];
+    }
+}
+
+void MainComponent::showSectionsMenu()
+{
+    juce::PopupMenu m;
+    for (int i = 0; i < Desk::numSections; ++i)
+    {
+        const auto s = (Desk::Section) i;
+        m.addItem (Desk::sectionName (s) + " in its own window", true, ! desk.isDocked (s), [this, s]
+        {
+            if (desk.isDocked (s)) takeOut (s); else putBack (s);
+        });
+    }
+    m.addSeparator();
+    const bool anyOut = std::any_of (sectionWindows.begin(), sectionWindows.end(), [] (auto& w) { return w != nullptr; });
+    m.addItem ("Put everything back", anyOut, false, [this]
+    {
+        for (int i = 0; i < Desk::numSections; ++i)
+            putBack ((Desk::Section) i);
+    });
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (sectionsButton));
+}
+
+void MainComponent::takeOut (Desk::Section s)
+{
+    auto& w = sectionWindows[(size_t) s];
+    if (w != nullptr)
+    {
+        w->toFront (true);
+        return;
+    }
+
+    desk.setDocked (s, false);
+    w = std::make_unique<SectionWindow> (s, desk.getSection (s),
+                                         [this, s] { putBack (s); },
+                                         [this] (const juce::KeyPress& k) { return keyPressed (k); });
+
+    // Back where it was last time, if that is still on a screen.
+    const auto state = settings.getValue (sectionKey (s) + ".bounds");
+    if (state.isNotEmpty())
+    {
+        const auto before = w->getBounds();
+        w->restoreWindowStateFromString (state);
+        const auto titleBar = w->getBounds().withHeight (30);
+        if (! juce::Desktop::getInstance().getDisplays().getTotalBounds (true).intersects (titleBar))
+            w->setBounds (before);
+    }
+    saveSections();
+}
+
+void MainComponent::putBack (Desk::Section s)
+{
+    auto& w = sectionWindows[(size_t) s];
+    if (w == nullptr)
+        return;
+
+    settings.setValue (sectionKey (s) + ".bounds", w->getWindowStateAsString());
+    desk.setDocked (s, true);   // the section leaves the window and returns to the console
+
+    // This may be running inside the window's own button or close-button callback, so delete it afterwards.
+    juce::MessageManager::callAsync ([old = std::shared_ptr<SectionWindow> (w.release())] {});
+    saveSections();
+    grabKeyboardFocus();
+}
+
+void MainComponent::restoreSections()
+{
+    for (int i = 0; i < Desk::numSections; ++i)
+        if (settings.getBoolValue (sectionKey ((Desk::Section) i) + ".out"))
+            takeOut ((Desk::Section) i);
+}
+
+void MainComponent::saveSections()
+{
+    for (int i = 0; i < Desk::numSections; ++i)
+    {
+        const auto key = sectionKey ((Desk::Section) i);
+        if (auto& w = sectionWindows[(size_t) i])
+            settings.setValue (key + ".bounds", w->getWindowStateAsString());
+        settings.setValue (key + ".out", sectionWindows[(size_t) i] != nullptr);
+    }
+    if (saveSettings)
+        saveSettings();
 }

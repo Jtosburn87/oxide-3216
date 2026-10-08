@@ -73,6 +73,7 @@ target_sources(ConsoleTape PRIVATE
     Source/MainComponent.cpp
     Source/PatchBay.cpp
     Source/PluginWindows.cpp
+    Source/SectionWindow.cpp
     Source/SessionController.cpp
     Source/InsertsUI.cpp
     Source/AudioSettingsComponent.cpp
