@@ -65,26 +65,18 @@ namespace
 
     void paintColumn (juce::Graphics& g, juce::Rectangle<int> r, int faderHeight = faderH)
     {
-        // Bridge cell.
-        g.setColour (juce::Colour (0xff09090a));
-        g.fillRect (r.withHeight (bridgeH));
-        g.setColour (juce::Colours::black);
-        g.fillRect (r.getX(), bridgeH - 2, r.getWidth(), 2);
-        g.setColour (juce::Colour (0xff2a2d2f));
-        g.fillRect (r.getX(), bridgeH - 3, r.getWidth(), 1);
-
         // Mid-grey knob area (shorter when sections are minimised).
-        const int knobs = r.getHeight() - bridgeH - faderHeight;
+        const int knobs = r.getHeight() - faderHeight;
         g.setColour (stripGrey);
-        g.fillRect (r.getX(), bridgeH, r.getWidth(), knobs);
+        g.fillRect (r.getX(), 0, r.getWidth(), knobs);
         g.setColour (juce::Colours::white.withAlpha (0.14f));
-        g.fillRect (r.getX(), bridgeH, r.getWidth(), 1);
+        g.fillRect (r.getX(), 0, r.getWidth(), 1);
 
         // Black fader area.
         g.setColour (faderArea);
-        g.fillRect (r.getX(), bridgeH + knobs, r.getWidth(), faderHeight);
+        g.fillRect (r.getX(), knobs, r.getWidth(), faderHeight);
         g.setColour (juce::Colours::black);
-        g.fillRect (r.getX(), bridgeH + knobs, r.getWidth(), 1);
+        g.fillRect (r.getX(), knobs, r.getWidth(), 1);
     }
 
     juce::Rectangle<int> knobAt (int x, int y)      { return { x, y, Knob::preferredWidth, Knob::preferredHeight }; }
@@ -348,7 +340,7 @@ void StripComponent::resized()
     sections.clear();
     const int bx = 5, bw = stripW - 10;
     const int left = bx + 2, right = bx + bw - 2 - Knob::preferredWidth;
-    int y = bridgeH + 12;
+    int y = 12;
 
     auto box = juce::Rectangle<int> (bx, y, bw, 66);
     sections.push_back ({ "Input", box });
@@ -504,7 +496,7 @@ void StripComponent::paint (juce::Graphics& g)
 void StripComponent::setMeterInput (bool input)
 {
     meterInput = input;
-    repaint (0, 0, getWidth(), bridgeH);
+    repaint (meter.getBounds().expanded (12, 12));
 }
 
 void StripComponent::update()
@@ -737,26 +729,27 @@ void CentreSection::confirmErase()
 
 void CentreSection::resized()
 {
-    // Bridge: stereo meters over the sub faders, mono over the aux faders, stereo over main.
-    const int my = 8, mh = 60;
+    // Meter panel under the bus compressor: stereo subs, mono auxes, stereo main (the console has no meter bridge).
+    meterBox = { 330, 12 + BusCompPanel::height + 8, centreW - 12 - 330, 72 };
+    const int my = meterBox.getY() + 8, mh = 46;
     for (int k = 0; k < Config::numSubs; ++k)
     {
-        const int cx = juce::roundToInt (subColumnX (k) + colW * 0.5f);
-        subMeters[(size_t) k][0].setBounds (cx - 9, my, 8, mh);
-        subMeters[(size_t) k][1].setBounds (cx + 1, my, 8, mh);
+        const int cx = juce::roundToInt (meterSlotX (k));
+        subMeters[(size_t) k][0].setBounds (cx - 8, my, 7, mh);
+        subMeters[(size_t) k][1].setBounds (cx + 1, my, 7, mh);
     }
     for (int k = 0; k < Config::numAux; ++k)
     {
-        const int cx = juce::roundToInt (auxColumnX (k) + colW * 0.5f);
-        auxMeters[(size_t) k].setBounds (cx - 4, my, 8, mh);
+        const int cx = juce::roundToInt (meterSlotX (Config::numSubs + k));
+        auxMeters[(size_t) k].setBounds (cx - 3, my, 7, mh);
     }
+    const int mainCx = juce::roundToInt (meterSlotX (Config::numSubs + Config::numAux));
+    mainMeters[0].setBounds (mainCx - 10, my, 9, mh);
+    mainMeters[1].setBounds (mainCx + 1, my, 9, mh);
     const int mainX = juce::roundToInt (mainColumnX());
-    const int mainCx = juce::roundToInt (mainColumnX() + colW * 0.9f);
-    mainMeters[0].setBounds (mainCx - 12, my, 10, mh);
-    mainMeters[1].setBounds (mainCx + 2, my, 10, mh);
 
     // Tape machine panel, left column.
-    deckBox = { 12, bridgeH + 12, 300, 540 };
+    deckBox = { 12, 12, 300, 540 };
     auto d = deckBox.reduced (10);
     d.removeFromTop (18);   // title
     cassette.setBounds (d.removeFromTop (Cassette::height).withSizeKeepingCentre (Cassette::width, Cassette::height));
@@ -809,7 +802,7 @@ void CentreSection::resized()
 
     // Group EQ: full centre width under the tape machine and (stage 5) the bus compressor.
     // One column per sub, four bands down, gain and frequency side by side.
-    groupEqBox = { 12, bridgeH + 576, centreW - 24, 24 + 4 * 52 + 4 };
+    groupEqBox = { 12, 576, centreW - 24, 24 + 4 * 52 + 4 };
     const int colWidth = (groupEqBox.getWidth() - 8) / Config::numSubs;
     for (int k = 0; k < Config::numSubs; ++k)
     {
@@ -825,14 +818,14 @@ void CentreSection::resized()
     }
 
     // Bus compressor faceplate, right column.
-    busPanel.setBounds (330 + ((centreW - 12) - 330 - BusCompPanel::width) / 2, bridgeH + 12, BusCompPanel::width, BusCompPanel::height);
+    busPanel.setBounds (330 + ((centreW - 12) - 330 - BusCompPanel::width) / 2, 12, BusCompPanel::width, BusCompPanel::height);
 
     // Inserts and aux returns, along the bottom of the knob area.
-    insertsBox = { 12, groupEqBox.getBottom() + 22, centreW - 24, bridgeH + knobH - 12 - (groupEqBox.getBottom() + 22) };
+    insertsBox = { 12, groupEqBox.getBottom() + 22, centreW - 24, knobH - 12 - (groupEqBox.getBottom() + 22) };
     inserts.setBounds (insertsBox.reduced (4, 8));
 
     // Main fader, far right of the fader area.
-    const int f = bridgeH + knobH;
+    const int f = knobH;
     for (int i = 0; i < busFaders.size(); ++i)
     {
         const int cx = juce::roundToInt (gridX + (float) i * colW);
@@ -848,28 +841,33 @@ void CentreSection::paint (juce::Graphics& g)
 {
     paintColumn (g, getLocalBounds());
 
-    // Bridge legends under the bus meters.
-    g.setFont (ConsoleLookAndFeel::uiFont (10.0f));
-    g.setColour (bridgeText.withAlpha (0.8f));
-    for (int k = 0; k < Config::numSubs; ++k)
-        g.drawText ("S" + juce::String (k + 1), juce::Rectangle<float> (subColumnX (k), 70.0f, colW, 10.0f), juce::Justification::centred, false);
-    for (int k = 0; k < Config::numAux; ++k)
-        g.drawText ("A" + juce::String (k + 1), juce::Rectangle<float> (auxColumnX (k), 70.0f, colW, 10.0f), juce::Justification::centred, false);
-    g.drawText ("Main", juce::Rectangle<float> (mainColumnX(), 70.0f, colW * 1.8f, 10.0f), juce::Justification::centred, false);
-
-    // Limiter lamp next to the main meters.
+    // Meter panel: labels under the bus meters, and the limiter lamp next to the main meters.
+    g.setColour (faderArea);
+    g.fillRoundedRectangle (meterBox.toFloat(), 2.0f);
+    g.setColour (juce::Colour (0xff2a2d2f));
+    g.drawRoundedRectangle (meterBox.toFloat().reduced (0.5f), 2.0f, 1.0f);
     {
-        const float lx = mainColumnX() + colW * 1.8f - 14.0f;
+        const float ly = (float) meterBox.getY() + 57.0f, slotW = (float) (meterBox.getWidth() - 50) / 13.0f;
+        g.setFont (ConsoleLookAndFeel::uiFont (10.0f));
+        g.setColour (bridgeText.withAlpha (0.8f));
+        for (int k = 0; k < Config::numSubs; ++k)
+            g.drawText ("S" + juce::String (k + 1), juce::Rectangle<float> (meterSlotX (k) - slotW * 0.5f, ly, slotW, 10.0f), juce::Justification::centred, false);
+        for (int k = 0; k < Config::numAux; ++k)
+            g.drawText ("A" + juce::String (k + 1), juce::Rectangle<float> (meterSlotX (Config::numSubs + k) - slotW * 0.5f, ly, slotW, 10.0f), juce::Justification::centred, false);
+        const float mainCx = meterSlotX (Config::numSubs + Config::numAux);
+        g.drawText ("Main", juce::Rectangle<float> (mainCx - slotW, ly, slotW * 2.0f, 10.0f), juce::Justification::centred, false);
+
+        const float lx = mainCx + 30.0f, lampY = (float) meterBox.getY() + 22.0f;
         g.setColour (limitHold > 0 ? juce::Colour (0xffff4a3a) : juce::Colour (0xff3a1512));
-        g.fillEllipse (lx - 4.0f, 30.0f, 8.0f, 8.0f);
+        g.fillEllipse (lx - 4.0f, lampY, 8.0f, 8.0f);
         if (limitHold > 0)
         {
             g.setColour (juce::Colour (0x66ff4a3a));
-            g.drawEllipse (lx - 6.0f, 28.0f, 12.0f, 12.0f, 2.0f);
+            g.drawEllipse (lx - 6.0f, lampY - 2.0f, 12.0f, 12.0f, 2.0f);
         }
         g.setColour (bridgeText.withAlpha (0.8f));
         g.setFont (ConsoleLookAndFeel::uiFont (9.0f));
-        g.drawText ("LIM", juce::Rectangle<float> (lx - 12.0f, 40.0f, 24.0f, 10.0f), juce::Justification::centred, false);
+        g.drawText ("LIM", juce::Rectangle<float> (lx - 12.0f, lampY + 10.0f, 24.0f, 10.0f), juce::Justification::centred, false);
     }
 
     // Tape machine panel.
@@ -907,7 +905,7 @@ void CentreSection::paint (juce::Graphics& g)
     // Divider before the main fader.
     const int mainX = juce::roundToInt (mainColumnX());
     g.setColour (juce::Colour (0xff2c2f31));
-    g.fillRect (mainX - 2, bridgeH + knobH, 1, faderH);
+    g.fillRect (mainX - 2, knobH, 1, faderH);
 
     g.setColour (juce::Colour (0xff2c2f31));
     g.fillRect (0, 0, 1, getHeight());
@@ -942,7 +940,7 @@ void CentreSection::update()
     else if (limitHold > 0)
         --limitHold;
     if ((holdBefore > 0) != (limitHold > 0))
-        repaint (juce::roundToInt (mainColumnX() + colW * 1.8f) - 30, 20, 30, 34);
+        repaint (meterBox);
 
     for (int side = 0; side < 2; ++side)
     {
@@ -1037,7 +1035,7 @@ void StripBank::resized()
         s->setBounds (x, 0, stripW, getHeight());
         x += stripW;
     }
-    meterButton.setBounds (6, 8, 38, 20);   // in the first strip's bridge, left of its meter
+    meterButton.setBounds (5 + stripW - 10 - 36, 5, 34, 14);   // on the first strip's "Input" title line
     meterButton.toFront (false);
 }
 

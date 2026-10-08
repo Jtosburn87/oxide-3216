@@ -27,7 +27,7 @@ group EQs, bus compressor, inserts and aux returns, bus faders and the main fade
 Zoom with the slider; "Fit" shows the whole console.
 The small "-" on the Equaliser, Gate, Compressor and Aux sends titles minimises that section on
 the whole bank ("+" brings it back); the bank gets shorter and its faders stay in line.
-The IN/OUT button above each bank switches its meters between the input (after the trim) and
+The IN/OUT button on the first strip's Input title switches that bank's meters between the input (after the trim) and
 the output (after the fader).
 "Options" moves the input bank, centre section or return bank into a window of its own (for a
 second monitor). Close that window, or press "Put back", to return it to the console. Windows

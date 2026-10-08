@@ -11,8 +11,8 @@
 namespace DeskLayout
 {
     constexpr int stripW = 110, cheekW = 30, centreW = 780;
-    constexpr int bridgeH = 84, knobH = 970, faderH = 270;
-    constexpr int totalH = bridgeH + knobH + faderH;
+    constexpr int knobH = 970, faderH = 270;   // no meter bridge: the meters sit beside the faders
+    constexpr int totalH = knobH + faderH;
 
     // Centre fader area grid: Sub 1-4, Aux 1-8, then Main (1.8 columns wide) behind a divider.
     constexpr float gridX = 8.0f, gridW = (float) centreW - 16.0f, colW = gridW / 13.8f;
@@ -135,7 +135,10 @@ private:
     juce::OwnedArray<juce::Label> busScribbles;
     int limitHold = 0;
 
-    juce::Rectangle<int> deckBox, armBox, levelBox, groupEqBox;
+    juce::Rectangle<int> deckBox, armBox, levelBox, groupEqBox, meterBox;
+
+    /** Centre of meter slot i in the meter panel: subs, then auxes, then main (with room for the LIM lamp). */
+    float meterSlotX (int slot) const { return (float) meterBox.getX() + 10.0f + ((float) slot + 0.5f) * (float) (meterBox.getWidth() - 50) / 13.0f; }
 
     void styleTransport (juce::TextButton&, juce::Colour);
     void confirmErase();
