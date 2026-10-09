@@ -11,7 +11,7 @@
 namespace DeskLayout
 {
     constexpr int stripW = 110, cheekW = 30, centreW = 780;
-    constexpr int knobH = 970, faderH = 270;   // no meter bridge: the meters sit beside the faders
+    constexpr int knobH = 994, faderH = 270;   // no meter bridge: the meters sit beside the faders
     constexpr int totalH = knobH + faderH;
 
     // Centre fader area grid: Sub 1-4, Aux 1-8, then Main (1.8 columns wide) behind a divider.
@@ -240,7 +240,7 @@ public:
 private:
     juce::OwnedArray<StripComponent> strips;
     juce::OwnedArray<ParamButton> linkButtons;   // one per pair of strips, between their pan knobs
-    juce::TextButton meterButton { "OUT" };   // flips the whole bank's meters between input and output
+    juce::TextButton meterButton { "Meters In/Out" };   // lit = input; flips the whole bank's meters between input and output
     bool meterInput = false;
     int collapsed = 0;
 };

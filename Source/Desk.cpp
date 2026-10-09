@@ -63,7 +63,9 @@ namespace
 
     // Channel strips have a taller fader section than the centre: the assign buttons and the meter sit in a
     // column beside the fader (as on the reference console), and the knob area no longer holds them.
-    constexpr int stripFaderH = faderH + 84;
+    // A row at the top of it holds the bank's Meters In/Out button (on the first strip).
+    constexpr int meterRowH = 24;
+    constexpr int stripFaderH = faderH + 84 + meterRowH;
 
     void paintColumn (juce::Graphics& g, juce::Rectangle<int> r, int faderHeight = faderH)
     {
@@ -464,7 +466,7 @@ void StripComponent::resized()
     pan.setBounds (juce::Rectangle<int> (Knob::preferredWidth, Knob::preferredHeight).withCentre ({ stripW / 2, box.getY() + 10 + Knob::preferredHeight / 2 }));
 
     // Fader section: the fader on the left; down the right, mute, main and sub assigns, the meter, then solo.
-    const int f = getHeight() - stripFaderH;   // the fader area is always at the bottom
+    const int f = getHeight() - stripFaderH + meterRowH;   // the fader area is always at the bottom, under the meter row
     scribble.setBounds (4, getHeight() - 28, stripW - 8, 22);
     const int colX = 62, columnW = stripW - colX - 6;
     fader.setBounds (2, f + 8, colX - 6, scribble.getY() - 6 - (f + 8));
@@ -1129,7 +1131,6 @@ StripBank::StripBank (const juce::OwnedArray<ChannelStrip>& channelStrips, const
     meterButton.onClick = [this]
     {
         meterInput = ! meterInput;
-        meterButton.setButtonText (meterInput ? "IN" : "OUT");
         meterButton.setToggleState (meterInput, juce::dontSendNotification);
         meterButton.setTooltip (meterInput ? "Meters show each channel's input (after the trim). Click to show the output (after the fader) instead"
                                            : "Meters show each channel's output (after the fader). Click to show the input (after the trim) instead");
@@ -1173,7 +1174,7 @@ void StripBank::resized()
         s->setBounds (x, 0, stripW, getHeight());
         x += stripW;
     }
-    meterButton.setBounds (5 + stripW - 10 - 36, 5, 34, 14);   // on the first strip's "Input" title line
+    meterButton.setBounds (6, getHeight() - stripFaderH + 6, stripW - 12, 18);   // the first strip's meter row
     meterButton.toFront (false);
 
     // Each link button sits on the line between its two strips, level with their pan knobs.
