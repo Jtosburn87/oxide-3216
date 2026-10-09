@@ -1263,6 +1263,26 @@ namespace
             check (notStereo.isEmpty() && ! e.auxInserts[0]->isStereoRefused (1) && ! e.auxInserts[0]->isStereoOnly(), "unlinking takes it back in");
             check (e.setAuxLink (0, true).contains ("Mono"), "relinking reports it");
         }
+        {
+            // Linked channels 1+2 panned hard left/right, then aux pair 1+2 linked: the sends are stereo too.
+            TestEngine e;
+            auto& a = e.inputStrips[0]->controls;
+            auto& b = e.inputStrips[1]->controls;
+            e.inputLink[0]->set (1.0f);
+            a.pan->set (-1.0f);
+            check (b.pan->get() == 1.0f, "linked channels: main pans mirror");
+            e.setAuxLink (0, true);
+            check (a.auxLevel[1]->get() == 0.0f && b.auxLevel[1]->get() == 1.0f, "linking the aux pair starts each aux pan at the main pan");
+            a.auxLevel[1]->set (0.2f);
+            check (near (b.auxLevel[1]->get(), 0.8f), "linked channels: aux pans mirror");
+            b.auxLevel[1]->set (0.4f);
+            check (near (a.auxLevel[1]->get(), 0.6f), "either channel moves the other the opposite way");
+            a.auxLevel[0]->set (0.7f);
+            check (b.auxLevel[0]->get() == 0.7f, "aux send levels still move together");
+            e.setAuxLink (0, false);
+            a.auxLevel[1]->set (0.3f);
+            check (b.auxLevel[1]->get() == 0.3f, "aux pair unlinked: A2 is a send level again and copies straight");
+        }
     }
 
     void testPunchAndLoop()

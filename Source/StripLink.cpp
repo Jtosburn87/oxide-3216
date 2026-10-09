@@ -1,8 +1,18 @@
 #include "StripLink.h"
 
 StripLink::StripLink (ParamSet& params, ChannelStrip& a, ChannelStrip& b, Param& l)
-    : link (l), mirrored { a.controls.pan, b.controls.pan }
+    : link (l)
 {
+    const auto always = [] { return true; };
+    mirrored[a.controls.pan] = always;
+    mirrored[b.controls.pan] = always;
+    for (int j = 0; j < Config::numAux / 2; ++j)
+    {
+        const auto auxLinked = [&a, j] { return a.isAuxLinked (j); };
+        mirrored[a.controls.auxLevel[2 * j + 1]] = auxLinked;
+        mirrored[b.controls.auxLevel[2 * j + 1]] = auxLinked;
+    }
+
     // A strip's controls all have ids "<prefix>.<control>", so "ch1.eq.hf.gain" pairs with "ch2.eq.hf.gain".
     const auto prefixA = a.idPrefix + ".";
     for (auto* p : params.all())
@@ -12,8 +22,8 @@ StripLink::StripLink (ParamSet& params, ChannelStrip& a, ChannelStrip& b, Param&
     listen();
 }
 
-StripLink::StripLink (Param& l, const std::vector<std::pair<Param*, Param*>>& pairs, std::set<const Param*> m)
-    : link (l), mirrored (std::move (m))
+StripLink::StripLink (Param& l, const std::vector<std::pair<Param*, Param*>>& pairs)
+    : link (l)
 {
     for (auto& [a, b] : pairs)
         addPair (a, b);
@@ -44,7 +54,10 @@ StripLink::~StripLink()
 void StripLink::copy (Param& from, Param& to)
 {
     mirroring = true;
-    to.set (mirrored.count (&from) != 0 ? -from.get() : from.get());
+    // Mirroring reflects about the middle of the range: pan -1..1 about 0, an aux send pan 0..1 about 0.5.
+    const auto m = mirrored.find (&from);
+    const bool mirror = m != mirrored.end() && m->second();
+    to.set (mirror ? from.min + from.max - from.get() : from.get());
     mirroring = false;
 }
 

@@ -111,8 +111,8 @@ public:
         stereo (see ChannelStrip::auxLink). */
     static constexpr int numAuxPairs = Config::numAux / 2;
     std::array<Param*, numAuxPairs> auxLink {};
-    /** Links or unlinks a pair from the console: linking also centres every channel's pan knob for the pair
-        (the even send knob). Returns the plugins on the pair's inserts that cannot run in stereo (left out while linked). */
+    /** Links or unlinks a pair from the console: linking also starts every channel's pan knob for the pair
+        (the even send knob) at that channel's main pan. Returns the plugins on the pair's inserts that cannot run in stereo (left out while linked). */
     juce::StringArray setAuxLink (int pair, bool on);
 
     // Scribble-strip names of the subs and the aux masters (message thread; saved with the session).

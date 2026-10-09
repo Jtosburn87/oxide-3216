@@ -97,14 +97,16 @@ juce::StringArray AudioEngine::setAuxLink (int pair, bool on)
         return notStereo;
 
     auto& link = *auxLink[(size_t) pair];
-    if (on && ! link.on())
+    const bool linking = on && ! link.on();
+    link.set (on ? 1.0f : 0.0f);
+    if (linking)
     {
-        // The even send knob turns into the pair's pan: start every channel in the centre.
+        // The even send knob turns into the pair's pan: start every channel where its main pan is, so a
+        // linked channel pair panned left/right sends in stereo. (Set after the link, so linked channels mirror.)
         for (auto* strips : { &inputStrips, &returnStrips })
             for (auto* s : *strips)
-                s->controls.auxLevel[2 * pair + 1]->set (0.5f);
+                s->controls.auxLevel[2 * pair + 1]->set ((s->controls.pan->get() + 1.0f) * 0.5f);
     }
-    link.set (on ? 1.0f : 0.0f);
 
     auto& chain = *auxInserts[2 * pair];
     for (int i = 0; i < InsertChain::numSlots; ++i)
