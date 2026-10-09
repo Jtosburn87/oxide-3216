@@ -62,6 +62,11 @@ namespace
     }
 }
 
+juce::File Session::bounceFolder (const juce::File& sessionFolder)
+{
+    return sessionFolder.getChildFile (bounceFolderName);
+}
+
 juce::String Session::trackFileName (int track)
 {
     return "Track " + juce::String (track + 1).paddedLeft ('0', 2) + ".wav";
@@ -301,19 +306,27 @@ Session::Result Session::load (AudioEngine& e, PluginManager* plugins, const juc
 }
 
 //==============================================================================
-Session::Result Session::exportMix (AudioEngine& e, const juce::File& file, double tailSeconds, const std::function<bool (double)>& progress)
+Session::Result Session::exportMix (AudioEngine& e, const juce::File& file, juce::int64 start, juce::int64 end, double tailSeconds,
+                                     const std::function<bool (double)>& progress)
 {
     Result r;
     auto& tape = e.tape;
     const double sr = tape.getSampleRate();
-    const auto length = tape.getLength();
-    if (length <= 0)
+    if (tape.getLength() <= 0)
     {
         r.ok = false;
         r.error = "The tape is empty: there is nothing to export.";
         return r;
     }
+    start = juce::jmax ((juce::int64) 0, start);
+    if (end <= start)
+    {
+        r.ok = false;
+        r.error = "The Out point must be after the In point.";
+        return r;
+    }
 
+    file.getParentDirectory().createDirectory();
     file.deleteFile();
     auto stream = file.createOutputStream();
     juce::WavAudioFormat wav;
@@ -335,10 +348,10 @@ Session::Result Session::exportMix (AudioEngine& e, const juce::File& file, doub
     e.oscillatorMuted = true;
     forEachChain (e, [] (InsertChain& c) { for (int s = 0; s < InsertChain::numSlots; ++s) if (auto* p = c.getProcessor (s)) p->setNonRealtime (true); });
 
-    tape.locate (0);
+    tape.locate (start);
     tape.play();
 
-    const auto total = length + (juce::int64) (tailSeconds * sr);
+    const auto total = (end - start) + (juce::int64) (tailSeconds * sr);
     std::vector<float> left ((size_t) Config::maxBlock), right ((size_t) Config::maxBlock);
     bool cancelled = false;
     for (juce::int64 done = 0; done < total;)

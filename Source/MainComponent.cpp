@@ -361,7 +361,7 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
                             info.addDefaultKeypress ('s', cmd); break;
         case saveSessionAs: info.setInfo ("Save as", "Saves the session in a new folder", "Session", 0);
                             info.addDefaultKeypress ('s', cmd | juce::ModifierKeys::shiftModifier); break;
-        case exportMix:     info.setInfo ("Export mix", "Exports the mix to a WAV file", "Session", 0);
+        case exportMix:     info.setInfo ("Export mix", "Exports the whole session or In to Out as a WAV in the session's Bounced Audio folder", "Session", 0);
                             info.addDefaultKeypress ('e', cmd); break;
         case importAudio:   info.setInfo ("Import audio", "Imports an audio file onto one tape track (a stereo file onto two)", "Session", 0);
                             info.addDefaultKeypress ('i', cmd); break;

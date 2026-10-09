@@ -1425,7 +1425,7 @@ namespace
 
             // Export the mix (track 5 through return 5, everything else at defaults).
             const auto wav = folder.getChildFile ("mix.wav");
-            const auto e = Session::exportMix (b, wav, 1.0, [] (double) { return true; });
+            const auto e = Session::exportMix (b, wav, 0, b.tape.getLength(), 1.0, [] (double) { return true; });
             check (e.ok, "export finished");
             juce::AudioFormatManager fm;
             fm.registerBasicFormats();
@@ -1443,6 +1443,18 @@ namespace
                 juce::ignoreUnused (lo, hi);
             }
             check (! b.tape.isPlaying() && b.tape.getPosition() == 0 && ! b.tape.exporting, "transport put back after export");
+
+            // In to Out, into the Bounced Audio folder (created by the export).
+            const auto bounced = Session::bounceFolder (folder);
+            check (! bounced.exists(), "no Bounced Audio folder before exporting into it");
+            const auto part = bounced.getChildFile ("part.wav");
+            const auto e2 = Session::exportMix (b, part, b.tape.getInPoint(), b.tape.getOutPoint(), 0.0, [] (double) { return true; });
+            std::unique_ptr<juce::AudioFormatReader> partReader (fm.createReaderFor (part));
+            check (e2.ok && bounced.isDirectory() && partReader != nullptr, "In to Out export written into Bounced Audio");
+            check (partReader != nullptr && partReader->lengthInSamples == 4000, "length = Out - In (4000 samples), no tail");
+            partReader.reset();
+            check (b.tape.getPosition() == 0 && ! b.tape.isPlaying(), "transport put back after a region export");
+            check (! Session::exportMix (b, part, 5000, 1000, 0.0, [] (double) { return true; }).ok, "Out before In is refused");
         }
         {
             TestEngine c;

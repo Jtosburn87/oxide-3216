@@ -31,9 +31,14 @@ namespace Session
     /** Back to an empty console: default controls, no cables, no plugins, blank tape. */
     void reset (AudioEngine&);
 
-    /** Renders the main bus (post limiter) from the start of the tape to its end plus a tail, to a
-        24-bit stereo WAV. progress gets 0..1 and returns false to cancel. */
-    Result exportMix (AudioEngine&, const juce::File& wav, double tailSeconds, const std::function<bool (double)>& progress);
+    /** Renders the main bus (post limiter) from start to end on the tape (in samples) plus a tail, to a
+        24-bit stereo WAV, creating its folder if needed. progress gets 0..1 and returns false to cancel. */
+    Result exportMix (AudioEngine&, const juce::File& wav, juce::int64 start, juce::int64 end, double tailSeconds,
+                      const std::function<bool (double)>& progress);
+
+    /** Exports go in this subfolder of the session folder. */
+    static constexpr const char* bounceFolderName = "Bounced Audio";
+    juce::File bounceFolder (const juce::File& sessionFolder);
 
     juce::String trackFileName (int track);
 }
