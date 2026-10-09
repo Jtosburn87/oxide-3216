@@ -11,6 +11,7 @@
 #include "TapeMachine.h"
 #include "BusCompressor.h"
 #include "InsertChain.h"
+#include "Talkback.h"
 
 /** Owns the audio device, the console's parameters and its DSP, and runs the real-time callback.
 
@@ -61,11 +62,12 @@ public:
     struct Patch
     {
         // Sources
-        static constexpr int channelOut = 0, returnOut = 16, tapeOut = 32, auxOut = 48, subOut = 56, mainL = 60, mainR = 61, oscillator = 62;
-        static constexpr int numSources = 63;
+        static constexpr int channelOut = 0, returnOut = 16, tapeOut = 32, auxOut = 48, subOut = 56, mainL = 60, mainR = 61, oscillator = 62,
+                             tbLimiterOut = 63;
+        static constexpr int numSources = 64;   // every bit of a 64-bit cable mask
         // Destinations
-        static constexpr int tapeIn = 0, returnIn = 16, channelIn = 32;
-        static constexpr int numDestinations = 48;
+        static constexpr int tapeIn = 0, returnIn = 16, channelIn = 32, talkbackIn = 48, tbLimiterIn = 49;
+        static constexpr int numDestinations = 50;
 
     };
 
@@ -152,6 +154,23 @@ public:
     /** Console colour: every input and return preamp voiced like a Neve 1073 (see Preamp). On by default. */
     Param* preampColour = nullptr;
 
+    /** Talkback, as on a real console: the talkback mic (the patch bay's Talkback In, usually from an interface
+        input) goes, while Talk is held or latched, to the chosen aux outputs (Aux 5-8) at the TB level. It joins
+        after the aux returns, so it never reaches the main mix through an effect. By default it runs through
+        the TB limiter (the limiter's input is normalled from Talkback In; patching TB Lim In breaks that and the
+        talkback goes dry). The limiter's in and out are on the patch bay for use anywhere else too. */
+    std::atomic<bool> talkbackOn { false };
+    static constexpr int firstTalkbackAux = 4, numTalkbackAux = 4;   // Aux 5-8
+    Param* tbLevel = nullptr;                                         // dB, -60 (off) .. +10
+    std::array<Param*, numTalkbackAux> tbToAux {};                    // Aux 5..8
+    Param* tbDim = nullptr;                                           // dim the monitors 15 dB while talking
+    Param* tbThroughLimiter = nullptr;
+    Param* tbLimInput = nullptr;                                      // dB, 0..+30
+    Param* tbLimBlend = nullptr;                                      // %, 0..100 (100 = all compressed)
+    Param* tbLimMakeup = nullptr;                                     // dB, -12..+24
+    static constexpr float talkbackDimDb = -15.0f;
+    float takeTalkbackReduction() noexcept { return tbLimiter.takeReduction(); }
+
     /** Export: runs the console with no live inputs and writes main L/R (post limiter) to the given buffers.
         Only call while the device is not calling the engine (see MainComponent::exportMix). */
     void renderOffline (float* left, float* right, int numSamples);
@@ -190,6 +209,8 @@ private:
     std::atomic<std::uint64_t> callbackCount { 0 };
     double currentSampleRate = 48000.0;
     Dsp::Oscillator oscillator;
+    TalkbackLimiter tbLimiter;
+    Dsp::Smoothed talkbackGain;
     Dsp::Smoothed mainGainL;
     Dsp::Smoothed monitorSolo;   // 0 = monitor outs carry main, 1 = the solo bus
     Dsp::Smoothed monitorGainS;
@@ -206,6 +227,7 @@ private:
     std::array<Block, Config::numTracks> tapeOut {};
     Block mixL {}, mixR {};
     Block oscOut {};
+    Block tbLimOut {};
     Block soloL {}, soloR {};
     std::array<Block, Config::numSubs> subL {}, subR {};
     std::array<Block, Config::numAux> aux {};

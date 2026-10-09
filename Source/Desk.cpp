@@ -1,6 +1,7 @@
 ﻿#include "Desk.h"
 #include "ConsoleLookAndFeel.h"
 #include "EraseDialog.h"
+#include "TalkbackSettings.h"
 
 using namespace ConsoleColours;
 using namespace DeskLayout;
@@ -608,7 +609,9 @@ CentreSection::CentreSection (AudioEngine& e, PluginContext* plugins)
       mainFader (*e.mainFader),
       busPanel (e.busComp),
       inserts (e, plugins),
-      monitorLevel (*e.monitorLevel, "Level", juce::Colour (0xffd9d6cc))
+      monitorLevel (*e.monitorLevel, "Level", juce::Colour (0xffd9d6cc)),
+      tbLevel (*e.tbLevel, "TB", juce::Colour (0xffd6392d)),
+      talkButton (e.talkbackOn)
 {
     addAndMakeVisible (appButtons);
     appButtons.setTitle ("App buttons");
@@ -616,6 +619,15 @@ CentreSection::CentreSection (AudioEngine& e, PluginContext* plugins)
     monitorLevel.setFormatter ([] (float db) { return db <= -59.5f ? juce::String ("off") : (db > 0.05f ? "+" : "") + juce::String (db, 1) + " dB"; });
     monitorLevel.setEndLabels ("off", "+10");
     addAndMakeVisible (monitorLevel);
+
+    // Talkback: level, the Talk key, and its settings (destinations Aux 5-8 and the TB limiter).
+    tbLevel.setFormatter ([] (float db) { return db <= -59.5f ? juce::String ("TB off") : "TB " + juce::String (db > 0.05f ? "+" : "") + juce::String (db, 1); });
+    tbLevel.setEndLabels ("off", "+10");
+    addAndMakeVisible (tbLevel);
+    addAndMakeVisible (talkButton);
+    tbSetup.setTooltip ("Talkback settings: which auxes it goes to (5-8), monitor dim, and the TB limiter");
+    tbSetup.onClick = [this] { TalkbackSettings::show (engine); };
+    addAndMakeVisible (tbSetup);
 
     cassette.projectName().referTo (engine.projectName);
     addAndMakeVisible (cassette);
@@ -848,8 +860,19 @@ void CentreSection::resized()
     const int numButtons = appButtons.getNumChildComponents();
     appBox = { panelX, 12, panelW, 28 + appButtons.heightFor (numButtons) + 10 };
     appButtons.setBounds (appBox.reduced (10).withTrimmedTop (18));
-    monitorBox = { panelX, appBox.getBottom() + 16, panelW, 28 + Knob::preferredHeight + 10 };
-    monitorLevel.setBounds (monitorBox.withTrimmedTop (24).withSizeKeepingCentre (Knob::preferredWidth, Knob::preferredHeight));
+    // Monitor and talkback: the two levels side by side, Talk and Setup under them.
+    monitorBox = { panelX, appBox.getBottom() + 16, panelW, 28 + Knob::preferredHeight + 6 + 26 + 10 };
+    {
+        auto m = monitorBox.reduced (8, 0).withTrimmedTop (24);
+        auto knobs = m.removeFromTop (Knob::preferredHeight);
+        monitorLevel.setBounds (knobs.removeFromLeft (knobs.getWidth() / 2).withSizeKeepingCentre (Knob::preferredWidth, Knob::preferredHeight));
+        tbLevel.setBounds (knobs.withSizeKeepingCentre (Knob::preferredWidth, Knob::preferredHeight));
+        m.removeFromTop (6);
+        auto buttons = m.removeFromTop (26);
+        talkButton.setBounds (buttons.removeFromLeft (buttons.getWidth() / 2 + 4));
+        buttons.removeFromLeft (4);
+        tbSetup.setBounds (buttons);
+    }
 
     // Inserts and aux returns, along the bottom of the knob area.
     insertsBox = { 12, groupEqBox.getBottom() + 22, centreW - 24, knobH - 12 - (groupEqBox.getBottom() + 22) };
@@ -913,7 +936,7 @@ void CentreSection::paint (juce::Graphics& g)
                 deckBox.reduced (10).withHeight (24), juce::Justification::centredLeft, false);
 
     // App buttons and monitor level panels, in the same style.
-    for (auto [box, title] : { std::pair { appBox, "Console" }, std::pair { monitorBox, "Monitor / Phones" } })
+    for (auto [box, title] : { std::pair { appBox, "Console" }, std::pair { monitorBox, "Monitor / TB" } })
     {
         g.setColour (faderArea);
         g.fillRoundedRectangle (box.toFloat(), 2.0f);
@@ -963,6 +986,7 @@ void CentreSection::paint (juce::Graphics& g)
 void CentreSection::update()
 {
     busPanel.update();
+    talkButton.update();
 
     // Names can change underneath (a session was opened).
     bool renamed = false;
@@ -1020,6 +1044,51 @@ void CentreSection::update()
         shownOut = tape.getOutPoint();
         repaint (locateBox.expanded (2, 8));
     }
+}
+
+TalkButton::TalkButton (std::atomic<bool>& t) : juce::TextButton ("Talk"), talking (t)
+{
+    setTooltip ("Talkback: hold to talk, double-click to latch (click again to stop)");
+    setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffd0473c));
+    setColour (juce::TextButton::textColourOnId, juce::Colours::white);
+}
+
+void TalkButton::mouseDown (const juce::MouseEvent&)
+{
+    // Pressing while latched stops talking; otherwise talk for as long as it is held.
+    if (latched)
+    {
+        latched = false;
+        talking.store (false);
+    }
+    else
+    {
+        talking.store (true);
+    }
+    update();
+}
+
+void TalkButton::mouseUp (const juce::MouseEvent&)
+{
+    if (! latched)
+        talking.store (false);
+    update();
+}
+
+void TalkButton::mouseDoubleClick (const juce::MouseEvent&)
+{
+    // The second press of a double-click latches: talkback stays on after letting go.
+    latched = true;
+    talking.store (true);
+    update();
+}
+
+void TalkButton::clicked()
+{
+    // Keyboard (Space / Enter): latch or stop.
+    latched = ! talking.load();
+    talking.store (latched);
+    update();
 }
 
 void updateTapeDisplay (TapeMachine& tape, Cassette& cassette, TapeClock& clock)

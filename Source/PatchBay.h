@@ -7,7 +7,8 @@
 /** The jack field, laid out like a rack: two pairs of rows, outputs above inputs.
     Pair 1: interface inputs and channel direct outs over the channel strip ins and tape ins.
     Pair 2: tape outs, return direct outs, aux, sub and main over the return strip ins.
-    The test oscillator sits at the end of pair 1: an output like any other, with its controls beside it.
+    The test oscillator sits at the end of pair 1: an output like any other, with its controls beside it;
+    after it the talkback jacks: TB limiter out above, Talkback in and TB limiter in below.
     Every normal runs straight down from an output to the input under it. */
 class PatchBayField : public juce::Component,
                       private Param::Listener

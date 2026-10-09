@@ -57,6 +57,18 @@ AudioEngine::AudioEngine()
     oscFreq = &params.add ("osc.freq", "Oscillator frequency", 20.0f, 20000.0f, 1000.0f, Param::Scale::log);
     oscLevel = &params.add ("osc.level", "Oscillator level", -60.0f, 0.0f, -18.0f);
     preampColour = &params.addToggle ("console.colour", "Console colour", true);
+
+    tbLevel = &params.add ("tb.level", "Talkback level", -60.0f, 10.0f, 0.0f);
+    for (int k = 0; k < numTalkbackAux; ++k)
+    {
+        const auto n = juce::String (firstTalkbackAux + k + 1);
+        tbToAux[(size_t) k] = &params.addToggle ("tb.aux" + n, "Talkback to aux " + n, k == 0);   // Aux 5 to start with
+    }
+    tbDim = &params.addToggle ("tb.dim", "Dim monitors while talking", true);
+    tbThroughLimiter = &params.addToggle ("tb.limiter", "Talkback through the TB limiter", true);
+    tbLimInput = &params.add ("tbl.input", "TB limiter input", 0.0f, 30.0f, 10.0f);
+    tbLimBlend = &params.add ("tbl.blend", "TB limiter blend", 0.0f, 100.0f, 100.0f);
+    tbLimMakeup = &params.add ("tbl.makeup", "TB limiter makeup", -12.0f, 24.0f, 6.0f);
     for (auto* strips : { &inputStrips, &returnStrips })
         for (auto* s : *strips)
             s->colour = preampColour;
@@ -163,6 +175,8 @@ void AudioEngine::initialise (const juce::XmlElement* savedState)
             setInterfaceInput (Patch::tapeIn + t, routing->getIntAttribute ("tapeIn" + juce::String (t + 1), -1));
         for (int r = 0; r < Config::numReturnStrips; ++r)
             setInterfaceInput (Patch::returnIn + r, routing->getIntAttribute ("returnIn" + juce::String (r + 1), -1));
+        setInterfaceInput (Patch::talkbackIn, routing->getIntAttribute ("talkbackIn", -1));
+        setInterfaceInput (Patch::tbLimiterIn, routing->getIntAttribute ("tbLimiterIn", -1));
         setMainOutput (0, routing->getIntAttribute ("mainL", 0));
         setMainOutput (1, routing->getIntAttribute ("mainR", 1));
         setMonitorOutput (0, routing->getIntAttribute ("monitorL", -1));
@@ -194,6 +208,9 @@ std::unique_ptr<juce::XmlElement> AudioEngine::createStateXml() const
     for (int r = 0; r < Config::numReturnStrips; ++r)
         if (getInterfaceInput (Patch::returnIn + r) >= 0)
             routing->setAttribute ("returnIn" + juce::String (r + 1), getInterfaceInput (Patch::returnIn + r));
+    for (auto [dest, key] : { std::pair { Patch::talkbackIn, "talkbackIn" }, std::pair { Patch::tbLimiterIn, "tbLimiterIn" } })
+        if (getInterfaceInput (dest) >= 0)
+            routing->setAttribute (key, getInterfaceInput (dest));
     routing->setAttribute ("mainL", getMainOutput (0));
     routing->setAttribute ("mainR", getMainOutput (1));
     routing->setAttribute ("monitorL", getMonitorOutput (0));
@@ -327,6 +344,8 @@ void AudioEngine::prepare (double sampleRate, const juce::BigInteger& activeInpu
 {
     currentSampleRate = sampleRate > 0 ? sampleRate : 48000.0;
     oscillator.prepare (currentSampleRate, oscFreq->get());
+    tbLimiter.prepare (currentSampleRate);
+    talkbackGain.prepare (currentSampleRate, 0.0f);
 
     // The callback only receives the active channels, packed in order.
     inputSlot.fill (-1);
@@ -593,8 +612,6 @@ void AudioEngine::render (const float* const* inputs, int numInputs, float* cons
                 pk = juce::jmax (pk, std::abs (a[i]));
             }
             raisePeak (auxPeak[(size_t) k], pk);
-            if (auxOut[k] != nullptr)
-                juce::FloatVectorOperations::add (auxOut[k] + start, a, n);
         }
 
         // Aux returns: inserts -> return pan -> main, while assigned to main. A linked pair returns in stereo
@@ -632,6 +649,42 @@ void AudioEngine::render (const float* const* inputs, int numInputs, float* cons
             juce::FloatVectorOperations::add (mixL.data(), returnL.data(), n);
             juce::FloatVectorOperations::add (mixR.data(), returnR.data(), n);
         }
+
+        // Talkback: the mic through the TB limiter (while the limiter's input is normalled to it), into the
+        // chosen aux outputs. After the aux returns, so it never reaches the main mix through an effect.
+        {
+            const float* mic = patchedInput (Patch::talkbackIn, nullptr, interfaceAt (Patch::talkbackIn, start), 3, n);
+            const bool throughLimiter = tbThroughLimiter->on();
+            const float* limIn = patchedInput (Patch::tbLimiterIn, throughLimiter ? mic : nullptr, interfaceAt (Patch::tbLimiterIn, start), 3, n);
+            if (limIn != nullptr)
+                tbLimiter.process (limIn, tbLimOut.data(), n, tbLimInput->get(), tbLimBlend->get() * 0.01f, tbLimMakeup->get());
+            else
+                juce::FloatVectorOperations::clear (tbLimOut.data(), n);
+
+            const bool normalled = patch[(size_t) Patch::tbLimiterIn].load (std::memory_order_relaxed) == 0
+                                   && interfaceIn[Patch::tbLimiterIn] == nullptr;
+            const float* talk = throughLimiter && normalled ? (mic != nullptr ? tbLimOut.data() : nullptr) : mic;
+            const float target = talkbackOn.load (std::memory_order_relaxed) ? monitorGain (tbLevel->get()) : 0.0f;
+            if (talk != nullptr && ! (target == 0.0f && talkbackGain.settled (0.0f)))
+            {
+                for (int i = 0; i < n; ++i)
+                {
+                    const float x = talk[i] * talkbackGain.next (target);
+                    for (int k = 0; k < numTalkbackAux; ++k)
+                        if (tbToAux[(size_t) k]->on())
+                            aux[(size_t) (firstTalkbackAux + k)][(size_t) i] += x;
+                }
+            }
+            else
+            {
+                talkbackGain.current = target;
+            }
+        }
+
+        // Aux outputs (after the talkback).
+        for (int k = 0; k < Config::numAux; ++k)
+            if (auxOut[k] != nullptr)
+                juce::FloatVectorOperations::add (auxOut[k] + start, aux[(size_t) k].data(), n);
 
         // Master section: bus compressor -> master inserts -> main fader -> limiter -> outputs.
         busComp.process (mixL.data(), mixR.data(), n);
@@ -688,7 +741,9 @@ void AudioEngine::render (const float* const* inputs, int numInputs, float* cons
         // Monitor outs: main, or the solo bus while anything is soloed (a short crossfade between them),
         // at the monitor level.
         const float soloT = anySolo ? 1.0f : 0.0f;
-        const float levelT = monitorGain (monitorLevel->get());
+        // Talking dims the control room, as on a real console, so the talkback mic does not feed back.
+        const bool dimmed = talkbackOn.load (std::memory_order_relaxed) && tbDim->on();
+        const float levelT = monitorGain (monitorLevel->get()) * (dimmed ? Dsp::dbToGain (talkbackDimDb) : 1.0f);
         if (monitorOut[0] != nullptr || monitorOut[1] != nullptr)
         {
             float* solo[2] = { soloL.data(), soloR.data() };
@@ -718,8 +773,13 @@ void AudioEngine::render (const float* const* inputs, int numInputs, float* cons
 //==============================================================================
 void AudioEngine::setPatch (int dest, std::uint64_t sources)
 {
-    if (juce::isPositiveAndBelow (dest, Patch::numDestinations))
-        patch[(size_t) dest].store (sources & ((std::uint64_t (1) << Patch::numSources) - 1));
+    if (! juce::isPositiveAndBelow (dest, Patch::numDestinations))
+        return;
+    constexpr auto all = Patch::numSources >= 64 ? ~std::uint64_t (0) : (std::uint64_t (1) << (Patch::numSources % 64)) - 1;
+    sources &= all;
+    if (dest == Patch::tbLimiterIn)
+        sources &= ~(std::uint64_t (1) << Patch::tbLimiterOut);   // the TB limiter cannot be patched into itself
+    patch[(size_t) dest].store (sources);
 }
 
 std::uint64_t AudioEngine::getPatch (int dest) const
@@ -739,6 +799,7 @@ const float* AudioEngine::patchSource (int s, int phase) const noexcept
     // Anything not processed yet comes from the previous block.
     const float* previous = patchPrevious[(size_t) s].data();
     if (s == Patch::oscillator) return oscOut.data();   // made at the start of every block
+    if (s == Patch::tbLimiterOut) return phase >= 4 ? tbLimOut.data() : previous;
     if (s < Patch::returnOut) return phase >= 1 ? inputDirect[(size_t) s].data() : previous;
     if (s < Patch::tapeOut)   return phase >= 3 ? returnDirect[(size_t) (s - Patch::returnOut)].data() : previous;
     if (s < Patch::auxOut)    return phase >= 2 ? tapeOut[(size_t) (s - Patch::tapeOut)].data() : previous;

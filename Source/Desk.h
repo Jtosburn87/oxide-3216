@@ -101,6 +101,27 @@ private:
     bool rec = false;
 };
 
+/** The talkback key: hold it to talk, double-click it to latch talkback on (a click stops it). Lit while talking. */
+class TalkButton : public juce::TextButton
+{
+public:
+    explicit TalkButton (std::atomic<bool>& talking);
+
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+    void mouseDoubleClick (const juce::MouseEvent&) override;
+    void clicked() override;   // keyboard: Space / Enter latches or stops
+    void update()
+    {
+        latched = latched && talking.load();
+        setToggleState (talking.load(), juce::dontSendNotification);
+    }
+
+private:
+    std::atomic<bool>& talking;
+    bool latched = false;
+};
+
 /** Moves a cassette and a tape counter on by one frame (30 a second) from the tape's state. Used by the
     console's tape machine and by the Tape machine window. */
 void updateTapeDisplay (TapeMachine&, Cassette&, TapeClock&);
@@ -190,7 +211,9 @@ private:
     juce::OwnedArray<ParamButton> busMainButtons;   // above each bus fader: Sub 1-4, then A1-A8
     int limitHold = 0;
 
-    Knob monitorLevel;
+    Knob monitorLevel, tbLevel;
+    TalkButton talkButton;
+    juce::TextButton tbSetup { "Setup" };
     juce::Rectangle<int> deckBox, armBox, levelBox, groupEqBox, meterBox, appBox, monitorBox;
 
     /** Centre of meter slot i in the meter panel: subs, then auxes, then main (with room for the LIM lamp). */

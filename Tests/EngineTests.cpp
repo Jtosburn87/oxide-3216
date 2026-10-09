@@ -967,6 +967,65 @@ namespace
         check (tape.getLength() == 0 && tape.getRecordedIps() == 0.0f, "erasing the last track with audio leaves a blank tape");
     }
 
+    void testTalkback()
+    {
+        std::puts ("Talkback: Talkback In -> TB limiter -> Aux 5-8 outputs");
+        TestEngine e;
+        using P = AudioEngine::Patch;
+        e.prepare (48000.0, channels ({ 0, 1 }), channels ({ 0, 1, 2, 3 }));
+        mapOnly (e, 0, 0);
+        e.setInterfaceInput (P::talkbackIn, 1);   // the talkback mic on interface input 2
+        e.setAuxOutput (4, 2);                    // Aux 5 -> output 3
+        e.setAuxOutput (5, 3);                    // Aux 6 -> output 4
+        Buffers b (2, 4, 512);
+        double phase = 0.0;
+        const auto run = [&] (float amp, int blocks)
+        {
+            float pk[4] {};
+            for (int k = 0; k < blocks; ++k)
+            {
+                for (int i = 0; i < b.n; ++i, phase += juce::MathConstants<double>::twoPi * 1000.0 / 48000.0)
+                    b.in[1][(size_t) i] = amp * (float) std::sin (phase);
+                b.run (e);
+                if (k >= blocks / 2)
+                    for (int o = 0; o < 4; ++o)
+                        for (float x : b.out[(size_t) o]) pk[o] = juce::jmax (pk[o], std::abs (x));
+            }
+            return std::array<float, 4> { pk[0], pk[1], pk[2], pk[3] };
+        };
+
+        auto pk = run (0.1f, 20);
+        check (pk[2] == 0.0f && pk[3] == 0.0f, "talk off: nothing on the aux outputs");
+
+        e.talkbackOn = true;
+        e.tbThroughLimiter->set (0.0f);
+        pk = run (0.1f, 40);
+        check (near (pk[2], 0.1f, 2.0e-3f) && pk[3] == 0.0f, "talk on, dry: the mic on Aux 5 at 0 dB, not on Aux 6");
+        check (pk[0] == 0.0f && pk[1] == 0.0f, "talkback never reaches the main mix");
+
+        e.tbThroughLimiter->set (1.0f);
+        e.tbLimMakeup->set (0.0f);
+        pk = run (0.5f, 40);
+        const float gr = e.takeTalkbackReduction();
+        std::printf ("      hot mic through the limiter: peak %.3f, %.1f dB of gain reduction\n", pk[2], gr);
+        check (pk[2] < 0.15f && gr > 15.0f, "the TB limiter flattens a hot mic (about -24 dBFS, plus its soft clip)");
+
+        e.tbLimBlend->set (0.0f);
+        pk = run (0.1f, 40);
+        check (near (pk[2], 0.1f * Dsp::dbToGain (10.0f), 5.0e-3f), "blend fully dry: the input gain only (+10 dB)");
+
+        e.talkbackOn = false;
+        run (0.1f, 10);
+        pk = run (0.1f, 10);
+        check (pk[2] == 0.0f, "talk off again: silent");
+
+        e.setPatch (P::tbLimiterIn, std::uint64_t (1) << P::tbLimiterOut);
+        check (e.getPatch (P::tbLimiterIn) == 0, "the TB limiter cannot be patched into itself");
+        e.setPatch (P::channelIn, std::uint64_t (1) << P::tbLimiterOut);
+        check (e.getPatch (P::channelIn) == (std::uint64_t (1) << P::tbLimiterOut), "TB Lim Out patches anywhere else (64th source)");
+        e.setPatch (P::channelIn, 0);
+    }
+
     void testTapeOutMeters()
     {
         std::puts ("Meter bridge: each track's tape out peak, read and reset");
@@ -2100,6 +2159,7 @@ int main (int argc, char** argv)
     testTapeOutMeters();
     testSpeedAndPitch();
     testEraseSections();
+    testTalkback();
     testPreampColour();
     testBusCompressor();
     testMasterSection();

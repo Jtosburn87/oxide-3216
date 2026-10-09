@@ -19,6 +19,7 @@ namespace
         if (s < P::subOut)    return "Aux out " + juce::String (s - P::auxOut + 1);
         if (s < P::mainL)     return "Sub out " + juce::String (s - P::subOut + 1);
         if (s == P::oscillator) return "Oscillator";
+        if (s == P::tbLimiterOut) return "TB limiter out";
         return s == P::mainL ? "Main L" : "Main R";
     }
 
@@ -27,6 +28,8 @@ namespace
         using P = AudioEngine::Patch;
         if (d < P::returnIn)  return "Tape in " + juce::String (d + 1);
         if (d < P::channelIn) return "Return strip in " + juce::String (d - P::returnIn + 1);
+        if (d == P::talkbackIn)  return "Talkback in (the talkback mic)";
+        if (d == P::tbLimiterIn) return "TB limiter in (normalled from Talkback in)";
         return "Channel strip in " + juce::String (d - P::channelIn + 1);
     }
 
@@ -126,6 +129,7 @@ public:
 juce::Colour PatchBayField::sourceColour (int s)
 {
     if (s == Patch::oscillator) return juce::Colour (0xff3fc1b8); // oscillator: teal
+    if (s == Patch::tbLimiterOut) return juce::Colour (0xffff7a2e); // talkback limiter: orange
     if (s < Patch::returnOut) return juce::Colour (0xffd6392d);   // channel: red
     if (s < Patch::tapeOut)   return juce::Colour (0xff3a8fd6);   // return: blue
     if (s < Patch::auxOut)    return juce::Colour (0xffe0a83a);   // tape: amber
@@ -142,6 +146,7 @@ PatchBayField::PatchBayField (AudioEngine& e, std::function<void()> changedCallb
     {
         juce::String number;
         if (s == Patch::oscillator)     number = "OSC";
+        else if (s == Patch::tbLimiterOut) number = "OUT";
         else if (s >= Patch::mainL)     number = s == Patch::mainL ? "L" : "R";
         else if (s >= Patch::subOut)    number = juce::String (s - Patch::subOut + 1);
         else if (s >= Patch::auxOut)    number = juce::String (s - Patch::auxOut + 1);
@@ -149,7 +154,8 @@ PatchBayField::PatchBayField (AudioEngine& e, std::function<void()> changedCallb
         addAndMakeVisible (sources.add (new Jack (*this, Kind::source, s, sourceName (s), number)));
     }
     for (int d = 0; d < Patch::numDestinations; ++d)
-        addAndMakeVisible (destinations.add (new Jack (*this, Kind::destination, d, destinationName (d), juce::String (d % 16 + 1))));
+        addAndMakeVisible (destinations.add (new Jack (*this, Kind::destination, d, destinationName (d),
+                                                       d == Patch::talkbackIn ? juce::String ("TB") : d == Patch::tbLimiterIn ? juce::String ("IN") : juce::String (d % 16 + 1))));
 
     // Oscillator: waveform switch, frequency sweep (sine) and level.
     const char* const typeNames[] = { "Sine", "White", "Pink" };
@@ -229,6 +235,13 @@ void PatchBayField::rebuild (int interfaceJacks)
         oscTypeButtons[t]->setBounds (x3 + 36 + t * 54, row1Top + 20, 50, 22);
     oscFreqKnob.setBounds (x3 + 44, row1Top + 52, 64, 56);
     oscLevelKnob.setBounds (x3 + 128, row1Top + 52, 64, 56);
+
+    // Talkback after it: the TB limiter's output over the talkback mic in and the limiter's in (which is
+    // normalled from the talkback mic; the limiter cannot be patched into itself).
+    const int x4 = x3 + 36 + 3 * 54 + groupGap;
+    placeGroup ("TB Lim", sources, P::tbLimiterOut, 1, x4, row1Top);
+    groups.back().area.setWidth (2 * jackW);
+    placeGroup ("Talkback", destinations, P::talkbackIn, 2, x4, row1Bottom);
 
     // Pair 2. Return strip in sits under the tape outs that are normalled to it.
     int x = pad;
