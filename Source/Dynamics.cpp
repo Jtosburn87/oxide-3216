@@ -36,6 +36,10 @@ void Gate::beginBlock() noexcept
     thrLin = lin (threshold->get());
     closeLin = lin (threshold->get() - 5.0f);   // 5 dB hysteresis
     rangeLin = lin (range->get());
+
+    const float db = blockMinGain < 0.99999f ? -20.0f * std::log10 (blockMinGain + 1.0e-6f) : 0.0f;
+    reductionPeak.store (juce::jmax (reductionPeak.load (std::memory_order_relaxed), db), std::memory_order_relaxed);
+    blockMinGain = 1.0f;
 }
 
 float Gate::process (float x) noexcept
@@ -82,6 +86,7 @@ float Gate::process (float x) noexcept
 
     gain = target > gain ? target + (gain - target) * aAttack
                          : target + (gain - target) * aRelease;
+    blockMinGain = juce::jmin (blockMinGain, gain);
     if (cooldown > 0)
         --cooldown;
 
@@ -103,9 +108,9 @@ float Gate::process (float x) noexcept
 FetCompressor::FetCompressor (ParamSet& params, const juce::String& prefix)
 {
     in      = &params.addToggle (prefix + ".comp.in", "Compressor in", false);
-    input   = &params.add (prefix + ".comp.input", "Compressor input", 0.0f, 10.0f, 0.0f);
-    output  = &params.add (prefix + ".comp.output", "Compressor output", -12.0f, 12.0f, 0.0f);
-    attack  = &params.add (prefix + ".comp.attack", "Compressor attack", 1.0f, 7.0f, 3.0f);
+    threshold = &params.add (prefix + ".comp.thr", "Compressor threshold", -50.0f, 0.0f, -20.0f);
+    makeup  = &params.add (prefix + ".comp.makeup", "Compressor make-up gain", 0.0f, 24.0f, 0.0f);
+    attack = &params.add (prefix + ".comp.attack", "Compressor attack", 1.0f, 7.0f, 3.0f);
     release = &params.add (prefix + ".comp.release", "Compressor release", 1.0f, 7.0f, 4.0f);
     ratio   = &params.addStepped (prefix + ".comp.ratio", "Compressor ratio", 4, 0);
     all     = &params.addToggle (prefix + ".comp.all", "Compressor all buttons", false);
@@ -128,8 +133,8 @@ void FetCompressor::beginBlock() noexcept
     }
 
     const bool allIn = all->on();
-    driveGain = lin (input->get() * 3.0f);
-    outGain = lin (output->get());
+    thresholdDb = threshold->get();
+    makeupGain = lin (makeup->get());
 
     const double att = 0.0008 * std::pow (0.025, (attack->get() - 1.0) / 6.0);    // 800 us .. 20 us
     const double rel = 1.1 * std::pow (0.0455, (release->get() - 1.0) / 6.0)      // 1.1 s .. 50 ms
@@ -146,10 +151,8 @@ void FetCompressor::beginBlock() noexcept
 
 float FetCompressor::process (float x) noexcept
 {
-    constexpr float threshold = -14.0f;
-
-    env = juce::jmax (std::abs (x) * driveGain, env * dec);
-    const float over = 20.0f * std::log10 (env + 1.0e-9f) - threshold;
+    env = juce::jmax (std::abs (x), env * dec);
+    const float over = 20.0f * std::log10 (env + 1.0e-9f) - thresholdDb;
 
     float target = 0.0f;
     if (over > knee * 0.5f)
@@ -164,8 +167,8 @@ float FetCompressor::process (float x) noexcept
                      : aRelease * gr + (1.0f - aRelease) * target;
     blockMaxGr = juce::jmax (blockMaxGr, gr);
 
-    const float y = x * lin (-gr) * driveGain;
-    return (std::tanh (satScale * y + satBias) - satOffset) / satScale * outGain;
+    const float y = x * lin (-gr) * makeupGain;
+    return (std::tanh (satScale * y + satBias) - satOffset) / satScale;
 }
 
 void FetCompressor::finishBlock() noexcept

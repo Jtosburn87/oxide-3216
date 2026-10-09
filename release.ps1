@@ -7,6 +7,7 @@ Set-Location $PSScriptRoot
 if ($LASTEXITCODE) { throw "Build or tests failed." }
 
 $version = (Select-String -Path CMakeLists.txt -Pattern 'project\(Oxide3216 VERSION ([0-9.]+)').Matches[0].Groups[1].Value
+$version += (Select-String -Path CMakeLists.txt -Pattern 'OXIDE_VERSION_LABEL "\$\{PROJECT_VERSION\}([^"]*)"').Matches[0].Groups[1].Value
 $stage = "dist\Oxide-3216-$version"
 $zip = "dist\Oxide-3216-$version-win64.zip"
 

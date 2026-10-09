@@ -41,9 +41,13 @@ public:
     /** Counts pops; the UI flashes the Fast Attack button when this changes. */
     std::atomic<std::uint32_t> popCount { 0 };
 
+    /** Most the gate has turned the signal down since the last call (dB, positive), for its meter. */
+    float takeReduction() noexcept { return reductionPeak.exchange (0.0f); }
+
 private:
     double sr = 48000.0;
-    float env = 0.0f, gain = 1.0f;
+    float env = 0.0f, gain = 1.0f, blockMinGain = 1.0f;
+    std::atomic<float> reductionPeak { 0.0f };
     bool open = true;
     int hold = 0, watch = 0, cooldown = 0, popT = 0;
     float popAmp = 0.0f;
@@ -96,19 +100,18 @@ private:
     std::atomic<float> reductionPeak { 0.0f };
 };
 
-/** Black-face 1176-style FET compressor (from the prototype).
-    Input drives into a fixed -14 dBFS threshold (3 dB per unit). Peak detection, soft knee 4 dB,
-    asymmetric tanh saturation after the gain reduction, no automatic make-up. */
+/** 1176-style FET compressor (from the prototype), with a threshold knob instead of the 1176's input drive.
+    Peak detection, soft knee 4 dB, make-up gain, then asymmetric tanh saturation (so heavy make-up drives it). */
 class FetCompressor
 {
 public:
     FetCompressor (ParamSet&, const juce::String& prefix);
 
-    Param* in;        // in/out, default out
-    Param* input;     // 0..10
-    Param* output;    // dB, -12..+12
-    Param* attack;    // 1..7, 7 fastest (800 us .. 20 us)
-    Param* release;   // 1..7, 7 fastest (1.1 s .. 50 ms)
+    Param* in;          // in/out, default out
+    Param* threshold;   // dBFS, -50..0
+    Param* makeup;      // dB, 0..+24
+    Param* attack;      // 1..7, 7 fastest (800 us .. 20 us); the knob reads Slow .. Fast
+    Param* release;     // 1..7, 7 fastest (1.1 s .. 50 ms)
     Param* ratio;     // 0..3 = 4, 8, 12, 20
     Param* all;       // all buttons in
 
@@ -128,7 +131,7 @@ private:
     std::atomic<float> grPeak { 0.0f };
 
     // per-block values
-    float driveGain = 1, outGain = 1, aAttack = 0, aRelease = 0, dec = 0, slope = 0, knee = 4, satScale = 0.9f;
+    float thresholdDb = -20, makeupGain = 1, aAttack = 0, aRelease = 0, dec = 0, slope = 0, knee = 4, satScale = 0.9f;
     static constexpr float satBias = 0.08f;
     const float satOffset = std::tanh (satBias);
     bool wasIn = false;

@@ -11,7 +11,7 @@
 namespace DeskLayout
 {
     constexpr int stripW = 110, cheekW = 30, centreW = 780;
-    constexpr int knobH = 994, faderH = 270;   // no meter bridge: the meters sit beside the faders
+    constexpr int knobH = 1006, faderH = 270;   // no meter bridge: the meters sit beside the faders
     constexpr int totalH = knobH + faderH;
 
     // Centre fader area grid: Sub 1-4, Aux 1-8, then Main (1.8 columns wide) behind a divider.
@@ -54,7 +54,8 @@ private:
     juce::OwnedArray<Knob> eqKnobs;            // gain, freq per band
     Knob gateThr, gateRange;
     ParamButton gateFast;
-    Knob compInput, compOutput, compAttack, compRelease;
+    GrMeter gateMeter { 60.0f };   // how far the gate has closed
+    Knob compThreshold, compMakeup, compAttack, compRelease;
     juce::OwnedArray<RadioParamButton> ratioButtons;
     ParamButton compAll, compIn;
     GrMeter grMeter;
@@ -76,6 +77,7 @@ private:
     juce::TextButton gateModeButton;
     std::unique_ptr<Knob> deFreq, deReduction;
     std::unique_ptr<ParamButton> deWide, deGentle, deBypass;
+    GrMeter deMeter;   // de-esser reduction
     bool shownDeEss = false;
     std::array<bool, Config::numAux / 2> shownAuxLink {};   // linked aux pairs: the even send knob is the pair's pan
     void showAuxLink (int pair, bool linked);

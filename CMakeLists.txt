@@ -1,6 +1,9 @@
 ﻿cmake_minimum_required(VERSION 3.22)
 
-project(Oxide3216 VERSION 1.0.0 LANGUAGES C CXX)
+project(Oxide3216 VERSION 0.1.0 LANGUAGES C CXX)
+
+# Beta builds: bump the version above with each set of changes. The label is what the app and the zip show.
+set(OXIDE_VERSION_LABEL "${PROJECT_VERSION}-beta")
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -52,7 +55,7 @@ target_compile_definitions(Oxide3216Core PUBLIC
     JUCE_USE_CURL=0
     JUCE_USE_MP3AUDIOFORMAT=1
     JUCE_APPLICATION_NAME_STRING="Oxide-3216"
-    JUCE_APPLICATION_VERSION_STRING="${PROJECT_VERSION}")
+    JUCE_APPLICATION_VERSION_STRING="${OXIDE_VERSION_LABEL}")
 target_link_libraries(Oxide3216Core
     PRIVATE
         juce::juce_audio_utils

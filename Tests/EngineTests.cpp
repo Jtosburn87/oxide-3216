@@ -605,6 +605,9 @@ namespace
             const float cut = r.measure (1000.0f, 0.001f, 400) / 0.001f;   // 120 ms release: give it 2 s
             std::printf ("      gate closed: %.1f dB\n", toDb (cut));
             check (nearDb (cut, -40.0f, 1.0f), "signal below threshold is cut by the range (-40 dB)");
+            const float shown = gate.takeReduction();
+            std::printf ("      gate meter: %.1f dB\n", shown);
+            check (std::abs (shown - 40.0f) < 1.0f, "gate meter shows the 40 dB it turns down");
             check (gate.popCount.load() == 0, "no pop without fast attack");
         }
         {
@@ -719,16 +722,21 @@ namespace
         std::puts ("1176-style compressor");
         SineRig r;
         auto& comp = r.e.inputStrips[0]->comp;
-        comp.input->set (10.0f);   // +30 dB drive
+        comp.threshold->set (-44.0f);
         check (nearDb (r.measure (1000.0f, 0.1f) / 0.1f, 0.0f, 0.01f), "compressor out (default) is bypassed");
 
         comp.in->set (1.0f);
-        // -20 dBFS + 30 dB drive = +10, 24 dB over the -14 threshold, ratio 4 -> 18 dB reduction -> about -8 dBFS.
-        const float out = r.measure (1000.0f, 0.1f) * 0.1f / 0.1f;
+        // -20 dBFS is 24 dB over the -44 threshold, ratio 4 -> 18 dB reduction -> about -38 dBFS; +24 make-up -> -14.
+        const float out = r.measure (1000.0f, 0.1f);
         const float gr = comp.takeGainReduction();
         std::printf ("      ratio 4: output %.1f dBFS, gain reduction %.1f dB\n", toDb (out), gr);
-        check (std::abs (toDb (out) - (-8.0f)) < 1.5f, "ratio 4 output level");
+        check (std::abs (toDb (out) - (-38.0f)) < 1.5f, "ratio 4 output level");
         check (std::abs (gr - 18.0f) < 1.5f, "ratio 4 gain reduction");
+        comp.makeup->set (24.0f);
+        const float madeUp = r.measure (1000.0f, 0.1f);
+        std::printf ("      +24 dB make-up: %.1f dBFS\n", toDb (madeUp));
+        check (std::abs (toDb (madeUp) - (-14.0f)) < 1.5f, "make-up gain brings it back up");
+        comp.makeup->set (0.0f);
 
         comp.ratio->set (3.0f);   // 20:1
         r.measure (1000.0f, 0.1f);
@@ -739,11 +747,11 @@ namespace
         std::printf ("      ratio 20: %.1f dB, all buttons: %.1f dB\n", gr20, grAll);
         check (gr20 > gr + 3.0f && grAll > gr20, "higher ratios compress harder; all buttons hardest");
 
-        comp.output->set (6.0f);
+        comp.makeup->set (6.0f);
         const float louder = r.measure (1000.0f, 0.1f);
-        comp.output->set (0.0f);
+        comp.makeup->set (0.0f);
         const float base = r.measure (1000.0f, 0.1f);
-        check (nearDb (louder / base, 6.0f, 0.2f), "output knob +6 dB");
+        check (nearDb (louder / base, 6.0f, 0.2f), "make-up knob +6 dB");
     }
 
     void testSends()
@@ -821,7 +829,7 @@ namespace
         e.tape.play();
         const float hissDb = rmsDb();
         std::printf ("      hiss at 15 ips: %.1f dBFS RMS\n", hissDb);
-        check (hissDb > -66.0f && hissDb < -58.0f, "15 ips hiss level (-57 dBFS peak noise)");
+        check (hissDb > -86.0f && hissDb < -78.0f, "15 ips hiss level (-77 dBFS peak noise)");
         e.tape.stop();
         rmsDb();
         check (rmsDb() < -150.0f, "no hiss when the tape is stopped");
@@ -1809,6 +1817,24 @@ namespace
         check (fast < slow && fast >= 1, "30 ips: steadier than 7.5 ips");
     }
 
+    void testOldCompressorSession()
+    {
+        std::puts ("Sessions: old compressor Input/Output knobs");
+        const auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("Oxide3216TestOldComp");
+        folder.deleteRecursively();
+        folder.createDirectory();
+        folder.getChildFile (Session::fileName).replaceWithText (
+            R"({ "format": "Oxide-3216 session", "controls": { "ch1.comp.input": 4.0, "ch1.comp.output": -2.0, "ch2.comp.thr": -30.0 } })");
+
+        TestEngine e;
+        e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }));
+        check (Session::load (e, nullptr, folder).ok, "old session loaded");
+        const auto& c1 = e.inputStrips[0]->comp;
+        check (c1.threshold->get() == -26.0f && c1.makeup->get() == 10.0f, "Input 4 / Output -2 -> threshold -26 dBFS, make-up +10 dB");
+        check (e.inputStrips[1]->comp.threshold->get() == -30.0f, "a new session's threshold is left alone");
+        folder.deleteRecursively();
+    }
+
     void testSessions()
     {
         std::puts ("Sessions: save, load, export");
@@ -2033,7 +2059,7 @@ namespace
             s.controls.hpf->set (80.0f);
             s.gate.threshold->set (-50.0f);
             s.comp.in->set (1.0f);
-            s.comp.input->set (5.0f);
+            s.comp.threshold->set (-29.0f);   // as hard as the old Input 5
             for (int k = 0; k < Config::numAux; ++k)
                 s.controls.auxLevel[k]->set (0.5f);
             s.controls.sub[0]->set (1.0f);
@@ -2223,6 +2249,7 @@ int main (int argc, char** argv)
     testWinding();
     testWowFlutter();
     testSessions();
+    testOldCompressorSession();
     testImport();
     testNoDeviceIsSafe();
 

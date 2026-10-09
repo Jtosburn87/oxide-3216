@@ -96,8 +96,8 @@ StripComponent::StripComponent (ChannelStrip& s)
       gateThr (*s.gate.threshold, "Thr", gateCap),
       gateRange (*s.gate.range, "Range", gateCap),
       gateFast (*s.gate.fast, "Fast atk"),
-      compInput (*s.comp.input, "Input", compCap),
-      compOutput (*s.comp.output, "Output", compCap),
+      compThreshold (*s.comp.threshold, "Thresh", compCap),
+      compMakeup (*s.comp.makeup, "Makeup", compCap),
       compAttack (*s.comp.attack, "Attack", compCap),
       compRelease (*s.comp.release, "Release", compCap),
       compAll (*s.comp.all, "All"),
@@ -138,12 +138,14 @@ StripComponent::StripComponent (ChannelStrip& s)
     add (gateThr);
     add (gateRange);
     add (gateFast);
+    gateMeter.setTooltip ("Gate: how far it is turning the signal down (full = 60 dB)");
+    add (gateMeter);
 
-    compInput.setEndLabels ("0", "10");
-    compOutput.setEndLabels ("-", "+");
-    compAttack.setEndLabels ("1", "7");
-    compRelease.setEndLabels ("1", "7");
-    for (auto* k : { &compInput, &compOutput, &compAttack, &compRelease })
+    compThreshold.setEndLabels ("-50", "0");
+    compMakeup.setEndLabels ("0", "24");
+    compAttack.setEndLabels ("Slow", "Fast");
+    compRelease.setEndLabels ("Slow", "Fast");
+    for (auto* k : { &compThreshold, &compMakeup, &compAttack, &compRelease })
         add (*k);
     for (int i = 0; i < 4; ++i)
     {
@@ -230,8 +232,10 @@ StripComponent::StripComponent (ChannelStrip& s)
         deBypass = std::make_unique<ParamButton> (*d->bypass, "Byp");
         deBypass->setTooltip ("Bypass the de-esser");
         redButton (*deBypass);
+        deMeter.setTooltip ("De-esser: how far it is turning the signal down (full = 20 dB)");
         for (juce::Component* c : { (juce::Component*) deFreq.get(), (juce::Component*) deReduction.get(),
-                                    (juce::Component*) deWide.get(), (juce::Component*) deGentle.get(), (juce::Component*) deBypass.get() })
+                                    (juce::Component*) deWide.get(), (juce::Component*) deGentle.get(), (juce::Component*) deBypass.get(),
+                                    (juce::Component*) &deMeter })
             addChildComponent (c);
 
         gateModeButton.setButtonText ("Gate");
@@ -250,7 +254,7 @@ namespace
 {
     // Expanded heights of the sections that can be minimised (in Collapsible bit order), and the
     // height a minimised one keeps: just its title line.
-    constexpr int expandedH[] = { 10 + 4 * 52 + 4, 10 + 50 + 4 + 18 + 6, 10 + 2 * 52 + 2 + 17 + 4 + 16 + 6, 10 + 4 * 44 + 4 };
+    constexpr int expandedH[] = { 10 + 4 * 52 + 4, 10 + 50 + 4 + 18 + 4 + 8 + 6,10 + 2 * 52 + 2 + 17 + 4 + 16 + 6, 10 + 4 * 44 + 4 };
     constexpr int collapsedH = 8;
 }
 
@@ -316,7 +320,7 @@ void StripComponent::showAuxLink (int pair, bool linked)
 void StripComponent::updateVisibility()
 {
     // Hidden when the section is minimised; in the gate slot, only the gate or the de-esser shows.
-    const juce::Component* deEssParts[] = { deFreq.get(), deReduction.get(), deWide.get(), deGentle.get(), deBypass.get() };
+    const juce::Component* deEssParts[] = { deFreq.get(), deReduction.get(), deWide.get(), deGentle.get(), deBypass.get(), &deMeter };
     for (int i = 0; i < 4; ++i)
     {
         const bool folded = (collapsed & (1 << i)) != 0;
@@ -341,15 +345,17 @@ std::vector<juce::Component*> StripComponent::sectionComponents (int bit)
         for (auto* k : eqKnobs) list.push_back (k);
     if (bit == gateSection)
     {
-        list = { &gateThr, &gateRange, &gateFast };
+        list = { &gateThr, &gateRange, &gateFast, &gateMeter };
         for (juce::Component* c : { (juce::Component*) deFreq.get(), (juce::Component*) deReduction.get(), (juce::Component*) deWide.get(),
                                     (juce::Component*) deGentle.get(), (juce::Component*) deBypass.get() })
             if (c != nullptr)
                 list.push_back (c);
+        if (deFreq != nullptr)
+            list.push_back (&deMeter);
     }
     if (bit == compSection)
     {
-        list = { &compInput, &compOutput, &compAttack, &compRelease, &compAll, &compIn, &grMeter };
+        list = { &compThreshold, &compMakeup, &compAttack, &compRelease, &compAll, &compIn, &grMeter };
         for (auto* b : ratioButtons) list.push_back (b);
     }
     if (bit == auxSection)
@@ -414,6 +420,9 @@ void StripComponent::resized()
             gateThr.setBounds (knobAt (left, b.getY() + 10));
             gateRange.setBounds (knobAt (right, b.getY() + 10));
             gateFast.setBounds (bx + 5, b.getY() + 64, bw - 10, 18);
+            const auto meterRow = juce::Rectangle<int> (bx + 5, b.getY() + 86, bw - 10, 8);
+            gateMeter.setBounds (meterRow);
+            deMeter.setBounds (meterRow);
             if (deFreq != nullptr)
             {
                 deFreq->setBounds (knobAt (left, b.getY() + 10));
@@ -428,8 +437,8 @@ void StripComponent::resized()
         },
         [&] (juce::Rectangle<int> b)
         {
-            compInput.setBounds (knobAt (left, b.getY() + 10));
-            compOutput.setBounds (knobAt (right, b.getY() + 10));
+            compThreshold.setBounds (knobAt (left, b.getY() + 10));
+            compMakeup.setBounds (knobAt (right, b.getY() + 10));
             compAttack.setBounds (knobAt (left, b.getY() + 62));
             compRelease.setBounds (knobAt (right, b.getY() + 62));
 
@@ -556,6 +565,11 @@ void StripComponent::update()
     const float out = strip.takePeak(), in = strip.takeInputPeak();
     meter.setLevel (meterInput ? in : out);
     grMeter.setReduction (strip.comp.isIn() ? strip.comp.takeGainReduction() : 0.0f);
+    const float gateDb = strip.gate.takeReduction();   // taken every frame, so a switch never shows a stale one
+    if (shownDeEss)
+        deMeter.setReduction (strip.deEsser->isActive() ? strip.deEsser->takeReduction() : 0.0f);
+    else
+        gateMeter.setReduction (gateDb);
 
     const auto pops = strip.gate.popCount.load();
     if (pops != lastPops)

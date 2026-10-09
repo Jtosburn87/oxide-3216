@@ -211,6 +211,19 @@ Session::Result Session::load (AudioEngine& e, PluginManager* plugins, const juc
             if (auto* p = e.params.find (prop.name.toString()))
                 p->set ((float) (double) prop.value);
 
+    // Sessions from before 0.1.0: the compressor had Input (0..10, 3 dB a step into a fixed -14 dBFS threshold)
+    // and Output (dB) knobs. The same threshold and overall gain as Threshold and Make-up.
+    if (auto* controls = json["controls"].getDynamicObject())
+        forEachStrip (e, [&] (ChannelStrip& s)
+        {
+            const auto input = s.idPrefix + ".comp.input", output = s.idPrefix + ".comp.output";
+            if (! controls->hasProperty (input) || controls->hasProperty (s.comp.threshold->id))
+                return;
+            const float drive = 3.0f * (float) (double) controls->getProperty (input);
+            s.comp.threshold->set (-14.0f - drive);
+            s.comp.makeup->set (drive + (float) (double) controls->getProperty (output));
+        });
+
     if (auto* names = json["stripNames"].getDynamicObject())
         forEachStrip (e, [&] (ChannelStrip& s)
         {

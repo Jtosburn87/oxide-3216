@@ -99,8 +99,13 @@ void Knob::paint (juce::Graphics& g)
         const auto dial = slider.getBounds();
         g.setFont (ConsoleLookAndFeel::uiFont (8.0f));
         g.setColour (ConsoleColours::legend.withAlpha (0.85f));
-        g.drawText (endLeft, juce::Rectangle<int> (dial.getX() - 9, dial.getBottom() - 9, 18, 9), juce::Justification::centred, false);
-        g.drawText (endRight, juce::Rectangle<int> (dial.getRight() - 9, dial.getBottom() - 9, 18, 9), juce::Justification::centred, false);
+        // Kept inside the knob (words like "Slow" would be cut off at its edge), squeezed a little if need be.
+        const auto box = [this, &dial] (int centreX)
+        {
+            return juce::Rectangle<int> (juce::jlimit (0, getWidth() - 18, centreX - 9), dial.getBottom() - 9, 18, 9);
+        };
+        g.drawFittedText (endLeft, box (dial.getX()), juce::Justification::centred, 1, 0.75f);
+        g.drawFittedText (endRight, box (dial.getRight()), juce::Justification::centred, 1, 0.75f);
     }
 }
 
@@ -255,7 +260,7 @@ void RadioParamButton::clicked()
 void GrMeter::setReduction (float db)
 {
     const float before = shown;
-    shown = db > shown ? db : juce::jmax (db, shown - 1.0f);
+    shown = db > shown ? db : juce::jmax (db, shown - fullScale / 20.0f);   // falls back the width of 1 dB in 20
     if (std::abs (shown - before) > 0.01f)
         repaint();
 }
@@ -268,7 +273,7 @@ void GrMeter::paint (juce::Graphics& g)
     g.setColour (juce::Colours::black);
     g.drawRect (r, 1.0f);
 
-    const float w = (r.getWidth() - 2.0f) * juce::jlimit (0.0f, 1.0f, shown / 20.0f);
+    const float w = (r.getWidth() - 2.0f) * juce::jlimit (0.0f, 1.0f, shown / fullScale);
     if (w > 0.0f)
     {
         g.setGradientFill (juce::ColourGradient (juce::Colour (0xffd9a02d), r.getX(), 0.0f,

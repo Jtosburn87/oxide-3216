@@ -118,14 +118,18 @@ private:
     void clicked() override;
 };
 
-/** Horizontal gain-reduction bar, 0..20 dB, amber to red. */
-class GrMeter : public juce::Component
+/** Horizontal gain-reduction bar, 0..20 dB (or fullScaleDb), amber to red. */
+class GrMeter : public juce::Component,
+                public juce::SettableTooltipClient
 {
 public:
+    explicit GrMeter (float fullScaleDb = 20.0f) : fullScale (fullScaleDb) {}
+
     void setReduction (float db);
     void paint (juce::Graphics&) override;
 
 private:
+    const float fullScale;
     float shown = 0.0f;
 };
 

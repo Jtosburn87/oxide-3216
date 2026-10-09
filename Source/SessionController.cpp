@@ -122,7 +122,7 @@ void SessionController::markClean()       { cleanPrint = autosavedPrint = finger
 
 juce::String SessionController::windowTitle() const
 {
-    return "Oxide-3216  -  " + engine.projectName.toString() + (isDirty() ? "  *" : "")
+    return "Oxide-3216 " JUCE_APPLICATION_VERSION_STRING "  -  " +engine.projectName.toString() + (isDirty() ? "  *" : "")
          + (folder != juce::File() ? "   (" + folder.getFullPathName() + ")" : juce::String());
 }
 
