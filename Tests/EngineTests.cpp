@@ -508,7 +508,13 @@ namespace
 
         e.tape.arm[0]->set (1.0f);
         settle (e, b);
-        check (near (b.out[0][100], 0.5f * pan), "armed: return strip hears the input");
+        check (near (b.out[0][100], 0.0f), "armed: the tape out normal to the return strip is open");
+
+        // A cable from tape out 1 still reaches the return strip.
+        using P = AudioEngine::Patch;
+        e.setPatch (P::returnIn + 0, std::uint64_t (1) << (P::tapeOut + 0));
+        settle (e, b);
+        check (near (b.out[0][100], 0.5f * pan), "armed, tape out patched to return in: the input");
 
         e.tape.recordLevel->set (6.0206f);
         settle (e, b);
@@ -765,13 +771,15 @@ namespace
         check (r.e.takeAuxPeak (1) == 0.0f, "aux 2 untouched");
     }
 
-    /** Gain of the tape path (armed track monitoring, heard through return strip 1 only). */
+    /** Gain of the tape path (armed track monitoring, patched into and heard through return strip 1 only). */
     float tapeGain (int speedIndex, float freq, float amp)
     {
+        using P = AudioEngine::Patch;
         SineRig r;
         r.e.inputStrips[0]->controls.main->set (0.0f);
         r.e.tape.speed->set ((float) speedIndex);
         r.e.tape.arm[0]->set (1.0f);
+        r.e.setPatch (P::returnIn + 0, std::uint64_t (1) << (P::tapeOut + 0));
         return r.measure (freq, amp) / amp;
     }
 
@@ -1289,7 +1297,10 @@ namespace
 
         const auto returnLevel = [&] (int r) { e.returnStrips[r]->takePeak(); settle (e, b); return e.returnStrips[r]->takePeak(); };
 
-        check (near (returnLevel (0), 0.25f), "normalled: input 1 -> tape 1 -> return 1");
+        const auto tapeLevel = [&] (int t) { e.tape.takeOutputPeak (t); settle (e, b); return e.tape.takeOutputPeak (t); };
+
+        check (near (tapeLevel (0), 0.25f), "normalled: input 1 -> tape 1");
+        check (returnLevel (0) == 0.0f, "armed track 1: the tape out normal to return 1 is open");
 
         // Channel 2's direct out into return strip in 1 breaks the tape 1 normal.
         e.setPatch (P::returnIn + 0, bit (P::channelOut + 1));
@@ -1302,18 +1313,18 @@ namespace
         // Channel 1 into tape in 2 breaks channel 2's normal to tape 2.
         e.setPatch (P::returnIn + 0, 0);
         e.setPatch (P::tapeIn + 1, bit (P::channelOut + 0));
-        check (near (returnLevel (1), 0.25f), "cable into tape in 2 replaces channel 2");
+        check (near (tapeLevel (1), 0.25f), "cable into tape in 2 replaces channel 2");
         e.setPatch (P::tapeIn + 1, 0);
-        check (near (returnLevel (1), 0.5f), "pulling the cable restores the normal");
+        check (near (tapeLevel (1), 0.5f), "pulling the cable restores the normal");
 
         // Interface input 2 straight into tape in 1 breaks channel 1's normal; a cable adds to it.
         e.setInterfaceInput (P::tapeIn + 0, 1);
-        check (near (returnLevel (0), 0.5f), "interface input 2 -> tape in 1 replaces channel 1");
+        check (near (tapeLevel (0), 0.5f), "interface input 2 -> tape in 1 replaces channel 1");
         e.setPatch (P::tapeIn + 0, bit (P::channelOut + 0));
-        check (near (returnLevel (0), 0.75f), "interface input and a cable into tape in 1 add up");
+        check (near (tapeLevel (0), 0.75f), "interface input and a cable into tape in 1 add up");
         e.setPatch (P::tapeIn + 0, 0);
         e.setInterfaceInput (P::tapeIn + 0, -1);
-        check (near (returnLevel (0), 0.25f), "unwiring the interface input restores the normal");
+        check (near (tapeLevel (0), 0.25f), "unwiring the interface input restores the normal");
 
         // An interface input into a return strip in breaks the tape out normal.
         e.setInterfaceInput (P::returnIn + 1, 0);
@@ -1322,13 +1333,13 @@ namespace
 
         // Channel strip ins are not normalled: a cable adds to the interface input.
         e.setPatch (P::channelIn + 1, bit (P::channelOut + 0));
-        check (near (returnLevel (1), 0.75f), "cable into channel strip in 2 adds to interface input 2");
+        check (near (tapeLevel (1), 0.75f), "cable into channel strip in 2 adds to interface input 2");
         e.setPatch (P::channelIn + 1, 0);
 
-        // Backwards patch: tape out 1 into channel strip in 3 (one block later), on to return 3 via tape 3.
+        // Backwards patch: tape out 1 into channel strip in 3 (one block later), on to tape 3.
         e.tape.arm[2]->set (1.0f);
         e.setPatch (P::channelIn + 2, bit (P::tapeOut + 0));
-        check (near (returnLevel (2), 0.25f), "backwards patch (tape out 1 -> channel in 3) works");
+        check (near (tapeLevel (2), 0.25f), "backwards patch (tape out 1 -> channel in 3) works");
 
         // Mono sub out = (L + R) / 2: channel 1 panned hard left into sub 1, patched into return in 4.
         e.setPatch (P::channelIn + 2, 0);
@@ -1624,6 +1635,7 @@ namespace
         mapOnly (e, 0, 0);
         auto& tape = e.tape;
         tape.characterOn = false;
+        e.setPatch (AudioEngine::Patch::returnIn + 0, std::uint64_t (1) << (AudioEngine::Patch::tapeOut + 0));   // armed: normal open
 
         // An old take on track 1: 0.5 everywhere.
         std::vector<float> old (48000, 0.5f);

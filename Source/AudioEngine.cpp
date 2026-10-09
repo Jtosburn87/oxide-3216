@@ -567,9 +567,15 @@ void AudioEngine::render (const float* const* inputs, int numInputs, float* cons
         tape.process (tapeInPtrs, tapeOutPtrs, n);
 
         // Return bank: tape outs are normalled to return strip ins; a cable (or an interface input) breaks the normal.
+        // An armed track's normal is open (its tape out carries the input, already heard on the channel strip).
+        const bool exportingNow = tape.exporting.load (std::memory_order_relaxed);
         for (int r = 0; r < Config::numReturnStrips; ++r)
-            returnStrips[r]->process (patchedInput (Patch::returnIn + r, tapeOut[(size_t) r].data(), interfaceAt (Patch::returnIn + r, start), 2, n),
+        {
+            const bool armed = tape.arm[(size_t) r]->on() && ! exportingNow;
+            returnStrips[r]->process (patchedInput (Patch::returnIn + r, armed ? nullptr : tapeOut[(size_t) r].data(),
+                                                    interfaceAt (Patch::returnIn + r, start), 2, n),
                                       returnDirect[(size_t) r].data(), buses, n);
+        }
 
         // Latency compensation: the dry mix, every sub and every active aux return are delayed to line up
         // with the slowest plug-in chain (latencies as of the previous block).
