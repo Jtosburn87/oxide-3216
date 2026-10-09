@@ -77,6 +77,8 @@ private:
     std::unique_ptr<Knob> deFreq, deReduction;
     std::unique_ptr<ParamButton> deWide, deGentle, deBypass;
     bool shownDeEss = false;
+    std::array<bool, Config::numAux / 2> shownAuxLink {};   // linked aux pairs: the even send knob is the pair's pan
+    void showAuxLink (int pair, bool linked);
     void updateVisibility();
     bool chainUnlocked = false;
     ChannelStrip::Chain shownChain {};
@@ -161,6 +163,7 @@ private:
     juce::Rectangle<int> insertsBox;
     juce::OwnedArray<Fader> busFaders;          // Sub 1-4, then A1-A8
     juce::OwnedArray<juce::Label> busScribbles;
+    juce::OwnedArray<ParamButton> busMainButtons;   // above each bus fader: Sub 1-4, then A1-A8
     int limitHold = 0;
 
     Knob monitorLevel;

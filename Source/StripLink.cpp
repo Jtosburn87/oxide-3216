@@ -1,21 +1,34 @@
 #include "StripLink.h"
 
 StripLink::StripLink (ParamSet& params, ChannelStrip& a, ChannelStrip& b, Param& l)
-    : link (l), first (a), second (b)
+    : link (l), mirrored { a.controls.pan, b.controls.pan }
 {
     // A strip's controls all have ids "<prefix>.<control>", so "ch1.eq.hf.gain" pairs with "ch2.eq.hf.gain".
     const auto prefixA = a.idPrefix + ".";
     for (auto* p : params.all())
-    {
-        if (! p->id.startsWith (prefixA))
-            continue;
-        if (auto* q = params.find (b.idPrefix + "." + p->id.substring (prefixA.length())))
-        {
-            partner[p] = q;
-            partner[q] = p;
-        }
-    }
+        if (p->id.startsWith (prefixA))
+            if (auto* q = params.find (b.idPrefix + "." + p->id.substring (prefixA.length())))
+                addPair (p, q);
+    listen();
+}
 
+StripLink::StripLink (Param& l, const std::vector<std::pair<Param*, Param*>>& pairs, std::set<const Param*> m)
+    : link (l), mirrored (std::move (m))
+{
+    for (auto& [a, b] : pairs)
+        addPair (a, b);
+    listen();
+}
+
+void StripLink::addPair (Param* a, Param* b)
+{
+    partner[a] = b;
+    partner[b] = a;
+    firsts.insert (a);
+}
+
+void StripLink::listen()
+{
     for (auto& [p, q] : partner)
         p->addListener (this);
     link.addListener (this);
@@ -31,7 +44,7 @@ StripLink::~StripLink()
 void StripLink::copy (Param& from, Param& to)
 {
     mirroring = true;
-    to.set (isPan (from) ? -from.get() : from.get());
+    to.set (mirrored.count (&from) != 0 ? -from.get() : from.get());
     mirroring = false;
 }
 
@@ -44,7 +57,7 @@ void StripLink::paramChanged (Param& p)
     {
         if (link.on())
             for (auto& [a, b] : partner)
-                if (a->id.startsWith (first.idPrefix + "."))
+                if (firsts.count (a) != 0)
                     copy (*a, *b);
         return;
     }

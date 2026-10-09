@@ -33,6 +33,9 @@ public:
 
     void setFormatter (std::function<juce::String (float)> f) { formatter = std::move (f); updateLegend(); }
     void setEndLabels (juce::String left, juce::String right) { endLeft = std::move (left); endRight = std::move (right); repaint(); }
+    void setLegend (juce::String text) { legend = std::move (text); updateLegend(); }
+    /** The value a double-click returns the knob to (normally the control's default). */
+    void setResetValue (float v) { slider.setDoubleClickReturnValue (true, v); }
 
     void paint (juce::Graphics&) override;
     void resized() override;

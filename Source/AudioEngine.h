@@ -22,7 +22,8 @@
 
     Real-time rules: the audio callback never allocates, locks or blocks. The UI changes
     Params (atomics) and calls TapeMachine transport methods (atomics). */
-class AudioEngine : public juce::AudioIODeviceCallback
+class AudioEngine : public juce::AudioIODeviceCallback,
+                    private Param::Listener
 {
 public:
     static constexpr int numConsoleInputs  = 16;   // interface inputs that can be mapped
@@ -99,6 +100,20 @@ public:
     juce::OwnedArray<InsertChain> subInserts, auxInserts;
     InsertChain masterInserts { "Master" };
     std::array<Param*, Config::numAux> auxReturnPan {};   // -1..1: balance of the stereo return (it comes back at unity)
+    /** Main assigns: a sub (after its fader) and an aux return (after its inserts) only reach the main mix while
+        assigned. An unassigned bus still feeds its interface outputs and the patch bay. */
+    std::array<Param*, Config::numSubs> subMain {};
+    std::array<Param*, Config::numAux> auxMain {};
+
+    /** Aux pairs A1+A2, A3+A4, ... linked into one stereo aux: odd = left, even = right. The masters and main
+        assigns move together, the odd aux's inserts process both sides in stereo (stereo plugins only) and its
+        return pan balances them; the even aux's own inserts and return sit idle. Every channel feeds the pair in
+        stereo (see ChannelStrip::auxLink). */
+    static constexpr int numAuxPairs = Config::numAux / 2;
+    std::array<Param*, numAuxPairs> auxLink {};
+    /** Links or unlinks a pair from the console: linking also centres every channel's pan knob for the pair
+        (the even send knob). Returns the plugins on the pair's inserts that cannot run in stereo (left out while linked). */
+    juce::StringArray setAuxLink (int pair, bool on);
 
     // Scribble-strip names of the subs and the aux masters (message thread; saved with the session).
     std::array<juce::String, Config::numSubs> subNames;
@@ -153,6 +168,7 @@ public:
 private:
     juce::AudioDeviceManager deviceManager;
     juce::OwnedArray<StripLink> stripLinks;
+    void paramChanged (Param&) override;   // aux links: switch the odd aux's inserts to stereo only
 
     std::array<std::atomic<int>, Patch::numDestinations> interfaceSource;
     std::array<std::atomic<int>, 2> mainOutput, monitorOutput;
@@ -177,6 +193,7 @@ private:
     std::array<Dsp::Smoothed, Config::numSubs> subGain;
     std::array<Dsp::Smoothed, Config::numAux> auxGain;
     std::array<Dsp::Smoothed, Config::numAux> auxReturnGainL, auxReturnGainR;
+    std::array<float, Config::numSubs> lastSubMain {};
     std::atomic<int> pluginLatency { 0 };
 
     // Scratch buffers, allocated once.

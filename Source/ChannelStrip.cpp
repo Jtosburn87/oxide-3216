@@ -72,8 +72,23 @@ ChannelStrip::Targets ChannelStrip::targets() const noexcept
         t.sub[k][1] = on ? r : 0.0f;
     }
 
-    for (int k = 0; k < Config::numAux; ++k)
-        t.aux[k] = auxGain (controls.auxLevel[k]->get());
+    for (int k = 0; k < Config::numAux; k += 2)
+    {
+        if (isAuxLinked (k / 2))
+        {
+            // Stereo send: odd knob = level, even knob = pan.
+            float sl, sr;
+            Dsp::panGains (controls.auxLevel[k + 1]->get() * 2.0f - 1.0f, sl, sr);
+            const float level = auxGain (controls.auxLevel[k]->get());
+            t.aux[k] = level * sl;
+            t.aux[k + 1] = level * sr;
+        }
+        else
+        {
+            t.aux[k] = auxGain (controls.auxLevel[k]->get());
+            t.aux[k + 1] = auxGain (controls.auxLevel[k + 1]->get());
+        }
+    }
     return t;
 }
 
@@ -181,8 +196,9 @@ void ChannelStrip::process (const float* in, float* direct, const BusPointers& b
 
     for (int k = 0; k < Config::numAux; ++k)
     {
+        const int preSwitch = (k % 2 == 1 && isAuxLinked (k / 2)) ? k - 1 : k;
         if (buses.aux[k] != nullptr)
-            Dsp::addRamped (buses.aux[k], controls.auxPre[k]->on() ? pre.data() : direct, lastAux[k], t.aux[k], n);
+            Dsp::addRamped (buses.aux[k], controls.auxPre[preSwitch]->on() ? pre.data() : direct, lastAux[k], t.aux[k], n);
         lastAux[k] = t.aux[k];
     }
 }

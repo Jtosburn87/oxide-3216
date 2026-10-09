@@ -44,6 +44,12 @@ public:
     Chain chain() const noexcept { return chainOrders[(size_t) juce::jlimit (0, 5, juce::roundToInt (controls.order->get()))]; }
     void setChain (const Chain&);
 
+    /** Linked aux pairs (A1+A2, A3+A4, ...), set by the engine; null = never linked. While a pair is linked
+        the strip feeds it in stereo: the odd send knob is the level, the even one its pan (0.5 = centre,
+        same pan law as the main pan), and the odd pre switch serves both. */
+    std::array<const Param*, Config::numAux / 2> auxLink {};
+    bool isAuxLinked (int pair) const noexcept { return auxLink[(size_t) pair] != nullptr && auxLink[(size_t) pair]->on(); }
+
     FourBandEq eq;
     Gate gate;
     std::unique_ptr<DeEsser> deEsser;   // return strips: the gate slot can be a de-esser instead

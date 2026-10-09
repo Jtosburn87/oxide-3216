@@ -21,7 +21,8 @@ struct PluginContext
 class InsertChainEditor : public juce::Component
 {
 public:
-    InsertChainEditor (InsertChain&, PluginContext&, Param* returnPan);
+    /** mainAssign: an aux's main assign, switched on when the first plugin goes onto its empty chain. */
+    InsertChainEditor (InsertChain&, PluginContext&, Param* returnPan, Param* mainAssign = nullptr);
     ~InsertChainEditor() override;
 
     void paint (juce::Graphics&) override;
@@ -36,6 +37,7 @@ private:
 
     InsertChain& chain;
     PluginContext& context;
+    Param* mainAssign;
     std::array<Row, InsertChain::numSlots> rows;
     std::unique_ptr<Knob> returnKnob;
 
@@ -45,7 +47,8 @@ private:
 };
 
 /** Row of cells in the centre section: an FX button for each sub, aux return and the master,
-    and a return pan knob for each aux. */
+    and a return pan knob for each aux. A Link button between each aux pair makes it one stereo aux,
+    whose two cells merge into one (one stereo FX chain, one return balance). */
 class InsertsSection : public juce::Component,
                        private juce::Timer
 {
@@ -60,6 +63,7 @@ private:
     {
         InsertChain* chain;
         Param* returnPan;
+        Param* mainAssign;
         juce::String title;
         std::unique_ptr<juce::TextButton> fx;
         std::unique_ptr<Knob> knob;
@@ -68,6 +72,11 @@ private:
     AudioEngine& engine;
     PluginContext* context;
     std::vector<Cell> cells;
+    std::array<juce::TextButton, AudioEngine::numAuxPairs> linkButtons;
+    std::array<bool, AudioEngine::numAuxPairs> shownLink {};
+
+    juce::Rectangle<int> cellBounds (size_t index) const;
+    void toggleLink (int pair);
 
     void timerCallback() override;
     void openChain (Cell&);

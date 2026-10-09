@@ -30,6 +30,12 @@ public:
     void moveSlot (int from, int to);
     void clearAll();
 
+    /** Stereo only (a linked aux pair): every plugin must take stereo in and give stereo out. One that cannot
+        stays loaded but is left out of the signal (isStereoRefused) until the chain is no longer stereo only. */
+    void setStereoOnly (bool);
+    bool isStereoOnly() const noexcept { return stereoOnly; }
+    bool isStereoRefused (int slot) const;
+
     juce::AudioProcessor* getProcessor (int slot) const;
     const juce::PluginDescription& getDescription (int slot) const;
     bool isBypassed (int slot) const;
@@ -61,6 +67,7 @@ private:
         juce::PluginDescription description;
         std::atomic<bool> bypassed { false };
         int inputs = 2, outputs = 2;   // main bus channels
+        std::atomic<bool> refused { false };   // stereo only, and the plugin has no stereo in/out layout
     };
 
     std::array<Slot, numSlots> slots;
@@ -72,11 +79,13 @@ private:
     std::atomic<int> latency { 0 };
     std::atomic<bool> active { false };
     std::atomic<std::uint32_t> pluginChanges { 0 };
+    bool stereoOnly = false;
 
     void audioProcessorParameterChanged (juce::AudioProcessor*, int, float) override { pluginChanges.fetch_add (1); }
     void audioProcessorChanged (juce::AudioProcessor*, const ChangeDetails& d) override { if (d.parameterInfoChanged || d.programChanged || d.nonParameterStateChanged) pluginChanges.fetch_add (1); }
 
-    static void negotiateLayout (juce::AudioProcessor&);
+    /** Picks the plugin's channel layout; returns true if it ended up stereo in and stereo out. */
+    static bool negotiateLayout (juce::AudioProcessor&, bool stereoOnly);
     void sizeBuffer();
     void destroy (std::unique_ptr<juce::AudioProcessor>);
     void changed();

@@ -255,6 +255,12 @@ Session::Result Session::load (AudioEngine& e, PluginManager* plugins, const juc
         });
     }
 
+    // Sessions from before the aux main assigns: an aux return reached main whenever it had a plugin on it.
+    if (auto* controls = json["controls"].getDynamicObject())
+        for (int k = 0; k < Config::numAux; ++k)
+            if (! controls->hasProperty (e.auxMain[(size_t) k]->id) && e.auxInserts[k]->numLoaded() > 0)
+                e.auxMain[(size_t) k]->set (1.0f);
+
     // Tape.
     const auto tapeInfo = json["tape"];
     const double sessionRate = tapeInfo["sampleRate"];

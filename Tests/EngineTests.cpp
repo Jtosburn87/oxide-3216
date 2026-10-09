@@ -1141,9 +1141,10 @@ namespace
             mapOnly (e, 0, 0);
             e.inputStrips[0]->controls.auxLevel[0]->set (1.0f);   // send x 1.5
             auto silent = peaksAbove (clickResponse (e, 12), 0.1f);
-            check (silent.size() == 1, "no plugin on the return: the send is not added to main");
+            check (silent.size() == 1, "aux not assigned to main: the send is not added to main");
 
             e.auxInserts[0]->setSlot (0, std::make_unique<TestPlugin> (1.0f, 64), testDescription ("Verb"));
+            e.auxMain[0]->set (1.0f);
             clickResponse (e, 4);
             const auto out = clickResponse (e, 12);
             const auto p = peaksAbove (out, 0.1f);
@@ -1180,6 +1181,87 @@ namespace
             check (chain.getDescription (1).name == "B" && chain.getDescription (2).name.isEmpty(), "move a plugin up");
             const auto xml = chain.toXml();
             check (xml->getNumChildElements() == 2 && xml->getChildElement (1)->getIntAttribute ("index") == 1, "chain saves its slots");
+        }
+    }
+
+    void testBusAssignsAndAuxLinks()
+    {
+        std::puts ("Sub and aux main assigns, linked aux pairs");
+        const auto rig = [] (TestEngine& e, Buffers& b)
+        {
+            e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1, 2, 3 }));
+            mapOnly (e, 0, 0);
+            e.inputStrips[0]->controls.main->set (0.0f);
+            std::fill (b.in[0].begin(), b.in[0].end(), 0.1f);
+        };
+        {
+            TestEngine e;
+            Buffers b (1, 4, 256);
+            rig (e, b);
+            e.inputStrips[0]->controls.sub[0]->set (1.0f);
+            e.setSubOutput (0, 0, 2);
+            settle (e, b);
+            check (near (b.out[0][200], 0.1f * pan, 1.0e-3f), "sub 1 reaches main (assigned by default)");
+            e.subMain[0]->set (0.0f);
+            settle (e, b);
+            check (near (b.out[0][200], 0.0f) && near (b.out[1][200], 0.0f), "sub 1 unassigned: nothing on main");
+            check (near (b.out[2][200], 0.1f * pan, 1.0e-3f), "sub 1 unassigned still feeds its output");
+        }
+        {
+            TestEngine e;
+            Buffers b (1, 4, 256);
+            rig (e, b);
+            e.inputStrips[0]->controls.auxLevel[0]->set (1.0f);
+            e.setAuxOutput (0, 2);
+            settle (e, b);
+            check (near (b.out[0][200], 0.0f) && near (b.out[2][200], 0.15f, 1.0e-3f), "aux 1 not assigned to main by default; its output still works");
+            e.auxMain[0]->set (1.0f);
+            settle (e, b);
+            check (near (b.out[0][200], 0.15f, 1.0e-3f) && near (b.out[1][200], 0.15f, 1.0e-3f), "aux 1 assigned: the return reaches main without a plugin");
+            e.auxMain[0]->set (0.0f);
+            settle (e, b);
+            check (near (b.out[0][200], 0.0f) && near (b.out[2][200], 0.15f, 1.0e-3f), "aux 1 unassigned again: only its output");
+        }
+        {
+            TestEngine e;
+            Buffers b (1, 4, 256);
+            rig (e, b);
+            auto& c = e.inputStrips[0]->controls;
+            c.auxLevel[1]->set (0.9f);
+            e.setAuxLink (0, true);
+            check (c.auxLevel[1]->get() == 0.5f && e.returnStrips[5]->controls.auxLevel[1]->get() == 0.5f, "linking centres every channel's pan (A2 knob)");
+            e.auxMaster[0]->set (faderFor (-6.0f));
+            e.auxMain[1]->set (1.0f);
+            check (e.auxMaster[1]->get() == e.auxMaster[0]->get() && e.auxMain[0]->on(), "linked masters and main assigns move together");
+            e.auxMaster[0]->set (80.0f);
+            e.auxMain[0]->set (0.0f);
+
+            e.setAuxOutput (0, 2);
+            e.setAuxOutput (1, 3);
+            c.auxLevel[0]->set (1.0f);
+            c.auxLevel[1]->set (0.0f);
+            settle (e, b);
+            check (near (b.out[2][200], 0.15f, 1.0e-3f) && near (b.out[3][200], 0.0f, 1.0e-4f), "stereo send panned left: all on A1");
+            c.auxLevel[1]->set (1.0f);
+            settle (e, b);
+            check (near (b.out[2][200], 0.0f, 1.0e-4f) && near (b.out[3][200], 0.15f, 1.0e-3f), "stereo send panned right: all on A2");
+            c.auxLevel[1]->set (0.5f);
+            settle (e, b);
+            check (near (b.out[2][200], 0.15f * pan, 1.0e-3f) && near (b.out[3][200], 0.15f * pan, 1.0e-3f), "stereo send centred: -3 dB each side");
+
+            // One stereo chain (A1's) for the pair; A2's own return stays out of the mix.
+            e.auxInserts[0]->setSlot (0, std::make_unique<TestPlugin> (0.5f, 0), testDescription ("Half"));
+            e.auxInserts[1]->setSlot (0, std::make_unique<TestPlugin> (4.0f, 0), testDescription ("Idle"));
+            e.auxMain[0]->set (1.0f);
+            c.auxLevel[1]->set (1.0f);
+            settle (e, b);
+            check (near (b.out[0][200], 0.0f, 1.0e-4f) && near (b.out[1][200], 0.075f, 1.0e-3f), "linked return: A1+A2 through one stereo chain, right stays right");
+
+            e.auxInserts[0]->setSlot (1, std::make_unique<TestPlugin> (1.0f, 0, true), testDescription ("Mono"));
+            check (e.auxInserts[0]->isStereoRefused (1), "a mono-input plugin is left out of a linked pair");
+            const auto notStereo = e.setAuxLink (0, false);
+            check (notStereo.isEmpty() && ! e.auxInserts[0]->isStereoRefused (1) && ! e.auxInserts[0]->isStereoOnly(), "unlinking takes it back in");
+            check (e.setAuxLink (0, true).contains ("Mono"), "relinking reports it");
         }
     }
 
@@ -1768,6 +1850,7 @@ int main (int argc, char** argv)
     testMasterSection();
     testPatchBay();
     testInserts();
+    testBusAssignsAndAuxLinks();
     testPunchAndLoop();
     testWinding();
     testWowFlutter();

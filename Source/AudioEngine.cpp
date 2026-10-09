@@ -38,6 +38,7 @@ AudioEngine::AudioEngine()
         groupEq.add (new FourBandEq (params, id, 2));
         subInserts.add (new InsertChain ("Sub " + juce::String (k + 1)));
         subFader[(size_t) k] = &params.add (id + ".fader", "Sub " + juce::String (k + 1) + " fader", 0.0f, 100.0f, 80.0f);
+        subMain[(size_t) k] = &params.addToggle (id + ".main", "Sub " + juce::String (k + 1) + " to main", true);
         subPeak[(size_t) k][0].store (0.0f);
         subPeak[(size_t) k][1].store (0.0f);
     }
@@ -45,6 +46,7 @@ AudioEngine::AudioEngine()
     {
         auxMaster[(size_t) k] = &params.add ("aux" + juce::String (k + 1) + ".master", "Aux " + juce::String (k + 1) + " master", 0.0f, 100.0f, 80.0f);
         auxReturnPan[(size_t) k] = &params.add ("aux" + juce::String (k + 1) + ".returnPan", "Aux " + juce::String (k + 1) + " return pan", -1.0f, 1.0f, 0.0f);
+        auxMain[(size_t) k] = &params.addToggle ("aux" + juce::String (k + 1) + ".main", "Aux " + juce::String (k + 1) + " to main", false);
         auxInserts.add (new InsertChain ("Aux " + juce::String (k + 1) + " return"));
         auxPeak[(size_t) k].store (0.0f);
     }
@@ -69,6 +71,16 @@ AudioEngine::AudioEngine()
     };
     makeLinks (inputStrips, inputLink, "Input");
     makeLinks (returnStrips, returnLink, "Return");
+
+    for (int j = 0; j < numAuxPairs; ++j)
+    {
+        const int a = 2 * j, b = 2 * j + 1;
+        auxLink[(size_t) j] = &params.addToggle ("link.aux" + juce::String (a + 1), "Aux " + juce::String (a + 1) + "-" + juce::String (b + 1) + " link", false);
+        auxLink[(size_t) j]->addListener (this);
+        stripLinks.add (new StripLink (*auxLink[(size_t) j], { { auxMaster[(size_t) a], auxMaster[(size_t) b] }, { auxMain[(size_t) a], auxMain[(size_t) b] } }));
+        for (auto* s : inputStrips)  s->auxLink[(size_t) j] = auxLink[(size_t) j];
+        for (auto* s : returnStrips) s->auxLink[(size_t) j] = auxLink[(size_t) j];
+    }
     resetBusNames();
 }
 
@@ -78,8 +90,40 @@ void AudioEngine::resetBusNames()
     for (int k = 0; k < Config::numAux; ++k)  auxNames[(size_t) k] = defaultAuxName (k);
 }
 
+juce::StringArray AudioEngine::setAuxLink (int pair, bool on)
+{
+    juce::StringArray notStereo;
+    if (! juce::isPositiveAndBelow (pair, numAuxPairs))
+        return notStereo;
+
+    auto& link = *auxLink[(size_t) pair];
+    if (on && ! link.on())
+    {
+        // The even send knob turns into the pair's pan: start every channel in the centre.
+        for (auto* strips : { &inputStrips, &returnStrips })
+            for (auto* s : *strips)
+                s->controls.auxLevel[2 * pair + 1]->set (0.5f);
+    }
+    link.set (on ? 1.0f : 0.0f);
+
+    auto& chain = *auxInserts[2 * pair];
+    for (int i = 0; i < InsertChain::numSlots; ++i)
+        if (chain.isStereoRefused (i))
+            notStereo.add (chain.getDescription (i).name);
+    return notStereo;
+}
+
+void AudioEngine::paramChanged (Param& p)
+{
+    for (int j = 0; j < numAuxPairs; ++j)
+        if (&p == auxLink[(size_t) j])
+            auxInserts[2 * j]->setStereoOnly (p.on());
+}
+
 AudioEngine::~AudioEngine()
 {
+    for (auto* l : auxLink)
+        l->removeListener (this);
     deviceManager.removeAudioCallback (this);
     deviceManager.closeAudioDevice();
 }
@@ -312,6 +356,7 @@ void AudioEngine::prepare (double sampleRate, const juce::BigInteger& activeInpu
     {
         groupEq[k]->prepare (currentSampleRate);
         subGain[(size_t) k].prepare (currentSampleRate, Dsp::faderGain (subFader[(size_t) k]->get()));
+        lastSubMain[(size_t) k] = subMain[(size_t) k]->on() ? 1.0f : 0.0f;
     }
     for (int k = 0; k < Config::numAux; ++k)
         auxGain[(size_t) k].prepare (currentSampleRate, Dsp::faderGain (auxMaster[(size_t) k]->get()));
@@ -465,9 +510,16 @@ void AudioEngine::render (const float* const* inputs, int numInputs, float* cons
 
         // Latency compensation: the dry mix, every sub and every active aux return are delayed to line up
         // with the slowest plug-in chain (latencies as of the previous block).
+        bool auxLinked[numAuxPairs];
+        for (int j = 0; j < numAuxPairs; ++j)
+            auxLinked[j] = auxLink[(size_t) j]->on();
+        const auto idleReturn = [&] (int k) { return k % 2 == 1 && auxLinked[k / 2]; };   // the even aux of a linked pair
+
         int compensation = 0;
         for (auto* c : subInserts) compensation = juce::jmax (compensation, c->getLatency());
-        for (auto* c : auxInserts) if (c->isActive()) compensation = juce::jmax (compensation, c->getLatency());
+        for (int k = 0; k < Config::numAux; ++k)
+            if (! idleReturn (k) && auxMain[(size_t) k]->on() && auxInserts[k]->isActive())
+                compensation = juce::jmax (compensation, auxInserts[k]->getLatency());
         compensation = juce::jmin (compensation, Dsp::DelayLine::capacity - 1);
         mainDelayL.process (mixL.data(), n, compensation);
         mainDelayR.process (mixR.data(), n, compensation);
@@ -506,17 +558,23 @@ void AudioEngine::render (const float* const* inputs, int numInputs, float* cons
             if (subOut[k][0] != nullptr) juce::FloatVectorOperations::add (subOut[k][0] + start, l, n);
             if (subOut[k][1] != nullptr) juce::FloatVectorOperations::add (subOut[k][1] + start, r, n);
 
-            // Into the main mix, compensated. (The sub buffers themselves stay undelayed for the patch bay.)
+            // Into the main mix when assigned, compensated. (The sub buffers themselves stay undelayed for the patch bay.)
             const int d = compensation - subInserts[k]->getLatency();
             std::memcpy (returnL.data(), l, sizeof (float) * (size_t) n);
             std::memcpy (returnR.data(), r, sizeof (float) * (size_t) n);
             subDelay[(size_t) k * 2].process (returnL.data(), n, d);
             subDelay[(size_t) k * 2 + 1].process (returnR.data(), n, d);
-            juce::FloatVectorOperations::add (mixL.data(), returnL.data(), n);
-            juce::FloatVectorOperations::add (mixR.data(), returnR.data(), n);
+            const float toMain = subMain[(size_t) k]->on() ? 1.0f : 0.0f;
+            auto& last = lastSubMain[(size_t) k];
+            if (last != 0.0f || toMain != 0.0f)
+            {
+                Dsp::addRamped (mixL.data(), returnL.data(), last, toMain, n);
+                Dsp::addRamped (mixR.data(), returnR.data(), last, toMain, n);
+            }
+            last = toMain;
         }
 
-        // Aux masters -> optional aux outputs, and the aux return: inserts -> return level -> main.
+        // Aux masters -> optional aux outputs (and the patch bay).
         for (int k = 0; k < Config::numAux; ++k)
         {
             float* a = aux[(size_t) k].data();
@@ -531,30 +589,42 @@ void AudioEngine::render (const float* const* inputs, int numInputs, float* cons
             raisePeak (auxPeak[(size_t) k], pk);
             if (auxOut[k] != nullptr)
                 juce::FloatVectorOperations::add (auxOut[k] + start, a, n);
+        }
 
-            // The return only carries audio when a plug-in is active, so sends are never doubled dry.
-            std::memcpy (returnL.data(), a, sizeof (float) * (size_t) n);
-            std::memcpy (returnR.data(), a, sizeof (float) * (size_t) n);
-            const bool active = auxInserts[k]->process (returnL.data(), returnR.data(), n);
-            // Return pan is a balance: centre leaves both sides at unity, turning it lowers the other side.
-            const float pan = auxReturnPan[(size_t) k]->get();
-            const float targetL = active ? juce::jmin (1.0f, 1.0f - pan) : 0.0f;
-            const float targetR = active ? juce::jmin (1.0f, 1.0f + pan) : 0.0f;
+        // Aux returns: inserts -> return pan -> main, while assigned to main. A linked pair returns in stereo
+        // through the odd aux's inserts (odd = left, even = right); the even aux's own return sits idle.
+        for (int k = 0; k < Config::numAux; ++k)
+        {
             auto& gl = auxReturnGainL[(size_t) k];
             auto& gr = auxReturnGainR[(size_t) k];
-            if (active || ! gl.settled (0.0f) || ! gr.settled (0.0f))
+            if (idleReturn (k))
             {
-                for (int i = 0; i < n; ++i)
-                {
-                    returnL[(size_t) i] *= gl.next (targetL);
-                    returnR[(size_t) i] *= gr.next (targetR);
-                }
-                const int d = compensation - auxInserts[k]->getLatency();
-                returnDelay[(size_t) k * 2].process (returnL.data(), n, d);
-                returnDelay[(size_t) k * 2 + 1].process (returnR.data(), n, d);
-                juce::FloatVectorOperations::add (mixL.data(), returnL.data(), n);
-                juce::FloatVectorOperations::add (mixR.data(), returnR.data(), n);
+                gl.current = gr.current = 0.0f;
+                continue;
             }
+
+            const bool toMain = auxMain[(size_t) k]->on();
+            if (! toMain && gl.settled (0.0f) && gr.settled (0.0f))
+                continue;
+
+            const bool stereo = k % 2 == 0 && auxLinked[k / 2];
+            std::memcpy (returnL.data(), aux[(size_t) k].data(), sizeof (float) * (size_t) n);
+            std::memcpy (returnR.data(), aux[(size_t) (stereo ? k + 1 : k)].data(), sizeof (float) * (size_t) n);
+            auxInserts[k]->process (returnL.data(), returnR.data(), n);
+            // Return pan is a balance: centre leaves both sides at unity, turning it lowers the other side.
+            const float pan = auxReturnPan[(size_t) k]->get();
+            const float targetL = toMain ? juce::jmin (1.0f, 1.0f - pan) : 0.0f;
+            const float targetR = toMain ? juce::jmin (1.0f, 1.0f + pan) : 0.0f;
+            for (int i = 0; i < n; ++i)
+            {
+                returnL[(size_t) i] *= gl.next (targetL);
+                returnR[(size_t) i] *= gr.next (targetR);
+            }
+            const int d = compensation - auxInserts[k]->getLatency();
+            returnDelay[(size_t) k * 2].process (returnL.data(), n, d);
+            returnDelay[(size_t) k * 2 + 1].process (returnR.data(), n, d);
+            juce::FloatVectorOperations::add (mixL.data(), returnL.data(), n);
+            juce::FloatVectorOperations::add (mixR.data(), returnR.data(), n);
         }
 
         // Master section: bus compressor -> master inserts -> main fader -> limiter -> outputs.

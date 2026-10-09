@@ -294,6 +294,21 @@ void StripComponent::setCollapsed (int mask)
     repaint();
 }
 
+void StripComponent::showAuxLink (int pair, bool linked)
+{
+    shownAuxLink[(size_t) pair] = linked;
+    const int a = 2 * pair, b = a + 1;
+    const auto odd = juce::String (a + 1), even = juce::String (b + 1);
+    auto& level = *auxKnobs[a];
+    auto& panKnob = *auxKnobs[b];
+    level.setLegend (linked ? "A" + odd + "+" + even : "A" + odd);
+    panKnob.setLegend (linked ? juce::String ("Pan") : "A" + even);
+    panKnob.setEndLabels (linked ? "L" : "", linked ? "R" : "");
+    panKnob.setResetValue (linked ? 0.5f : strip.controls.auxLevel[b]->def);
+    auxPre[a]->setTooltip (linked ? "P = pre-fader send (both sides of the stereo aux " + odd + "+" + even + ")" : "P = pre-fader send");
+    updateVisibility();
+}
+
 void StripComponent::updateVisibility()
 {
     // Hidden when the section is minimised; in the gate slot, only the gate or the de-esser shows.
@@ -307,6 +322,11 @@ void StripComponent::updateVisibility()
             c->setVisible (! folded && (i != 1 || isDeEss == shownDeEss));
         }
     }
+
+    // A linked aux pair has one pre switch, the odd one.
+    for (size_t j = 0; j < shownAuxLink.size(); ++j)
+        if (shownAuxLink[j])
+            auxPre[(int) (2 * j + 1)]->setVisible (false);
 }
 
 
@@ -516,6 +536,11 @@ void StripComponent::update()
         repaint();
     }
 
+    // Aux pairs linked or unlinked (centre section, or a loaded session): the send labels follow.
+    for (int j = 0; j < (int) shownAuxLink.size(); ++j)
+        if (strip.isAuxLinked (j) != shownAuxLink[(size_t) j])
+            showAuxLink (j, ! shownAuxLink[(size_t) j]);
+
     // A loaded session may have changed the chain order.
     if (strip.chain() != shownChain)
     {
@@ -687,6 +712,10 @@ CentreSection::CentreSection (AudioEngine& e, PluginContext* plugins)
         f->slider.getProperties().set ("capWidth", 30);
         f->slider.setTitle (name + (isSub ? " fader" : " master"));
         addAndMakeVisible (f);
+        auto* m = busMainButtons.add (new ParamButton (isSub ? *engine.subMain[(size_t) i] : *engine.auxMain[(size_t) (i - Config::numSubs)], "Main"));
+        m->setTooltip (isSub ? "Assign this sub to the main mix (off: it still feeds its outputs and the patch bay)"
+                             : "Assign this aux return (after its inserts) to the main mix. Off: the aux only feeds its output and the patch bay.");
+        addAndMakeVisible (m);
         auto* l = busScribbles.add (new juce::Label());
         setupScribble (*l, name);
         l->setFont (ConsoleLookAndFeel::uiFont (12.0f, true));
@@ -848,6 +877,7 @@ void CentreSection::resized()
         const int cx = juce::roundToInt (gridX + (float) i * colW);
         const int busW = juce::roundToInt (colW);
         busScribbles[i]->setBounds (cx + 2, getHeight() - 28, busW - 4, 22);
+        busMainButtons[i]->setBounds (cx + 5, f + 10, busW - 10, 20);
         busFaders[i]->setBounds (cx + 1, f + 36, busW - 2, getHeight() - 34 - (f + 36));
     }
     mainScribble.setBounds (mainX + 4, getHeight() - 28, getWidth() - mainX - 12, 22);

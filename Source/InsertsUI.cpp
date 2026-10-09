@@ -6,8 +6,8 @@
 using namespace ConsoleColours;
 
 //==============================================================================
-InsertChainEditor::InsertChainEditor (InsertChain& c, PluginContext& ctx, Param* returnPan)
-    : chain (c), context (ctx)
+InsertChainEditor::InsertChainEditor (InsertChain& c, PluginContext& ctx, Param* returnPan, Param* main)
+    : chain (c), context (ctx), mainAssign (main)
 {
     for (int i = 0; i < InsertChain::numSlots; ++i)
     {
@@ -59,7 +59,9 @@ void InsertChainEditor::refresh()
     {
         auto& r = rows[(size_t) i];
         const bool loaded = chain.getProcessor (i) != nullptr;
-        r.picker.setButtonText (loaded ? chain.getDescription (i).name : juce::String ("(empty)"));
+        const bool refused = chain.isStereoRefused (i);
+        r.picker.setButtonText (! loaded ? juce::String ("(empty)") : chain.getDescription (i).name + (refused ? " (not stereo: off while linked)" : ""));
+        r.picker.setTooltip (refused ? "This plugin has no stereo in/out, so it is left out while the aux pair is linked" : "Choose a plugin for slot " + juce::String (i + 1));
         r.picker.setToggleState (false, juce::dontSendNotification);
         r.bypass.setEnabled (loaded);
         r.bypass.setToggleState (chain.isBypassed (i), juce::dontSendNotification);
@@ -111,7 +113,17 @@ void InsertChainEditor::choosePlugin (int slot)
                                                         desc.name + " could not be loaded.\n\n" + error);
                 return;
             }
+            const bool wasEmpty = self.chain.numLoaded() == 0;
             self.chain.setSlot (slot, std::move (instance), desc);
+            if (self.chain.isStereoRefused (slot))
+            {
+                self.chain.clearSlot (slot);
+                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Stereo plugins only",
+                                                        desc.name + " has no stereo in/out. A linked aux pair takes stereo plugins only.");
+                return;
+            }
+            if (wasEmpty && self.mainAssign != nullptr)
+                self.mainAssign->set (1.0f);   // a return with a plugin on it is usually wanted in the mix
             self.openEditor (slot);   // a newly chosen plugin opens straight away
         }
         if (self.context.changed)
@@ -130,7 +142,7 @@ void InsertChainEditor::paint (juce::Graphics& g)
     g.fillAll (juce::Colour (0xff1a1c1e));
     g.setColour (legend);
     g.setFont (ConsoleLookAndFeel::uiFont (15.0f, true));
-    g.drawText (chain.name + " inserts", getLocalBounds().reduced (10, 6).removeFromTop (24), juce::Justification::centredLeft, false);
+    g.drawText (chain.name + " inserts" + (chain.isStereoOnly() ? juce::String (", stereo") : juce::String()), getLocalBounds().reduced (10, 6).removeFromTop (24), juce::Justification::centredLeft, false);
     g.setColour (legend.withAlpha (0.6f));
     g.setFont (ConsoleLookAndFeel::uiFont (12.0f));
     g.drawText ("Signal flows from slot 1 to slot 4", getLocalBounds().reduced (10, 6).removeFromTop (24),
@@ -164,10 +176,10 @@ void InsertChainEditor::resized()
 InsertsSection::InsertsSection (AudioEngine& e, PluginContext* ctx) : engine (e), context (ctx)
 {
     for (int k = 0; k < Config::numSubs; ++k)
-        cells.push_back ({ engine.subInserts[k], nullptr, "Sub " + juce::String (k + 1), nullptr, nullptr });
+        cells.push_back ({ engine.subInserts[k], nullptr, nullptr, "Sub " + juce::String (k + 1), nullptr, nullptr });
     for (int k = 0; k < Config::numAux; ++k)
-        cells.push_back ({ engine.auxInserts[k], engine.auxReturnPan[(size_t) k], "A" + juce::String (k + 1), nullptr, nullptr });
-    cells.push_back ({ &engine.masterInserts, nullptr, "Master", nullptr, nullptr });
+        cells.push_back ({ engine.auxInserts[k], engine.auxReturnPan[(size_t) k], engine.auxMain[(size_t) k], "A" + juce::String (k + 1), nullptr, nullptr });
+    cells.push_back ({ &engine.masterInserts, nullptr, nullptr, "Master", nullptr, nullptr });
 
     for (auto& c : cells)
     {
@@ -185,19 +197,58 @@ InsertsSection::InsertsSection (AudioEngine& e, PluginContext* ctx) : engine (e)
             addAndMakeVisible (*c.knob);
         }
     }
+
+    for (int j = 0; j < AudioEngine::numAuxPairs; ++j)
+    {
+        auto& b = linkButtons[(size_t) j];
+        const auto pair = "A" + juce::String (2 * j + 1) + " + A" + juce::String (2 * j + 2);
+        b.setButtonText ("Link");
+        b.setTitle ("Link " + pair);
+        b.setTooltip ("Link " + pair + " into one stereo aux: one stereo FX chain, masters move together, "
+                      "and on every channel the A" + juce::String (2 * j + 2) + " knob becomes the send's pan");
+        b.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff3a8fd6));
+        b.onClick = [this, j] { toggleLink (j); };
+        addAndMakeVisible (b);
+    }
     startTimerHz (4);
+}
+
+void InsertsSection::toggleLink (int pair)
+{
+    const auto notStereo = engine.setAuxLink (pair, ! engine.auxLink[(size_t) pair]->on());
+    timerCallback();
+    if (context != nullptr && context->changed)
+        context->changed();
+    if (! notStereo.isEmpty())
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Stereo plugins only",
+                                                "A linked aux pair takes stereo plugins only. These have no stereo in/out and are "
+                                                "left out until the pair is unlinked:\n\n" + notStereo.joinIntoString ("\n"));
 }
 
 void InsertsSection::openChain (Cell& c)
 {
     if (context == nullptr)
         return;
-    auto editor = std::make_unique<InsertChainEditor> (*c.chain, *context, c.returnPan);
+    auto editor = std::make_unique<InsertChainEditor> (*c.chain, *context, c.returnPan, c.mainAssign);
     juce::CallOutBox::launchAsynchronously (std::move (editor), c.fx->getScreenBounds(), nullptr);
 }
 
 void InsertsSection::timerCallback()
 {
+    bool relayout = false;
+    for (int j = 0; j < AudioEngine::numAuxPairs; ++j)
+    {
+        const bool on = engine.auxLink[(size_t) j]->on();
+        linkButtons[(size_t) j].setToggleState (on, juce::dontSendNotification);
+        relayout = relayout || on != shownLink[(size_t) j];
+        shownLink[(size_t) j] = on;
+    }
+    if (relayout)
+    {
+        resized();
+        repaint();
+    }
+
     for (auto& c : cells)
     {
         const int n = c.chain->numLoaded();
@@ -208,16 +259,43 @@ void InsertsSection::timerCallback()
     }
 }
 
+juce::Rectangle<int> InsertsSection::cellBounds (size_t i) const
+{
+    // A linked aux pair: the odd cell spans both, the even one has none.
+    const int cellW = getWidth() / (int) cells.size();
+    auto cell = juce::Rectangle<int> ((int) i * cellW, 0, cellW, getHeight());
+    const int k = (int) i - Config::numSubs;
+    if (juce::isPositiveAndBelow (k, Config::numAux) && shownLink[(size_t) (k / 2)])
+        return k % 2 == 0 ? cell.withWidth (2 * cellW) : juce::Rectangle<int>();
+    return cell;
+}
+
 void InsertsSection::resized()
 {
     const int cellW = getWidth() / (int) cells.size();
     for (size_t i = 0; i < cells.size(); ++i)
     {
-        auto cell = juce::Rectangle<int> ((int) i * cellW, 0, cellW, getHeight()).reduced (3, 0);
+        auto& c = cells[i];
+        auto cell = cellBounds (i).reduced (3, 0);
+        c.fx->setVisible (! cell.isEmpty());
+        if (c.knob != nullptr)
+            c.knob->setVisible (! cell.isEmpty());
+        if (cell.isEmpty())
+            continue;
+
         cell.removeFromTop (16);   // title
-        cells[i].fx->setBounds (cell.removeFromBottom (22).reduced (2, 0));
-        if (cells[i].knob != nullptr)
-            cells[i].knob->setBounds (cell.withSizeKeepingCentre (Knob::preferredWidth, Knob::preferredHeight));
+        if (c.returnPan != nullptr)
+            cell.removeFromTop (18);   // link buttons
+        c.fx->setBounds (cell.removeFromBottom (22).reduced (2, 0));
+        if (c.knob != nullptr)
+            c.knob->setBounds (cell.withSizeKeepingCentre (Knob::preferredWidth, Knob::preferredHeight));
+    }
+
+    // Each Link button straddles the line between its pair.
+    for (int j = 0; j < AudioEngine::numAuxPairs; ++j)
+    {
+        const int x = (Config::numSubs + 2 * j + 1) * cellW;
+        linkButtons[(size_t) j].setBounds (x - 22, 17, 44, 16);
     }
 }
 
@@ -227,17 +305,23 @@ void InsertsSection::paint (juce::Graphics& g)
     g.setFont (ConsoleLookAndFeel::uiFont (11.0f, true));
     for (size_t i = 0; i < cells.size(); ++i)
     {
-        const auto cell = juce::Rectangle<int> ((int) i * cellW, 0, cellW, getHeight());
-        g.setColour (legend);
+        const auto cell = cellBounds (i);
         const int k = (int) i;
-        const auto title = k < Config::numSubs ? engine.subNames[(size_t) k]
-                         : k < Config::numSubs + Config::numAux ? engine.auxNames[(size_t) (k - Config::numSubs)]
-                         : cells[i].title;
-        g.drawFittedText (title, cell.withHeight (14).reduced (2, 0), juce::Justification::centred, 1, 0.7f);
+        if (! cell.isEmpty())
+        {
+            const int a = k - Config::numSubs;
+            const bool linkedPair = juce::isPositiveAndBelow (a, Config::numAux) && shownLink[(size_t) (a / 2)];
+            const auto title = k < Config::numSubs ? engine.subNames[(size_t) k]
+                             : linkedPair ? engine.auxNames[(size_t) a] + " + " + engine.auxNames[(size_t) a + 1]
+                             : k < Config::numSubs + Config::numAux ? engine.auxNames[(size_t) a]
+                             : cells[i].title;
+            g.setColour (legend);
+            g.drawFittedText (title, cell.withHeight (14).reduced (2, 0), juce::Justification::centred, 1, 0.7f);
+        }
         if (i == (size_t) Config::numSubs || i == cells.size() - 1)
         {
             g.setColour (juce::Colour (0xff8e9598).withAlpha (0.6f));
-            g.fillRect (cell.getX(), 2, 1, getHeight() - 4);
+            g.fillRect ((int) i * cellW, 2, 1, getHeight() - 4);
         }
     }
 }

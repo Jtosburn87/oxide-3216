@@ -17,7 +17,7 @@ void InsertChain::changed()
         onChange();
 }
 
-void InsertChain::negotiateLayout (juce::AudioProcessor& p)
+bool InsertChain::negotiateLayout (juce::AudioProcessor& p, bool stereoOnly)
 {
     const auto trySet = [&p] (juce::AudioChannelSet in, juce::AudioChannelSet out)
     {
@@ -30,11 +30,50 @@ void InsertChain::negotiateLayout (juce::AudioProcessor& p)
     };
 
     if (! trySet (juce::AudioChannelSet::stereo(), juce::AudioChannelSet::stereo())
+        && ! stereoOnly
         && ! trySet (juce::AudioChannelSet::mono(), juce::AudioChannelSet::stereo())
         && ! trySet (juce::AudioChannelSet::mono(), juce::AudioChannelSet::mono()))
     {
         // Keep the plugin's own default layout (e.g. multichannel); we use its first two channels.
     }
+    return p.getMainBusNumInputChannels() >= 2 && p.getMainBusNumOutputChannels() >= 2;
+}
+
+void InsertChain::setStereoOnly (bool on)
+{
+    if (on == stereoOnly)
+        return;
+    stereoOnly = on;
+
+    // A plugin's layout can only change while it is not running: take each one out, renegotiate, put it back.
+    for (auto& s : slots)
+    {
+        std::unique_ptr<juce::AudioProcessor> p;
+        {
+            const juce::SpinLock::ScopedLockType sl (lock);
+            p = std::move (s.processor);
+        }
+        if (p == nullptr)
+            continue;
+
+        p->releaseResources();
+        const bool stereo = negotiateLayout (*p, stereoOnly);
+        p->setRateAndBufferSizeDetails (sampleRate, blockSize);
+        p->prepareToPlay (sampleRate, blockSize);
+
+        const juce::SpinLock::ScopedLockType sl (lock);
+        s.inputs = p->getMainBusNumInputChannels();
+        s.outputs = p->getMainBusNumOutputChannels();
+        s.refused.store (stereoOnly && ! stereo);
+        s.processor = std::move (p);
+        sizeBuffer();
+    }
+    changed();
+}
+
+bool InsertChain::isStereoRefused (int slot) const
+{
+    return juce::isPositiveAndBelow (slot, numSlots) && slots[(size_t) slot].processor != nullptr && slots[(size_t) slot].refused.load();
 }
 
 void InsertChain::sizeBuffer()
@@ -80,7 +119,7 @@ void InsertChain::setSlot (int slot, std::unique_ptr<juce::AudioProcessor> p, co
         return;
 
     // Prepare outside the lock: this can take a while.
-    negotiateLayout (*p);
+    const bool stereo = negotiateLayout (*p, stereoOnly);
     p->setRateAndBufferSizeDetails (sampleRate, blockSize);
     p->prepareToPlay (sampleRate, blockSize);
     p->setNonRealtime (false);
@@ -95,6 +134,7 @@ void InsertChain::setSlot (int slot, std::unique_ptr<juce::AudioProcessor> p, co
         s.processor = std::move (p);
         s.description = desc;
         s.bypassed.store (false);
+        s.refused.store (stereoOnly && ! stereo);
         s.inputs = ins;
         s.outputs = outs;
         sizeBuffer();
@@ -114,6 +154,7 @@ void InsertChain::clearSlot (int slot)
         old = std::move (slots[(size_t) slot].processor);
         slots[(size_t) slot].description = {};
         slots[(size_t) slot].bypassed.store (false);
+        slots[(size_t) slot].refused.store (false);
     }
     destroy (std::move (old));
     changed();
@@ -150,6 +191,9 @@ void InsertChain::moveSlot (int from, int to)
         const bool ab = a.bypassed.load();
         a.bypassed.store (b.bypassed.load());
         b.bypassed.store (ab);
+        const bool ar = a.refused.load();
+        a.refused.store (b.refused.load());
+        b.refused.store (ar);
     }
     changed();
 }
@@ -211,7 +255,7 @@ bool InsertChain::process (float* left, float* right, int n) noexcept
     for (auto& s : slots)
     {
         auto* p = s.processor.get();
-        if (p == nullptr || s.bypassed.load (std::memory_order_relaxed))
+        if (p == nullptr || s.bypassed.load (std::memory_order_relaxed) || s.refused.load (std::memory_order_relaxed))
             continue;
 
         any = true;
