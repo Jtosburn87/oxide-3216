@@ -143,6 +143,56 @@ void TapeMachine::eraseAll()
     locate (0);
 }
 
+void TapeMachine::eraseSection (int track, juce::int64 from, juce::int64 to)
+{
+    from = juce::jmax ((juce::int64) 0, from);
+    to = juce::jmin (to, getCapacity());
+    if (! juce::isPositiveAndBelow (track, numTracks) || to <= from)
+        return;
+
+    // Raised-cosine fades inside the section's ends: the old audio fades out, and back in at the end.
+    const auto fade = juce::jmin ((juce::int64) std::round (0.005 * sampleRate), (to - from) / 2);
+    auto& table = chunks[(size_t) track];
+    for (auto p = from; p < to;)
+    {
+        const auto offset = (int) (p & (chunkSize - 1));
+        const auto len = (int) juce::jmin (to - p, (juce::int64) (chunkSize - offset));
+        if (float* c = table[(size_t) (p >> chunkBits)].load (std::memory_order_acquire))
+        {
+            for (int i = 0; i < len; ++i)
+            {
+                const auto q = p + i;
+                const auto edge = juce::jmin (q - from, to - 1 - q);
+                const float keep = edge >= fade ? 0.0f
+                                 : 0.5f + 0.5f * std::cos (((float) edge + 0.5f) / (float) fade * juce::MathConstants<float>::pi);
+                c[offset + i] *= keep;
+            }
+        }
+        p += len;
+    }
+    trackRevision[(size_t) track].fetch_add (1);
+}
+
+void TapeMachine::eraseTrack (int track)
+{
+    if (! juce::isPositiveAndBelow (track, numTracks))
+        return;
+    const auto stamp = blocksProcessed.load();
+    for (auto& c : chunks[(size_t) track])
+        if (auto* old = c.exchange (nullptr))
+            retired.push_back ({ old, stamp });
+    trackRevision[(size_t) track].fetch_add (1);
+
+    bool anyLeft = false;
+    for (int t = 0; t < numTracks; ++t)
+        anyLeft = anyLeft || trackHasAudio (t);
+    if (! anyLeft)
+    {
+        length.store (0);
+        recordedIps.store (0.0f);
+    }
+}
+
 //==============================================================================
 void TapeMachine::ensureChunks (int track, juce::int64 from, juce::int64 to)
 {

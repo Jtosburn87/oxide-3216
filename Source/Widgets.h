@@ -128,3 +128,25 @@ public:
 private:
     float shown = 0.0f;
 };
+
+/** A transport key in the style of a 1980s cassette multitrack: a dark key with a light top edge and a
+    white symbol, its name printed above, and a status LED beside the name. The power key is a red square
+    with its name to the left, lit while on. The toggle state lights the LED (or the power key). */
+class TransportKey : public juce::Button
+{
+public:
+    enum Icon { rewind, fastForward, stop, play, record, erase, power };
+
+    /** led: the status LED's colour; transparent = no LED. */
+    TransportKey (const juce::String& label, Icon, juce::Colour led = juce::Colour (0xff47e06a));
+
+    void paintButton (juce::Graphics&, bool isMouseOver, bool isButtonDown) override;
+
+    static constexpr int labelHeight = 12;
+
+private:
+    const Icon icon;
+    const juce::Colour ledColour;
+
+    void paintIcon (juce::Graphics&, juce::Rectangle<float>, juce::Colour) const;
+};

@@ -92,6 +92,13 @@ public:
     void setRecordEnabled (bool);
     void eraseAll();
 
+    /** Erases part of one track, [from, to) in tape samples, with a 5 ms fade at each edge so the cut
+        never clicks. Message thread. */
+    void eraseSection (int track, juce::int64 from, juce::int64 to);
+    /** Erases a whole track. When no track holds audio any more the tape is blank again (length 0, and it
+        takes the speed of its next recording). Message thread. */
+    void eraseTrack (int track);
+
     // Locators: one In/Out region used by both loop and auto-punch (message thread).
     void setInPoint (juce::int64 p)  { inPoint.store (juce::jmax ((juce::int64) 0, p)); }
     void setOutPoint (juce::int64 p) { outPoint.store (juce::jmax ((juce::int64) 0, p)); }

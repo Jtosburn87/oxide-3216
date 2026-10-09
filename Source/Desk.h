@@ -156,7 +156,13 @@ private:
     Cassette cassette;
     TapeClock clock;
     juce::OwnedArray<RadioParamButton> speedButtons;
-    juce::TextButton power { "Power" }, rew { "Rew" }, ff { "FF" }, stop { "Stop" }, play { "Play" }, rec { "Rec" }, erase { "Erase" };
+    TransportKey power { "Power", TransportKey::power },
+                 rew { "Rew", TransportKey::rewind, juce::Colour (0xffffb22e) },
+                 ff { "F Fwd", TransportKey::fastForward, juce::Colour (0xffffb22e) },
+                 stop { "Stop", TransportKey::stop, juce::Colours::transparentBlack },
+                 play { "Play", TransportKey::play },
+                 rec { "Record", TransportKey::record, juce::Colour (0xffff3b2a) },
+                 erase { "Erase", TransportKey::erase, juce::Colours::transparentBlack };
     Knob recordLevel, pitchKnob;
     float shownRecordedIps = -1.0f;   // in the speed box's title
     juce::OwnedArray<ParamButton> armButtons;
@@ -185,8 +191,7 @@ private:
     /** Centre of meter slot i in the meter panel: subs, then auxes, then main (with room for the LIM lamp). */
     float meterSlotX (int slot) const { return (float) meterBox.getX() + 10.0f + ((float) slot + 0.5f) * (float) (meterBox.getWidth() - 50) / 13.0f; }
 
-    void styleTransport (juce::TextButton&, juce::Colour);
-    void confirmErase();
+    void openErase();
 };
 
 /** A bank of 16 channel strips (the inputs or the tape returns). */

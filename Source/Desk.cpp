@@ -1,5 +1,6 @@
 ﻿#include "Desk.h"
 #include "ConsoleLookAndFeel.h"
+#include "EraseDialog.h"
 
 using namespace ConsoleColours;
 using namespace DeskLayout;
@@ -628,19 +629,16 @@ CentreSection::CentreSection (AudioEngine& e, PluginContext* plugins)
         addAndMakeVisible (b);
     }
 
-    styleTransport (power, juce::Colour (0xffc9a23a));
-    styleTransport (rew, juce::Colour (0xff8a9094));
-    styleTransport (ff, juce::Colour (0xff8a9094));
-    styleTransport (stop, juce::Colour (0xffd8dadb));
-    styleTransport (play, juce::Colour (0xff3fae3f));
-    styleTransport (rec, juce::Colour (0xffc8413a));
-    styleTransport (erase, juce::Colour (0xff8a9094));
+    for (auto* b : { &power, &rew, &ff, &stop, &play, &rec, &erase })
+        addAndMakeVisible (b);
 
     power.setTooltip ("Switches the audio interface on and off (off frees the driver for other programs)");
     rew.setTooltip ("Rewind: winds back to the start, speeding up like a real tape machine (Stop brakes)");
     ff.setTooltip ("Fast forward: winds on to the end of the recording (Stop brakes)");
+    stop.setTooltip ("Stop");
+    play.setTooltip ("Play");
     rec.setTooltip ("Record enable: armed tracks record while the tape plays");
-    erase.setTooltip ("Erase all tracks");
+    erase.setTooltip ("Erase: whole tracks, or a section of them");
 
     power.onClick = [this] { engine.setPower (! engine.isPowered()); };
     rew.onClick   = [this] { tape.rewind(); };
@@ -648,7 +646,7 @@ CentreSection::CentreSection (AudioEngine& e, PluginContext* plugins)
     stop.onClick  = [this] { tape.stop(); };
     play.onClick  = [this] { tape.play(); };
     rec.onClick   = [this] { tape.setRecordEnabled (! tape.isRecordEnabled()); };
-    erase.onClick = [this] { confirmErase(); };
+    erase.onClick = [this] { openErase(); };
 
     // Locators: one In/Out region for loop and auto-punch.
     setIn.setTooltip ("Set the In point to the current tape position");
@@ -746,27 +744,9 @@ CentreSection::CentreSection (AudioEngine& e, PluginContext* plugins)
     setFocusContainerType (FocusContainerType::focusContainer);
 }
 
-void CentreSection::styleTransport (juce::TextButton& b, juce::Colour c)
+void CentreSection::openErase()
 {
-    b.setColour (juce::TextButton::buttonColourId, c.interpolatedWith (juce::Colour (0xff222527), 0.78f));
-    b.setColour (juce::TextButton::buttonOnColourId, c.interpolatedWith (juce::Colour (0xff222527), 0.12f));
-    b.setColour (juce::TextButton::textColourOffId, juce::Colour (0xffdfe2e3));
-    b.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff0b0b0b));
-    addAndMakeVisible (b);
-}
-
-void CentreSection::confirmErase()
-{
-    auto options = juce::MessageBoxOptions::makeOptionsOkCancel (
-        juce::MessageBoxIconType::WarningIcon, "Erase tape",
-        "Erase all " + juce::String (TapeMachine::numTracks) + " tracks? This cannot be undone.",
-        "Erase", "Cancel", this);
-
-    juce::AlertWindow::showAsync (options, [safe = juce::Component::SafePointer<CentreSection> (this)] (int result)
-    {
-        if (result == 1 && safe != nullptr)
-            safe->tape.eraseAll();
-    });
+    EraseDialog::show (tape);
 }
 
 void CentreSection::resized()
@@ -791,25 +771,25 @@ void CentreSection::resized()
     const int mainX = juce::roundToInt (mainColumnX());
 
     // Tape machine panel, left column.
-    deckBox = { 12, 12, 300, 540 };
+    deckBox = { 12, 12, 300, 552 };
     auto d = deckBox.reduced (10);
-    d.removeFromTop (18);   // title
+    power.setBounds (d.removeFromTop (24).removeFromRight (90));   // above the cassette, right of the title
+    d.removeFromTop (2);
     cassette.setBounds (d.removeFromTop (Cassette::height).withSizeKeepingCentre (Cassette::width, Cassette::height));
-    d.removeFromTop (8);
+    d.removeFromTop (6);
     clock.setBounds (d.removeFromTop (44));
-    d.removeFromTop (8);
+    d.removeFromTop (6);
 
-    auto row = d.removeFromTop (32);
-    const int bw = (row.getWidth() - 6 * 3) / 7;
-    for (auto* b : { &power, &rew, &ff, &stop, &play, &rec, &erase })
+    // Transport keys, each with its name printed above.
+    auto row = d.removeFromTop (TransportKey::labelHeight + 30);
+    const int gap = 5, bw = (row.getWidth() - 5 * gap) / 6;
+    for (auto* b : { &rew, &ff, &stop, &play, &rec, &erase })
     {
-        // FF needs less room than the others; Power gets it.
-        const int w = b == &power ? bw + 8 : b == &ff ? bw - 8 : bw;
-        b->setBounds (row.removeFromLeft (w));
-        row.removeFromLeft (3);
+        b->setBounds (b == &erase ? row : row.removeFromLeft (bw));
+        row.removeFromLeft (gap);
     }
 
-    d.removeFromTop (16);
+    d.removeFromTop (12);
     locateBox = d.removeFromTop (48);
     {
         auto locRow = locateBox.reduced (8, 0).withTrimmedTop (14).withHeight (26);
@@ -930,7 +910,7 @@ void CentreSection::paint (juce::Graphics& g)
     g.setColour (juce::Colour (0xffaeb3b5));
     g.setFont (ConsoleLookAndFeel::uiFont (13.0f, true));
     g.drawText ("Tape machine, " + juce::String (TapeMachine::numTracks) + " track",
-                deckBox.reduced (10).withHeight (16), juce::Justification::centredLeft, false);
+                deckBox.reduced (10).withHeight (24), juce::Justification::centredLeft, false);
 
     // App buttons and monitor level panels, in the same style.
     for (auto [box, title] : { std::pair { appBox, "Console" }, std::pair { monitorBox, "Monitor / Phones" } })

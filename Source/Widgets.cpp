@@ -276,3 +276,125 @@ void GrMeter::paint (juce::Graphics& g)
         g.fillRect (r.getX() + 1.0f, r.getY() + 1.0f, w, r.getHeight() - 2.0f);
     }
 }
+
+//==============================================================================
+TransportKey::TransportKey (const juce::String& label, Icon i, juce::Colour led)
+    : juce::Button (label), icon (i), ledColour (led)
+{
+    setTitle (label);
+}
+
+void TransportKey::paintIcon (juce::Graphics& g, juce::Rectangle<float> r, juce::Colour c) const
+{
+    const float s = juce::jmin (r.getWidth(), r.getHeight()) * 0.42f;   // symbol size
+    const auto centre = r.getCentre();
+    const auto triangle = [&] (float x, float dir)   // pointing right (dir 1) or left (-1)
+    {
+        juce::Path p;
+        p.addTriangle (x - dir * s * 0.45f, centre.y - s * 0.5f, x - dir * s * 0.45f, centre.y + s * 0.5f, x + dir * s * 0.45f, centre.y);
+        g.fillPath (p);
+    };
+
+    g.setColour (c);
+    switch (icon)
+    {
+        case rewind:      triangle (centre.x - s * 0.42f, -1.0f); triangle (centre.x + s * 0.42f, -1.0f); break;
+        case fastForward: triangle (centre.x - s * 0.42f, 1.0f);  triangle (centre.x + s * 0.42f, 1.0f);  break;
+        case play:        triangle (centre.x + s * 0.08f, 1.0f); break;
+        case stop:        g.fillRect (juce::Rectangle<float> (s * 0.85f, s * 0.85f).withCentre (centre)); break;
+        case record:
+            g.setColour (juce::Colour (0xffe8402f));
+            g.fillEllipse (juce::Rectangle<float> (s * 0.95f, s * 0.95f).withCentre (centre));
+            break;
+        case erase:
+        {
+            // A strip of tape with a slash through it.
+            const auto strip = juce::Rectangle<float> (s * 1.7f, s * 0.7f).withCentre (centre);
+            g.drawRect (strip, 1.3f);
+            g.drawLine (strip.getX() + s * 0.25f, strip.getBottom() + s * 0.3f, strip.getRight() - s * 0.25f, strip.getY() - s * 0.3f, 1.6f);
+            break;
+        }
+        case power: break;
+    }
+}
+
+void TransportKey::paintButton (juce::Graphics& g, bool isMouseOver, bool isButtonDown)
+{
+    const auto silk = juce::Colour (0xffd9dcdd);
+    auto b = getLocalBounds().toFloat();
+    const bool on = getToggleState();
+
+    if (icon == power)
+    {
+        // Name to the left, a red square key to the right.
+        const auto key = b.removeFromRight (juce::jmin (b.getWidth() * 0.5f, b.getHeight() * 1.5f)).reduced (1.0f).translated (0.0f, isButtonDown ? 1.0f : 0.0f);
+        g.setColour (silk);
+        g.setFont (ConsoleLookAndFeel::uiFont (10.0f, true));
+        g.drawText (getName().toUpperCase(), b.withTrimmedRight (6.0f), juce::Justification::centredRight, false);
+
+        const auto red = on ? juce::Colour (0xffe8502f) : juce::Colour (0xff6e2318);
+        if (on)
+        {
+            g.setColour (red.withAlpha (0.3f));
+            g.fillRoundedRectangle (key.expanded (3.0f), 4.0f);
+        }
+        g.setColour (juce::Colour (0xff0b0c0d));
+        g.fillRoundedRectangle (key.expanded (1.0f), 3.0f);
+        g.setGradientFill (juce::ColourGradient (red.brighter (0.25f), 0, key.getY(), red.darker (0.25f), 0, key.getBottom(), false));
+        g.fillRoundedRectangle (key, 2.5f);
+        g.setColour (juce::Colours::white.withAlpha (on ? 0.35f : 0.15f));
+        g.fillRect (key.getX() + 2.0f, key.getY() + 1.0f, key.getWidth() - 4.0f, 1.0f);
+        if (isMouseOver)
+        {
+            g.setColour (juce::Colours::white.withAlpha (0.08f));
+            g.fillRoundedRectangle (key, 2.5f);
+        }
+        return;
+    }
+
+    // Name above the key, centred together with its LED (keys without a status have none).
+    const auto labelArea = b.removeFromTop ((float) labelHeight);
+    const auto name = getName().toUpperCase();
+    const bool hasLed = ! ledColour.isTransparent();
+    const float ledRoom = hasLed ? 8.0f : 0.0f;
+    float fontSize = 9.0f, textW = 0.0f;
+    for (;; fontSize -= 0.5f)   // long names (RECORD) get a touch smaller rather than pushing the LED off the key
+    {
+        g.setFont (ConsoleLookAndFeel::uiFont (fontSize, true));
+        textW = juce::GlyphArrangement::getStringWidth (g.getCurrentFont(), name);
+        if (textW + ledRoom <= labelArea.getWidth() - 2.0f || fontSize <= 7.0f)
+            break;
+    }
+    const float textX = labelArea.getCentreX() - (textW + ledRoom) * 0.5f;
+    g.setColour (silk);
+    g.drawText (name, juce::Rectangle<float> (textX, labelArea.getY(), textW + 1.0f, labelArea.getHeight()), juce::Justification::centredLeft, false);
+    if (hasLed)
+    {
+        const juce::Point<float> led (textX + textW + 5.0f, labelArea.getCentreY());
+        if (on)
+        {
+            g.setColour (ledColour.withAlpha (0.3f));
+            g.fillEllipse (led.x - 4.5f, led.y - 4.5f, 9.0f, 9.0f);
+        }
+        g.setColour (on ? ledColour : ledColour.withMultipliedBrightness (0.22f));
+        g.fillEllipse (led.x - 2.2f, led.y - 2.2f, 4.4f, 4.4f);
+    }
+
+    // The key: dark, bevelled, pressed in a pixel while held.
+    auto key = b.withTrimmedTop (2.0f).reduced (1.0f);
+    g.setColour (juce::Colour (0xff0b0c0d));
+    g.fillRoundedRectangle (key.expanded (1.0f), 3.0f);
+    if (isButtonDown)
+        key.translate (0.0f, 1.0f);
+    const auto face = isButtonDown ? juce::Colour (0xff2c3033) : juce::Colour (0xff3a3e41);
+    g.setGradientFill (juce::ColourGradient (face.brighter (0.12f), 0, key.getY(), face.darker (0.35f), 0, key.getBottom(), false));
+    g.fillRoundedRectangle (key, 2.5f);
+    g.setColour (juce::Colours::white.withAlpha (isButtonDown ? 0.08f : 0.2f));
+    g.fillRect (key.getX() + 2.0f, key.getY() + 1.0f, key.getWidth() - 4.0f, 1.0f);
+    if (isMouseOver && ! isButtonDown)
+    {
+        g.setColour (juce::Colours::white.withAlpha (0.05f));
+        g.fillRoundedRectangle (key, 2.5f);
+    }
+    paintIcon (g, key, juce::Colour (0xffe9ebec).withMultipliedAlpha (isEnabled() ? 1.0f : 0.4f));
+}

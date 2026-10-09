@@ -938,6 +938,35 @@ namespace
         check (tape.getRecordedIps() == 0.0f, "erasing the tape forgets its speed");
     }
 
+    void testEraseSections()
+    {
+        std::puts ("Erase: a section of a track, whole tracks");
+        auto rig = std::make_unique<TapeRig>();
+        auto& tape = rig->tape;
+        std::vector<float> ones (48000, 1.0f);
+        for (int t = 0; t < 3; ++t)
+            tape.writeTrack (t, 0, ones.data(), (int) ones.size());
+        tape.setLength (48000);
+
+        tape.eraseSection (0, 10000, 20000);
+        std::vector<float> got (48000);
+        tape.readTrack (0, 0, got.data(), 48000);
+        const int fade = 240;   // 5 ms at 48 kHz
+        check (got[9999] == 1.0f && got[20000] == 1.0f, "audio either side of the section is untouched");
+        check (std::all_of (got.begin() + 10000 + fade, got.begin() + 20000 - fade, [] (float x) { return x == 0.0f; }), "the section is silent");
+        check (got[10000] > 0.99f && got[10000 + fade / 2] > 0.4f && got[10000 + fade / 2] < 0.6f && got[20000 - 1] > 0.99f,
+               "5 ms fades at the section's edges");
+        tape.readTrack (1, 0, got.data(), 48000);
+        check (std::all_of (got.begin(), got.end(), [] (float x) { return x == 1.0f; }), "other tracks untouched");
+
+        tape.eraseTrack (1);
+        tape.service();
+        check (! tape.trackHasAudio (1) && tape.trackHasAudio (0) && tape.getLength() == 48000, "erasing one whole track leaves the rest and the length");
+        tape.eraseTrack (0);
+        tape.eraseTrack (2);
+        check (tape.getLength() == 0 && tape.getRecordedIps() == 0.0f, "erasing the last track with audio leaves a blank tape");
+    }
+
     void testTapeOutMeters()
     {
         std::puts ("Meter bridge: each track's tape out peak, read and reset");
@@ -2070,6 +2099,7 @@ int main (int argc, char** argv)
     testTapeCharacter();
     testTapeOutMeters();
     testSpeedAndPitch();
+    testEraseSections();
     testPreampColour();
     testBusCompressor();
     testMasterSection();
