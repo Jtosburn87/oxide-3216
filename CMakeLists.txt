@@ -81,6 +81,7 @@ target_sources(ConsoleTape PRIVATE
     Source/SessionController.cpp
     Source/InsertsUI.cpp
     Source/RackWindow.cpp
+    Source/MeterBridge.cpp
     Source/AudioSettingsComponent.cpp
     Source/BusCompPanel.cpp
     Source/Cassette.cpp

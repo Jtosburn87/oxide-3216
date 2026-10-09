@@ -9,6 +9,7 @@
 #include "PluginWindows.h"
 #include "InsertsUI.h"
 #include "RackWindow.h"
+#include "MeterBridge.h"
 #include "SessionController.h"
 #include "ImportAudioDialog.h"
 #include "SectionWindow.h"
@@ -53,6 +54,8 @@ private:
 
     juce::TextButton audioButton { "Audio device" }, vFitButton { "V Fit" }, hFitButton { "H Fit" }, patchButton { "Patch bay" }, pluginsButton { "Plugins" }, rackButton { "Rack" }, sessionButton { "Session" }, sectionsButton { "Options" };
     ViewSwitch viewSwitch;   // Record | Mix | Full
+    juce::TextButton meterBridgeButton { "Meter bridge" };
+    std::unique_ptr<MeterBridgeWindow> meterBridge;   // made on first use, then only hidden
     juce::Slider zoomSlider;
     juce::Label zoomLabel, statusLabel;
 

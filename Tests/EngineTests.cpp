@@ -819,6 +819,21 @@ namespace
         check (rmsDb() < -150.0f, "no hiss when the tape is stopped");
     }
 
+    void testTapeOutMeters()
+    {
+        std::puts ("Meter bridge: each track's tape out peak, read and reset");
+        SineRig r;
+        r.e.tape.arm[0]->set (1.0f);
+        r.measure (1000.0f, 0.25f);
+        for (int t = 0; t < TapeMachine::numTracks; ++t)
+            r.e.tape.takeOutputPeak (t);
+        r.run (1000.0f, 0.25f, 10);
+        const float out1 = r.e.tape.takeOutputPeak (0);
+        std::printf ("      tape out meter, track 1 (armed, -12 dBFS in): %.3f\n", out1);
+        check (out1 > 0.2f && out1 < 0.3f && r.e.tape.takeOutputPeak (1) == 0.0f, "tape out meters: armed track 1 reads, track 2 silent");
+        check (r.e.tape.takeOutputPeak (0) == 0.0f, "tape out meter resets after reading");
+    }
+
     /** Harmonic levels (relative to the fundamental) of a sine through a Preamp. amp is in clipLevel units
         (0.5 = +20 dBu). Measured over whole cycles after half a second of settling. */
     struct PreampHarmonics { float h2, h3; };
@@ -1934,6 +1949,7 @@ int main (int argc, char** argv)
     testFetCompressor();
     testSends();
     testTapeCharacter();
+    testTapeOutMeters();
     testPreampColour();
     testBusCompressor();
     testMasterSection();

@@ -64,6 +64,14 @@ MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionControll
     viewSwitch.setView (view);
     for (auto& b : viewSwitch.buttons)
         addAndMakeVisible (b);   // in the top bar
+    meterBridgeButton.setTooltip ("The tape machine's meters for all 16 tracks, with record function switches");
+    meterBridgeButton.onClick = [this]
+    {
+        if (meterBridge == nullptr)
+            meterBridge = std::make_unique<MeterBridgeWindow> (engine.tape, settings, [this] { if (saveSettings) saveSettings(); });
+        meterBridge->show();
+    };
+    addAndMakeVisible (meterBridgeButton);
     viewSwitch.onChange = [this] (int v)
     {
         desk.setView ((Desk::View) v);
@@ -147,6 +155,7 @@ MainComponent::~MainComponent()
     for (auto& w : sectionWindows)
         w = nullptr;
     rackWindow = nullptr;
+    meterBridge = nullptr;
     forEachChain ([] (InsertChain& c) { c.beforeDelete = nullptr; c.onChange = nullptr; });
     pluginWindows.closeAll();
     if (pluginListWindow != nullptr)
@@ -283,6 +292,8 @@ void MainComponent::resized()
     bar.removeFromLeft (24);
     for (auto& b : viewSwitch.buttons)
         b.setBounds (bar.removeFromLeft (76));
+    bar.removeFromLeft (16);
+    meterBridgeButton.setBounds (bar.removeFromLeft (120));
     bar.removeFromLeft (16);
     statusLabel.setBounds (bar);
 

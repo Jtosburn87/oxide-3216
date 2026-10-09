@@ -373,6 +373,16 @@ void TapeMachine::process (const float* const* tapeIn, float* const* tapeOut, in
         wind (n);
     }
 
+    // Tape out meters (the meter bridge).
+    for (int t = 0; t < numTracks; ++t)
+    {
+        float pk = 0.0f;
+        for (int i = 0; i < n; ++i)
+            pk = juce::jmax (pk, std::abs (tapeOut[t][i]));
+        auto current = outPeak[(size_t) t].load (std::memory_order_relaxed);
+        while (pk > current && ! outPeak[(size_t) t].compare_exchange_weak (current, pk, std::memory_order_relaxed)) {}
+    }
+
     position.store (pos);
 }
 

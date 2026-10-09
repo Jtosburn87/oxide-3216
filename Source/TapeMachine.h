@@ -117,6 +117,9 @@ public:
     /** Writes audio straight onto a track (session loading). Message thread, transport stopped. */
     void writeTrack (int track, juce::int64 start, const float* data, int numSamples);
 
+    /** Peak of a track's tape out since the last call (the meter bridge). Any thread. */
+    float takeOutputPeak (int track) noexcept { return outPeak[(size_t) track].exchange (0.0f); }
+
     /** Tape character on/off. Always on in the app; the tests switch it off to check storage bit-for-bit. */
     std::atomic<bool> characterOn { true };
 
@@ -146,6 +149,7 @@ private:
     void wind (int numSamples) noexcept;
     std::atomic<juce::int64> inPoint { 0 }, outPoint { 0 };
     std::array<std::atomic<std::uint32_t>, numTracks> trackRevision {};
+    std::array<std::atomic<float>, numTracks> outPeak {};
 
     // Tape character state.
     Dsp::Smoothed levelGain;
