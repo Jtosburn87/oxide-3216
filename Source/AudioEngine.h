@@ -66,8 +66,8 @@ public:
                              tbLimiterOut = 63;
         static constexpr int numSources = 64;   // every bit of a 64-bit cable mask
         // Destinations
-        static constexpr int tapeIn = 0, returnIn = 16, channelIn = 32, talkbackIn = 48, tbLimiterIn = 49;
-        static constexpr int numDestinations = 50;
+        static constexpr int tapeIn = 0, returnIn = 16, channelIn = 32, talkbackIn = 48, tbLimiterIn = 49, tbSend = 50;
+        static constexpr int numDestinations = 51;
 
     };
 
@@ -154,11 +154,12 @@ public:
     /** Console colour: every input and return preamp voiced like a Neve 1073 (see Preamp). On by default. */
     Param* preampColour = nullptr;
 
-    /** Talkback, as on a real console: the talkback mic (the patch bay's Talkback In, usually from an interface
-        input) goes, while Talk is held or latched, to the chosen aux outputs (Aux 5-8) at the TB level. It joins
-        after the aux returns, so it never reaches the main mix through an effect. By default it runs through
-        the TB limiter (the limiter's input is normalled from Talkback In; patching TB Lim In breaks that and the
-        talkback goes dry). The limiter's in and out are on the patch bay for use anywhere else too. */
+    /** Talkback, as on a real console. On the patch bay: TB In (the talkback mic, usually from an interface input)
+        is normalled to TB Limiter In, and the limiter's output to TB Send; whatever reaches TB Send goes, while
+        Talk is held or latched, to the chosen aux outputs (Aux 5-8) at the TB level. It joins after the aux
+        returns, so it never reaches the main mix through an effect. With "through the limiter" off, or with
+        something else patched into TB Limiter In, TB Send is normalled straight from TB In instead (the talkback
+        goes dry). Patching TB Send breaks its normal. The limiter's in and out work anywhere else too. */
     std::atomic<bool> talkbackOn { false };
     static constexpr int firstTalkbackAux = 4, numTalkbackAux = 4;   // Aux 5-8
     Param* tbLevel = nullptr;                                         // dB, -60 (off) .. +10

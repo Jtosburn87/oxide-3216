@@ -1010,6 +1010,18 @@ namespace
         std::printf ("      hot mic through the limiter: peak %.3f, %.1f dB of gain reduction\n", pk[2], gr);
         check (pk[2] < 0.15f && gr > 15.0f, "the TB limiter flattens a hot mic (about -24 dBFS, plus its soft clip)");
 
+        // Bypass with a cable: the mic's interface input straight into TB Send as well.
+        e.setInterfaceInput (P::tbSend, 1);
+        pk = run (0.5f, 40);
+        check (near (pk[2], 0.5f, 5.0e-3f), "mic patched straight into TB Send: the limiter is bypassed");
+        e.setInterfaceInput (P::tbSend, -1);
+
+        // Something else into TB Limiter In: the limiter works on that, the talkback goes dry.
+        e.setPatch (P::tbLimiterIn, std::uint64_t (1) << P::oscillator);
+        pk = run (0.5f, 40);
+        check (near (pk[2], 0.5f, 5.0e-3f), "another source into TB Limiter In: the talkback goes dry");
+        e.setPatch (P::tbLimiterIn, 0);
+
         e.tbLimBlend->set (0.0f);
         pk = run (0.1f, 40);
         check (near (pk[2], 0.1f * Dsp::dbToGain (10.0f), 5.0e-3f), "blend fully dry: the input gain only (+10 dB)");

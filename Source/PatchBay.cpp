@@ -19,7 +19,7 @@ namespace
         if (s < P::subOut)    return "Aux out " + juce::String (s - P::auxOut + 1);
         if (s < P::mainL)     return "Sub out " + juce::String (s - P::subOut + 1);
         if (s == P::oscillator) return "Oscillator";
-        if (s == P::tbLimiterOut) return "TB limiter out";
+        if (s == P::tbLimiterOut) return "TB Limiter Out";
         return s == P::mainL ? "Main L" : "Main R";
     }
 
@@ -28,8 +28,9 @@ namespace
         using P = AudioEngine::Patch;
         if (d < P::returnIn)  return "Tape in " + juce::String (d + 1);
         if (d < P::channelIn) return "Return strip in " + juce::String (d - P::returnIn + 1);
-        if (d == P::talkbackIn)  return "Talkback in (the talkback mic)";
-        if (d == P::tbLimiterIn) return "TB limiter in (normalled from Talkback in)";
+        if (d == P::talkbackIn)  return "TB In (the talkback mic)";
+        if (d == P::tbLimiterIn) return "TB Limiter In (normalled from TB In)";
+        if (d == P::tbSend)      return "TB Send (to the talkback auxes; normalled from TB Limiter Out)";
         return "Channel strip in " + juce::String (d - P::channelIn + 1);
     }
 
@@ -112,7 +113,7 @@ public:
         g.fillRect (strip);
         g.setColour (juce::Colour (0xff111111));
         g.setFont (ConsoleLookAndFeel::uiFont (10.0f, true));
-        g.drawText (label, strip, juce::Justification::centred, false);
+        g.drawFittedText (label, strip.toNearestInt(), juce::Justification::centred, 1, 0.6f);   // SEND squeezes to fit
 
         if (dim)
             g.endTransparencyLayer();
@@ -155,7 +156,8 @@ PatchBayField::PatchBayField (AudioEngine& e, std::function<void()> changedCallb
     }
     for (int d = 0; d < Patch::numDestinations; ++d)
         addAndMakeVisible (destinations.add (new Jack (*this, Kind::destination, d, destinationName (d),
-                                                       d == Patch::talkbackIn ? juce::String ("TB") : d == Patch::tbLimiterIn ? juce::String ("IN") : juce::String (d % 16 + 1))));
+                                                       d == Patch::talkbackIn || d == Patch::tbLimiterIn ? juce::String ("IN")
+                                                       : d == Patch::tbSend ? juce::String ("SEND") : juce::String (d % 16 + 1))));
 
     // Oscillator: waveform switch, frequency sweep (sine) and level.
     const char* const typeNames[] = { "Sine", "White", "Pink" };
@@ -236,12 +238,17 @@ void PatchBayField::rebuild (int interfaceJacks)
     oscFreqKnob.setBounds (x3 + 44, row1Top + 52, 64, 56);
     oscLevelKnob.setBounds (x3 + 128, row1Top + 52, 64, 56);
 
-    // Talkback after it: the TB limiter's output over the talkback mic in and the limiter's in (which is
-    // normalled from the talkback mic; the limiter cannot be patched into itself).
+    // Talkback after it: TB In and TB Send side by side, then the TB limiter with its out over its in.
+    // Normals: TB In -> TB Limiter In, TB Limiter Out -> TB Send (the limiter cannot be patched into itself).
     const int x4 = x3 + 36 + 3 * 54 + groupGap;
-    placeGroup ("TB Lim", sources, P::tbLimiterOut, 1, x4, row1Top);
-    groups.back().area.setWidth (2 * jackW);
-    placeGroup ("Talkback", destinations, P::talkbackIn, 2, x4, row1Bottom);
+    placeGroup ("Talkback", destinations, P::talkbackIn, 1, x4, row1Bottom);
+    destinations[P::tbSend]->setBounds (destinations[P::talkbackIn]->getBounds().translated (jackW, 0));
+    groups.back().area.setWidth (2 * jackW + 8);
+    const int x5 = x4 + 2 * jackW + groupGap;
+    placeGroup ("TB Limiter", sources, P::tbLimiterOut, 1, x5, row1Top);
+    groups.back().area.setWidth (2 * jackW + 16);
+    placeGroup ("TB Limiter", destinations, P::tbLimiterIn, 1, x5, row1Bottom);
+    groups.back().area.setWidth (2 * jackW + 16);
 
     // Pair 2. Return strip in sits under the tape outs that are normalled to it.
     int x = pad;

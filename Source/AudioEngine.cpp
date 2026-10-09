@@ -177,6 +177,7 @@ void AudioEngine::initialise (const juce::XmlElement* savedState)
             setInterfaceInput (Patch::returnIn + r, routing->getIntAttribute ("returnIn" + juce::String (r + 1), -1));
         setInterfaceInput (Patch::talkbackIn, routing->getIntAttribute ("talkbackIn", -1));
         setInterfaceInput (Patch::tbLimiterIn, routing->getIntAttribute ("tbLimiterIn", -1));
+        setInterfaceInput (Patch::tbSend, routing->getIntAttribute ("tbSend", -1));
         setMainOutput (0, routing->getIntAttribute ("mainL", 0));
         setMainOutput (1, routing->getIntAttribute ("mainR", 1));
         setMonitorOutput (0, routing->getIntAttribute ("monitorL", -1));
@@ -208,7 +209,7 @@ std::unique_ptr<juce::XmlElement> AudioEngine::createStateXml() const
     for (int r = 0; r < Config::numReturnStrips; ++r)
         if (getInterfaceInput (Patch::returnIn + r) >= 0)
             routing->setAttribute ("returnIn" + juce::String (r + 1), getInterfaceInput (Patch::returnIn + r));
-    for (auto [dest, key] : { std::pair { Patch::talkbackIn, "talkbackIn" }, std::pair { Patch::tbLimiterIn, "tbLimiterIn" } })
+    for (auto [dest, key] : { std::pair { Patch::talkbackIn, "talkbackIn" }, std::pair { Patch::tbLimiterIn, "tbLimiterIn" }, std::pair { Patch::tbSend, "tbSend" } })
         if (getInterfaceInput (dest) >= 0)
             routing->setAttribute (key, getInterfaceInput (dest));
     routing->setAttribute ("mainL", getMainOutput (0));
@@ -661,9 +662,11 @@ void AudioEngine::render (const float* const* inputs, int numInputs, float* cons
             else
                 juce::FloatVectorOperations::clear (tbLimOut.data(), n);
 
+            // TB Send: normalled from the limiter while the mic feeds it, otherwise straight from TB In.
             const bool normalled = patch[(size_t) Patch::tbLimiterIn].load (std::memory_order_relaxed) == 0
                                    && interfaceIn[Patch::tbLimiterIn] == nullptr;
-            const float* talk = throughLimiter && normalled ? (mic != nullptr ? tbLimOut.data() : nullptr) : mic;
+            const float* sendNormal = throughLimiter && normalled ? (mic != nullptr ? tbLimOut.data() : nullptr) : mic;
+            const float* talk = patchedInput (Patch::tbSend, sendNormal, interfaceAt (Patch::tbSend, start), 3, n);
             const float target = talkbackOn.load (std::memory_order_relaxed) ? monitorGain (tbLevel->get()) : 0.0f;
             if (talk != nullptr && ! (target == 0.0f && talkbackGain.settled (0.0f)))
             {

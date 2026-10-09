@@ -57,14 +57,15 @@ TalkbackSettings::TalkbackSettings (AudioEngine& e)
     }
     addAndMakeVisible (grMeter);
 
-    note.setText ("Patch the talkback mic into Talkback In on the patch bay (from an interface input). "
-                  "TB Lim In and Out are there too, to use the limiter on anything else.", juce::dontSendNotification);
+    note.setText ("Patch bay: TB In (patch the mic's interface input here) -> TB Limiter In -> TB Limiter Out -> TB Send "
+                  "-> the auxes above, all normalled. Patch the mic straight into TB Send to bypass the limiter; patch anything "
+                  "else into TB Limiter In to use the limiter on it (the talkback then goes dry).", juce::dontSendNotification);
     note.setFont (ConsoleLookAndFeel::uiFont (12.0f));
     note.setColour (juce::Label::textColourId, legend.withAlpha (0.65f));
     note.setJustificationType (juce::Justification::topLeft);
     addAndMakeVisible (note);
 
-    setSize (440, 362);
+    setSize (440, 424);
     startTimerHz (30);
 }
 
@@ -92,17 +93,18 @@ void TalkbackSettings::resized()
     }
 
     area.removeFromTop (12);
-    limiterBox = area.removeFromTop (170);
+    limiterBox = area.removeFromTop (196);
     {
+        // The switch, then the three knobs beside the gain reduction needle.
         auto r = limiterBox.reduced (10, 0).withTrimmedTop (22);
         limiterButton.setBounds (r.removeFromTop (28));
-        r.removeFromTop (8);
-        auto knobs = r.removeFromTop (64);
+        r.removeFromTop (10);
+        auto lower = r.removeFromTop (124);
+        grMeter.setBounds (lower.removeFromRight (200).withSizeKeepingCentre (198, 120));
+        auto knobs = lower.withSizeKeepingCentre (lower.getWidth(), 64);
         const int kw = knobs.getWidth() / 3;
         for (auto* k : { &inputKnob, &blendKnob, &makeupKnob })
             k->setBounds (knobs.removeFromLeft (kw).withSizeKeepingCentre (64, 60));
-        r.removeFromTop (14);
-        grMeter.setBounds (r.removeFromTop (12).withTrimmedLeft (110));
     }
 
     area.removeFromTop (10);
@@ -123,8 +125,4 @@ void TalkbackSettings::paint (juce::Graphics& g)
         g.setFont (ConsoleLookAndFeel::uiFont (13.0f, true));
         g.drawText (title, box.reduced (10, 4).withHeight (16), juce::Justification::centredLeft, false);
     }
-    g.setColour (legend.withAlpha (0.75f));
-    g.setFont (ConsoleLookAndFeel::uiFont (12.0f));
-    g.drawText ("Gain reduction", grMeter.getBounds().withX (limiterBox.getX() + 10).withWidth (96).expanded (0, 2),
-                juce::Justification::centredLeft, false);
 }
