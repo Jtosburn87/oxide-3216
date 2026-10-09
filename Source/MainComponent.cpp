@@ -6,6 +6,22 @@ using namespace ConsoleColours;
 namespace
 {
     constexpr int topBarH = 48;
+
+    /** Touchscreens: the console's viewport scrolls when a finger drags across it. Controls opt out, so a
+        drag that starts on a fader, knob, button or text field works that control and leaves the view
+        alone; dragging on the panels between them still scrolls. */
+    void keepTouchDragsOnControls (juce::Component& c)
+    {
+        const auto* label = dynamic_cast<juce::Label*> (&c);
+        if (dynamic_cast<juce::Slider*> (&c) != nullptr || dynamic_cast<juce::Button*> (&c) != nullptr
+            || dynamic_cast<juce::TextEditor*> (&c) != nullptr || dynamic_cast<juce::ComboBox*> (&c) != nullptr
+            || dynamic_cast<Knob*> (&c) != nullptr || dynamic_cast<Fader*> (&c) != nullptr || dynamic_cast<BusKnob*> (&c) != nullptr
+            || (label != nullptr && label->isEditable()))
+            c.setViewportIgnoreDragFlag (true);
+
+        for (auto* child : c.getChildren())
+            keepTouchDragsOnControls (*child);
+    }
 }
 
 MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionController& sc, juce::PropertiesFile& s, std::function<void()> save)
@@ -75,6 +91,7 @@ MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionControll
     // The app buttons sit on the console, in a column between the tape machine and the bus compressor.
     for (auto* b : { &sessionButton, &audioButton, &patchButton, &pluginsButton, &sectionsButton, &vFitButton, &hFitButton })
         desk.getAppButtons().addAndMakeVisible (b);
+    keepTouchDragsOnControls (desk);   // every control is built by now (sections keep the flag in their own windows)
 
     deskHolder.addAndMakeVisible (desk);
     viewport.setViewedComponent (&deskHolder, false);
