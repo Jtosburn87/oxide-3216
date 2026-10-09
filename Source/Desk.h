@@ -121,6 +121,18 @@ public:
     std::function<void()> onChildrenChanged;   // the column's height depends on how many buttons it holds
 };
 
+/** Record, Mix and Full buttons (the current one lit): which banks the console shows (see Desk::View).
+    The buttons sit in the top bar, joined into one control. */
+class ViewSwitch
+{
+public:
+    ViewSwitch();
+    void setView (int view);   // lights the button, no callback
+    std::function<void (int view)> onChange;
+
+    std::array<juce::TextButton, 3> buttons;
+};
+
 /** Centre section: tape machine, transport and group EQs on the left; the app buttons and the monitor
     level between the tape machine and the bus compressor; main fader at the far right of the fader area. */
 class CentreSection : public juce::Component
@@ -216,6 +228,18 @@ public:
 
     bool isDocked (Section s) const { return docked[(size_t) s]; }
 
+    /** Which banks the console shows next to the centre section: Record = inputs, Mix = returns,
+        Full = both. Sections out in windows of their own are not affected. */
+    enum View { recordView, mixView, fullView };
+    void setView (View);
+    View getView() const { return view; }
+
+    /** Docked, and part of the current view. */
+    bool isOnDesk (Section s) const
+    {
+        return docked[(size_t) s] && (view == fullView || s == centreSection || (s == inputSection) == (view == recordView));
+    }
+
     /** false: the section leaves the console (the caller shows it in a window); true: it comes back. */
     void setDocked (Section, bool);
 
@@ -248,6 +272,7 @@ private:
     StripBank inputs, returns;
     CentreSection centre;
     std::array<bool, numSections> docked { true, true, true };
+    View view = recordView;
 
     void relayout (bool sectionMoved = true);
     void timerCallback() override;

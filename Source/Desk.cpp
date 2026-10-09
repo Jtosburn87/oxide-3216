@@ -1123,6 +1123,32 @@ void StripBank::update()
 }
 
 //==============================================================================
+ViewSwitch::ViewSwitch()
+{
+    const char* const names[] = { "Record", "Mix", "Full" };
+    const char* const tips[] = { "Input channels 1-16 and the centre section, for tracking",
+                                 "The centre section and the tape returns, for mixing",
+                                 "Both banks either side of the centre section" };
+    for (int i = 0; i < (int) buttons.size(); ++i)
+    {
+        auto& b = buttons[(size_t) i];
+        b.setButtonText (names[i]);
+        b.setTooltip (tips[i]);
+        b.setColour (juce::TextButton::buttonOnColourId, amber);
+        b.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff141516));
+        b.onClick = [this, i] { setView (i); if (onChange) onChange (i); };
+        // One segmented control: inner edges join.
+        b.setConnectedEdges ((i > 0 ? juce::Button::ConnectedOnLeft : 0) | (i < (int) buttons.size() - 1 ? juce::Button::ConnectedOnRight : 0));
+    }
+}
+
+void ViewSwitch::setView (int view)
+{
+    for (int i = 0; i < (int) buttons.size(); ++i)
+        buttons[(size_t) i].setToggleState (i == view, juce::dontSendNotification);
+}
+
+//==============================================================================
 Desk::Desk (AudioEngine& e, PluginContext* plugins)
     : engine (e), inputs (e.inputStrips, { e.inputLink.begin(), e.inputLink.end() }),
       returns (e.returnStrips, { e.returnLink.begin(), e.returnLink.end() }), centre (e, plugins)
@@ -1132,7 +1158,10 @@ Desk::Desk (AudioEngine& e, PluginContext* plugins)
     inputs.setTitle ("Input bank");
     returns.setTitle ("Return bank");
     for (int s = 0; s < numSections; ++s)
-        addAndMakeVisible (getSection ((Section) s));
+    {
+        addChildComponent (getSection ((Section) s));
+        getSection ((Section) s).setVisible (isOnDesk ((Section) s));
+    }
 
     // A bank gets shorter or taller when sections are minimised or restored.
     for (auto* bank : { &inputs, &returns })
@@ -1195,9 +1224,25 @@ void Desk::setDocked (Section s, bool shouldBeDocked)
     docked[(size_t) s] = shouldBeDocked;
     auto& c = getSection (s);
     if (shouldBeDocked)
-        addAndMakeVisible (c);   // takes it back from its window
+    {
+        addChildComponent (c);   // takes it back from its window
+        c.setVisible (isOnDesk (s));
+    }
     else
+    {
         removeChildComponent (&c);
+    }
+    relayout();
+}
+
+void Desk::setView (View v)
+{
+    if (view == v)
+        return;
+    view = v;
+    for (int s = 0; s < numSections; ++s)
+        if (docked[(size_t) s])
+            getSection ((Section) s).setVisible (isOnDesk ((Section) s));
     relayout();
 }
 
@@ -1205,7 +1250,7 @@ void Desk::relayout (bool sectionMoved)
 {
     int width = 2 * cheekW;
     for (int s = 0; s < numSections; ++s)
-        if (docked[(size_t) s])
+        if (isOnDesk ((Section) s))
             width += getSection ((Section) s).getWidth();
     if (width == 2 * cheekW)
         width += 600;   // everything is out: room for a short message
@@ -1214,7 +1259,7 @@ void Desk::relayout (bool sectionMoved)
     // sections collapses upwards.
     int height = 0;
     for (int s = 0; s < numSections; ++s)
-        if (docked[(size_t) s])
+        if (isOnDesk ((Section) s))
             height = juce::jmax (height, getSection ((Section) s).getHeight());
 
     setSize (width, height > 0 ? height : totalH);
@@ -1228,7 +1273,7 @@ void Desk::resized()
     int x = cheekW;
     for (int s = 0; s < numSections; ++s)
     {
-        if (! docked[(size_t) s])
+        if (! isOnDesk ((Section) s))
             continue;
         auto& c = getSection ((Section) s);
         c.setBounds (x, 0, c.getWidth(), c.getHeight());
@@ -1254,11 +1299,13 @@ void Desk::paint (juce::Graphics& g)
     g.fillAll (bridge);
     paintCheeks (g, getLocalBounds());
 
-    if (std::none_of (docked.begin(), docked.end(), [] (bool d) { return d; }))
+    if (! isOnDesk (inputSection) && ! isOnDesk (centreSection) && ! isOnDesk (returnSection))
     {
+        const bool allOut = std::none_of (docked.begin(), docked.end(), [] (bool d) { return d; });
         g.setColour (bridgeText.withAlpha (0.7f));
         g.setFont (ConsoleLookAndFeel::uiFont (22.0f));
-        g.drawFittedText ("Every section is in its own window.\nUse Sections in the top bar to put them back.",
+        g.drawFittedText (allOut ? "Every section is in its own window.\nUse Sections in the top bar to put them back."
+                                 : "This view's sections are in their own windows.\nUse Record, Mix or Full to see the others.",
                           getLocalBounds().reduced (cheekW + 20, 0).withSizeKeepingCentre (getWidth() - 2 * cheekW - 40, 200),
                           juce::Justification::centred, 3);
     }
@@ -1266,9 +1313,9 @@ void Desk::paint (juce::Graphics& g)
 
 void Desk::timerCallback()
 {
-    // Sections keep updating whether they are docked or in their own windows.
-    inputs.update();
-    returns.update();
+    // Sections keep updating whether they are docked or in their own windows; a bank the view hides rests.
+    if (inputs.isShowing())  inputs.update();
+    if (returns.isShowing()) returns.update();
     centre.update();
 }
 

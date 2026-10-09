@@ -52,6 +52,7 @@ private:
     PluginContext pluginContext;
 
     juce::TextButton audioButton { "Audio device" }, vFitButton { "V Fit" }, hFitButton { "H Fit" }, patchButton { "Patch bay" }, pluginsButton { "Plugins" }, rackButton { "Rack" }, sessionButton { "Session" }, sectionsButton { "Options" };
+    ViewSwitch viewSwitch;   // Record | Mix | Full
     juce::Slider zoomSlider;
     juce::Label zoomLabel, statusLabel;
 

@@ -58,6 +58,18 @@ MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionControll
     desk.setCassetteAnimated (settings.getBoolValue ("cassetteAnimation", true));
     sectionsButton.onClick = [this] { showSectionsMenu(); };
     // Minimised strip sections are remembered between launches.
+    // Record (inputs), Mix (returns) or Full (both) next to the centre section; Record on first launch.
+    const int view = juce::jlimit (0, 2, settings.getIntValue ("deskView", Desk::recordView));
+    desk.setView ((Desk::View) view);
+    viewSwitch.setView (view);
+    for (auto& b : viewSwitch.buttons)
+        addAndMakeVisible (b);   // in the top bar
+    viewSwitch.onChange = [this] (int v)
+    {
+        desk.setView ((Desk::View) v);
+        settings.setValue ("deskView", v);
+        if (saveSettings) saveSettings();
+    };
     desk.setCollapsed (Desk::inputSection, settings.getIntValue ("collapsed.input"));
     desk.setCollapsed (Desk::returnSection, settings.getIntValue ("collapsed.return"));
     desk.onCollapseChanged = [this]
@@ -268,6 +280,9 @@ void MainComponent::resized()
     bar.removeFromLeft (214);
     zoomLabel.setBounds (bar.removeFromLeft (48));
     zoomSlider.setBounds (bar.removeFromLeft (150));
+    bar.removeFromLeft (24);
+    for (auto& b : viewSwitch.buttons)
+        b.setBounds (bar.removeFromLeft (76));
     bar.removeFromLeft (16);
     statusLabel.setBounds (bar);
 
