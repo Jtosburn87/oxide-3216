@@ -8,6 +8,7 @@
 #include "PluginManager.h"
 #include "PluginWindows.h"
 #include "InsertsUI.h"
+#include "RackWindow.h"
 #include "SessionController.h"
 #include "ImportAudioDialog.h"
 #include "SectionWindow.h"
@@ -50,7 +51,7 @@ private:
     PluginWindows pluginWindows;
     PluginContext pluginContext;
 
-    juce::TextButton audioButton { "Audio device" }, vFitButton { "V Fit" }, hFitButton { "H Fit" }, patchButton { "Patch bay" }, pluginsButton { "Plugins" }, sessionButton { "Session" }, sectionsButton { "Options" };
+    juce::TextButton audioButton { "Audio device" }, vFitButton { "V Fit" }, hFitButton { "H Fit" }, patchButton { "Patch bay" }, pluginsButton { "Plugins" }, rackButton { "Rack" }, sessionButton { "Session" }, sectionsButton { "Options" };
     juce::Slider zoomSlider;
     juce::Label zoomLabel, statusLabel;
 
@@ -72,6 +73,7 @@ private:
     juce::Component::SafePointer<juce::DialogWindow> settingsWindow;
     juce::Component::SafePointer<juce::DialogWindow> pluginListWindow;
     void openPluginList();
+    std::unique_ptr<RackWindow> rackWindow;   // made on first use, then only hidden
     void showSessionMenu();
     void parentHierarchyChanged() override;
     void forEachChain (const std::function<void (InsertChain&)>&);

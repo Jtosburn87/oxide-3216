@@ -44,6 +44,13 @@ MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionControll
 
     pluginsButton.setTooltip ("Scan for VST3 plugins and see the ones that failed");
     pluginsButton.onClick = [this] { openPluginList(); };
+    rackButton.setTooltip ("Every insert slot at once, as racks of outboard gear");
+    rackButton.onClick = [this]
+    {
+        if (rackWindow == nullptr)
+            rackWindow = std::make_unique<RackWindow> (engine, pluginContext, settings);
+        rackWindow->show();
+    };
     sessionButton.setTooltip ("New, open, save, save as, export the mix");
     sessionButton.onClick = [this] { showSessionMenu(); };
     sectionsButton.setTooltip ("Sections of the console in windows of their own; unlock the channel chain order");
@@ -90,7 +97,7 @@ MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionControll
         addAndMakeVisible (c);
 
     // The app buttons sit on the console, in a column between the tape machine and the bus compressor.
-    for (auto* b : { &sessionButton, &audioButton, &patchButton, &pluginsButton, &sectionsButton, &vFitButton, &hFitButton })
+    for (auto* b : { &sessionButton, &audioButton, &patchButton, &pluginsButton, &rackButton, &sectionsButton, &vFitButton, &hFitButton })
         desk.getAppButtons().addAndMakeVisible (b);
     keepTouchDragsOnControls (desk);   // every control is built by now (sections keep the flag in their own windows)
 
@@ -127,6 +134,7 @@ MainComponent::~MainComponent()
     saveSections();
     for (auto& w : sectionWindows)
         w = nullptr;
+    rackWindow = nullptr;
     forEachChain ([] (InsertChain& c) { c.beforeDelete = nullptr; c.onChange = nullptr; });
     pluginWindows.closeAll();
     if (pluginListWindow != nullptr)

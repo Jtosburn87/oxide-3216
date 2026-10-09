@@ -6,6 +6,95 @@
 using namespace ConsoleColours;
 
 //==============================================================================
+void InsertSlot::choose (InsertChain& chain, int slot, PluginContext& context, Param* mainAssign, juce::Component& target)
+{
+    const auto effects = context.manager.effects();
+    juce::PopupMenu menu;
+    if (chain.getProcessor (slot) != nullptr)
+    {
+        menu.addItem (-1, "Remove " + chain.getDescription (slot).name);
+        menu.addSeparator();
+    }
+    if (effects.isEmpty())
+        menu.addItem (-2, "No plugins yet: click Plugins in the top bar and scan", false, false);
+    else
+        juce::KnownPluginList::addToMenu (menu, effects, juce::KnownPluginList::sortByManufacturer,
+                                          chain.getDescription (slot).createIdentifierString());
+
+    // The chain and the context live as long as the app; the menu's target may not.
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (target),
+                        [&chain, &context, mainAssign, slot, effects] (int result)
+    {
+        if (result == 0)
+            return;
+
+        if (result == -1)
+        {
+            chain.clearSlot (slot);
+        }
+        else
+        {
+            const int index = juce::KnownPluginList::getIndexChosenByMenu (effects, result);
+            if (! juce::isPositiveAndBelow (index, effects.size()))
+                return;
+
+            const auto desc = effects[index];
+            juce::String error;
+            auto instance = context.manager.create (desc, context.sampleRate(), Config::maxBlock, error);
+            if (instance == nullptr)
+            {
+                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Could not load plugin",
+                                                        desc.name + " could not be loaded.\n\n" + error);
+                return;
+            }
+            const bool wasEmpty = chain.numLoaded() == 0;
+            chain.setSlot (slot, std::move (instance), desc);
+            if (chain.isStereoRefused (slot))
+            {
+                chain.clearSlot (slot);
+                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Stereo plugins only",
+                                                        desc.name + " has no stereo in/out. A linked aux pair takes stereo plugins only.");
+                return;
+            }
+            if (wasEmpty && mainAssign != nullptr)
+                mainAssign->set (1.0f);   // a return with a plugin on it is usually wanted in the mix
+            openWindow (chain, slot, context);   // a newly chosen plugin opens straight away
+        }
+        if (context.changed)
+            context.changed();
+    });
+}
+
+void InsertSlot::openWindow (InsertChain& chain, int slot, PluginContext& context)
+{
+    if (auto* p = chain.getProcessor (slot))
+        context.windows.open (*p, chain.name + "  |  slot " + juce::String (slot + 1) + "  |  " + chain.getDescription (slot).name);
+}
+
+void InsertSlot::click (InsertChain& chain, int slot, PluginContext& context, Param* mainAssign, juce::Component& target)
+{
+    if (chain.getProcessor (slot) != nullptr)
+        openWindow (chain, slot, context);
+    else
+        choose (chain, slot, context, mainAssign, target);
+}
+
+void PluginListButton::setSlot (int slot)
+{
+    setTitle ("Plugin list for slot " + juce::String (slot + 1));
+    setTooltip ("Choose a plugin for slot " + juce::String (slot + 1) + ", or remove the one there");
+}
+
+void PluginListButton::paintButton (juce::Graphics& g, bool isMouseOver, bool isButtonDown)
+{
+    getLookAndFeel().drawButtonBackground (g, *this, findColour (buttonColourId), isMouseOver, isButtonDown);
+    const auto r = getLocalBounds().toFloat().withSizeKeepingCentre (12.0f, 10.0f);
+    g.setColour (findColour (textColourOffId).withMultipliedAlpha (isEnabled() ? 1.0f : 0.5f));
+    for (int i = 0; i < 3; ++i)
+        g.fillRoundedRectangle (r.getX(), r.getY() + (float) i * 4.0f, r.getWidth(), 2.0f, 1.0f);
+}
+
+//==============================================================================
 InsertChainEditor::InsertChainEditor (InsertChain& c, PluginContext& ctx, Param* returnPan, Param* main)
     : chain (c), context (ctx), mainAssign (main)
 {
@@ -17,12 +106,11 @@ InsertChainEditor::InsertChainEditor (InsertChain& c, PluginContext& ctx, Param*
         r.number.setJustificationType (juce::Justification::centred);
         addAndMakeVisible (r.number);
 
-        r.picker.setTooltip ("Choose a plugin for slot " + juce::String (i + 1));
-        r.picker.onClick = [this, i] { choosePlugin (i); };
+        r.list.setSlot (i);
+        r.list.onClick = [this, i] { InsertSlot::choose (chain, i, context, mainAssign, rows[(size_t) i].list); };
+        r.name.onClick = [this, i] { InsertSlot::click (chain, i, context, mainAssign, rows[(size_t) i].name); };
         r.bypass.setTooltip ("Bypass this plugin");
         r.bypass.onClick = [this, i] { chain.setBypassed (i, ! chain.isBypassed (i)); };
-        r.edit.setTooltip ("Open the plugin's window");
-        r.edit.onClick = [this, i] { openEditor (i); };
         r.up.setButtonText (juce::CharPointer_UTF8 ("\xe2\x96\xb2"));
         r.down.setButtonText (juce::CharPointer_UTF8 ("\xe2\x96\xbc"));
         r.up.setTitle ("Move slot " + juce::String (i + 1) + " up");
@@ -32,7 +120,7 @@ InsertChainEditor::InsertChainEditor (InsertChain& c, PluginContext& ctx, Param*
         r.bypass.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffd0473c));
         r.bypass.setColour (juce::TextButton::textColourOnId, juce::Colours::white);
 
-        for (auto* b : { &r.picker, &r.bypass, &r.edit, &r.up, &r.down })
+        for (juce::Button* b : { (juce::Button*) &r.list, (juce::Button*) &r.name, (juce::Button*) &r.bypass, (juce::Button*) &r.up, (juce::Button*) &r.down })
             addAndMakeVisible (b);
     }
 
@@ -60,81 +148,16 @@ void InsertChainEditor::refresh()
         auto& r = rows[(size_t) i];
         const bool loaded = chain.getProcessor (i) != nullptr;
         const bool refused = chain.isStereoRefused (i);
-        r.picker.setButtonText (! loaded ? juce::String ("(empty)") : chain.getDescription (i).name + (refused ? " (not stereo: off while linked)" : ""));
-        r.picker.setTooltip (refused ? "This plugin has no stereo in/out, so it is left out while the aux pair is linked" : "Choose a plugin for slot " + juce::String (i + 1));
-        r.picker.setToggleState (false, juce::dontSendNotification);
+        r.name.setButtonText (! loaded ? juce::String ("(empty)") : chain.getDescription (i).name + (refused ? " (not stereo: off while linked)" : ""));
+        r.name.setTooltip (! loaded ? "Choose a plugin for slot " + juce::String (i + 1)
+                         : refused ? "This plugin has no stereo in/out, so it is left out while the aux pair is linked. Click to open its window"
+                                   : "Open the plugin's window");
         r.bypass.setEnabled (loaded);
         r.bypass.setToggleState (chain.isBypassed (i), juce::dontSendNotification);
-        r.edit.setEnabled (loaded);
         r.up.setEnabled (i > 0 && (loaded || chain.getProcessor (i - 1) != nullptr));
         r.down.setEnabled (i < InsertChain::numSlots - 1 && (loaded || chain.getProcessor (i + 1) != nullptr));
     }
     repaint();
-}
-
-void InsertChainEditor::choosePlugin (int slot)
-{
-    const auto effects = context.manager.effects();
-    juce::PopupMenu menu;
-    if (chain.getProcessor (slot) != nullptr)
-    {
-        menu.addItem (-1, "Remove " + chain.getDescription (slot).name);
-        menu.addSeparator();
-    }
-    if (effects.isEmpty())
-        menu.addItem (-2, "No plugins yet: click Plugins in the top bar and scan", false, false);
-    else
-        juce::KnownPluginList::addToMenu (menu, effects, juce::KnownPluginList::sortByManufacturer,
-                                          chain.getDescription (slot).createIdentifierString());
-
-    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (rows[(size_t) slot].picker),
-                        [safe = juce::Component::SafePointer<InsertChainEditor> (this), slot, effects] (int result)
-    {
-        if (safe == nullptr || result == 0)
-            return;
-        auto& self = *safe;
-
-        if (result == -1)
-        {
-            self.chain.clearSlot (slot);
-        }
-        else
-        {
-            const int index = juce::KnownPluginList::getIndexChosenByMenu (effects, result);
-            if (! juce::isPositiveAndBelow (index, effects.size()))
-                return;
-
-            const auto desc = effects[index];
-            juce::String error;
-            auto instance = self.context.manager.create (desc, self.context.sampleRate(), Config::maxBlock, error);
-            if (instance == nullptr)
-            {
-                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Could not load plugin",
-                                                        desc.name + " could not be loaded.\n\n" + error);
-                return;
-            }
-            const bool wasEmpty = self.chain.numLoaded() == 0;
-            self.chain.setSlot (slot, std::move (instance), desc);
-            if (self.chain.isStereoRefused (slot))
-            {
-                self.chain.clearSlot (slot);
-                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Stereo plugins only",
-                                                        desc.name + " has no stereo in/out. A linked aux pair takes stereo plugins only.");
-                return;
-            }
-            if (wasEmpty && self.mainAssign != nullptr)
-                self.mainAssign->set (1.0f);   // a return with a plugin on it is usually wanted in the mix
-            self.openEditor (slot);   // a newly chosen plugin opens straight away
-        }
-        if (self.context.changed)
-            self.context.changed();
-    });
-}
-
-void InsertChainEditor::openEditor (int slot)
-{
-    if (auto* p = chain.getProcessor (slot))
-        context.windows.open (*p, chain.name + "  |  slot " + juce::String (slot + 1) + "  |  " + chain.getDescription (slot).name);
 }
 
 void InsertChainEditor::paint (juce::Graphics& g)
@@ -160,15 +183,15 @@ void InsertChainEditor::resized()
     {
         auto row = area.removeFromTop (30).reduced (0, 3);
         r.number.setBounds (row.removeFromLeft (20));
+        r.list.setBounds (row.removeFromLeft (30));
+        row.removeFromLeft (4);
         r.down.setBounds (row.removeFromRight (26));
         row.removeFromRight (2);
         r.up.setBounds (row.removeFromRight (26));
         row.removeFromRight (6);
-        r.edit.setBounds (row.removeFromRight (44));
-        row.removeFromRight (4);
         r.bypass.setBounds (row.removeFromRight (40));
         row.removeFromRight (6);
-        r.picker.setBounds (row);
+        r.name.setBounds (row);
     }
 }
 

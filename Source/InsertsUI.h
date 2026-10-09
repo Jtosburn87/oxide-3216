@@ -16,8 +16,33 @@ struct PluginContext
     std::function<void()> changed;   // save settings
 };
 
-/** Pop-up editor for one insert chain: four slots, each with plugin picker, bypass,
-    open-window button and up/down order buttons; plus the return pan on an aux return. */
+/** What a slot's controls do, shared by the console's insert pop-up and the rack window. */
+namespace InsertSlot
+{
+    /** The plugin menu for a slot (pick a plugin, or remove the one there), shown at `target`.
+        mainAssign: an aux's main assign, switched on when the first plugin goes onto its empty chain.
+        A newly chosen plugin opens its window straight away. */
+    void choose (InsertChain&, int slot, PluginContext&, Param* mainAssign, juce::Component& target);
+
+    /** Opens (or brings to the front) the window of the slot's plugin. */
+    void openWindow (InsertChain&, int slot, PluginContext&);
+
+    /** Clicking a slot's name: an empty slot shows the plugin menu, a loaded one opens its window. */
+    void click (InsertChain&, int slot, PluginContext&, Param* mainAssign, juce::Component& target);
+
+}
+
+/** The button left of a slot's name that opens the plugin list (drawn as three lines). */
+class PluginListButton : public juce::TextButton
+{
+public:
+    explicit PluginListButton (int slot = 0) { setSlot (slot); }
+    void setSlot (int slot);
+    void paintButton (juce::Graphics&, bool isMouseOver, bool isButtonDown) override;
+};
+
+/** Pop-up editor for one insert chain: four slots, each with a plugin list button, the plugin's name
+    (click to open its window), bypass and up/down order buttons; plus the return pan on an aux return. */
 class InsertChainEditor : public juce::Component
 {
 public:
@@ -32,7 +57,8 @@ private:
     struct Row
     {
         juce::Label number;
-        juce::TextButton picker, bypass { "Byp" }, edit { "Edit" }, up, down;
+        PluginListButton list;
+        juce::TextButton name, bypass { "Byp" }, up, down;
     };
 
     InsertChain& chain;
@@ -42,8 +68,6 @@ private:
     std::unique_ptr<Knob> returnKnob;
 
     void refresh();
-    void choosePlugin (int slot);
-    void openEditor (int slot);
 };
 
 /** Row of cells in the centre section: an FX button for each sub, aux return and the master,
