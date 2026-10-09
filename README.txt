@@ -1,12 +1,12 @@
-CONSOLE 32 / TAPE 16
-====================
+OXIDE-3216
+==========
 
 A 16-track tape machine fed by a 32-channel console, for Windows 10/11 (64-bit).
 
 
 RUNNING IT
 ----------
-Unzip anywhere and run ConsoleTape.exe. Nothing to install: it needs no extra runtime.
+Unzip anywhere and run Oxide-3216.exe. Nothing to install: it needs no extra runtime.
 
 First time:
   1. Click "Audio device" and pick your interface's ASIO driver, sample rate and buffer size.
@@ -31,7 +31,7 @@ The IN/OUT button on the first strip's Input title switches that bank's meters b
 the output (after the fader).
 "Options" moves the input bank, centre section or return bank into a window of its own (for a
 second monitor). Close that window, or press "Put back", to return it to the console. Windows
-that are out stay out, in the same place, the next time ConsoleTape starts.
+that are out stay out, in the same place, the next time Oxide-3216 starts.
 "Options" > "Unlock chain order" adds a small up arrow to the EQ, gate and compressor titles of
 every channel: it moves that section earlier in the channel's signal chain, and the strip shows
 the sections in the order the signal passes through them. The order is saved with the session.
@@ -99,11 +99,11 @@ automatically across the whole console.
 
 SESSIONS AND EXPORT
 -------------------
-Session > Save writes a folder (by default in Documents\ConsoleTape Sessions) with
+Session > Save writes a folder (by default in Documents\Oxide-3216 Sessions) with
 session.json (every control, cable, plugin and its settings, the project name) and one
 WAV per tape track. Session > Open: choose the session.json inside a session folder.
 The last session reopens at start-up. You are asked before closing with unsaved changes.
-An auto-save is kept every 2 minutes; if ConsoleTape did not close properly, it offers to
+An auto-save is kept every 2 minutes; if Oxide-3216 did not close properly, it offers to
 recover it next time.
 
 Session > Export mix renders the main bus (after the limiter) from the start of the tape to
@@ -112,8 +112,12 @@ its end plus 3 seconds, to a 24-bit WAV.
 
 WHERE THINGS ARE KEPT
 ---------------------
-%APPDATA%\ConsoleTape\ConsoleTape.settings   audio device, routing, plugin list
-%APPDATA%\ConsoleTape\Autosave\              the latest auto-save
+%APPDATA%\Oxide-3216\Oxide-3216.settings   audio device, routing, plugin list
+%APPDATA%\Oxide-3216\Autosave\             the latest auto-save
+
+The app used to be called ConsoleTape. The first time Oxide-3216 starts it copies the old
+%APPDATA%\ConsoleTape settings. If Documents\ConsoleTape Sessions exists it keeps saving
+there, and sessions saved by ConsoleTape open as before.
 
 
 CREDITS AND LICENCES

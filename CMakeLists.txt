@@ -1,6 +1,6 @@
 ﻿cmake_minimum_required(VERSION 3.22)
 
-project(ConsoleTape VERSION 1.0.0 LANGUAGES C CXX)
+project(Oxide3216 VERSION 1.0.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -27,7 +27,7 @@ endif()
 
 # Code shared by the app and the tests. JUCE modules are compiled once, into this
 # library (linked PRIVATE); their include paths and defines are re-exported below.
-add_library(ConsoleTapeCore STATIC
+add_library(Oxide3216Core STATIC
     Source/AudioEngine.cpp
     Source/AudioImport.cpp
     Source/BusCompressor.cpp
@@ -39,8 +39,8 @@ add_library(ConsoleTapeCore STATIC
     Source/StripLink.cpp
     Source/Params.cpp
     Source/TapeMachine.cpp)
-target_include_directories(ConsoleTapeCore PUBLIC Source "${ASIO_SDK_DIR}/common")
-target_compile_definitions(ConsoleTapeCore PUBLIC
+target_include_directories(Oxide3216Core PUBLIC Source "${ASIO_SDK_DIR}/common")
+target_compile_definitions(Oxide3216Core PUBLIC
     JUCE_ASIO=1
     JUCE_WASAPI=1
     JUCE_PLUGINHOST_VST3=1
@@ -51,27 +51,27 @@ target_compile_definitions(ConsoleTapeCore PUBLIC
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_USE_MP3AUDIOFORMAT=1
-    JUCE_APPLICATION_NAME_STRING="ConsoleTape"
+    JUCE_APPLICATION_NAME_STRING="Oxide-3216"
     JUCE_APPLICATION_VERSION_STRING="${PROJECT_VERSION}")
-target_link_libraries(ConsoleTapeCore
+target_link_libraries(Oxide3216Core
     PRIVATE
         juce::juce_audio_utils
         juce::juce_dsp
         juce::juce_gui_extra
         juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags)
-target_include_directories(ConsoleTapeCore INTERFACE
-    $<TARGET_PROPERTY:ConsoleTapeCore,INCLUDE_DIRECTORIES>)
-target_compile_definitions(ConsoleTapeCore INTERFACE
-    $<TARGET_PROPERTY:ConsoleTapeCore,COMPILE_DEFINITIONS>)
+target_include_directories(Oxide3216Core INTERFACE
+    $<TARGET_PROPERTY:Oxide3216Core,INCLUDE_DIRECTORIES>)
+target_compile_definitions(Oxide3216Core INTERFACE
+    $<TARGET_PROPERTY:Oxide3216Core,COMPILE_DEFINITIONS>)
 
-juce_add_gui_app(ConsoleTape
-    PRODUCT_NAME "ConsoleTape"
-    COMPANY_NAME "ConsoleTape"
-    ICON_BIG "${CMAKE_SOURCE_DIR}/Resources/icon.png"
+juce_add_gui_app(Oxide3216
+    PRODUCT_NAME "Oxide-3216"
+    COMPANY_NAME "Oxide-3216"
+    ICON_BIG "${CMAKE_SOURCE_DIR}/Resources/oxide-3216-icon.svg"
     VERSION ${PROJECT_VERSION})
 
-target_sources(ConsoleTape PRIVATE
+target_sources(Oxide3216 PRIVATE
     Source/ImportAudioDialog.cpp
     Source/Main.cpp
     Source/MainComponent.cpp
@@ -92,8 +92,8 @@ target_sources(ConsoleTape PRIVATE
     Source/Desk.cpp
     Source/Widgets.cpp)
 
-target_link_libraries(ConsoleTape PRIVATE
-    ConsoleTapeCore
+target_link_libraries(Oxide3216 PRIVATE
+    Oxide3216Core
     juce::juce_recommended_config_flags
     juce::juce_recommended_lto_flags
     juce::juce_recommended_warning_flags)
@@ -101,6 +101,10 @@ target_link_libraries(ConsoleTape PRIVATE
 # Engine tests: feed synthetic audio through the engine, no audio device needed.
 add_executable(EngineTests Tests/EngineTests.cpp)
 target_link_libraries(EngineTests PRIVATE
-    ConsoleTapeCore
+    Oxide3216Core
     juce::juce_recommended_config_flags
     juce::juce_recommended_warning_flags)
+
+# The Oxide 3216 logo, drawn in the top bar.
+juce_add_binary_data(Oxide3216Assets SOURCES Resources/oxide-3216-logo.svg)
+target_link_libraries(Oxide3216 PRIVATE Oxide3216Assets)

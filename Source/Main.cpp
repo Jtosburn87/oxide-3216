@@ -9,23 +9,35 @@
 #include "SessionController.h"
 #include "Cassette.h"
 
-class ConsoleTapeApplication : public juce::JUCEApplication
+class Oxide3216Application : public juce::JUCEApplication
 {
 public:
     const juce::String getApplicationName() override    { return JUCE_APPLICATION_NAME_STRING; }
     const juce::String getApplicationVersion() override { return JUCE_APPLICATION_VERSION_STRING; }
     bool moreThanOneInstanceAllowed() override          { return isSnapshot() || isScanner() || isFolderScan(); }
 
-    /** Developer option: ConsoleTape.exe --scan-folder <folder> <report.txt> scans like the Plugins window does
+    /** Developer option: Oxide-3216.exe --scan-folder <folder> <report.txt> scans like the Plugins window does
         (one child process per plugin) into a throw-away list, and writes what was found and what failed. */
     static bool isFolderScan() { return getCommandLineParameterArray().contains ("--scan-folder"); }
 
-    /** Developer option: ConsoleTape.exe --snapshot out.png [zoom] renders the desk to an image and exits,
+    /** Developer option: Oxide-3216.exe --snapshot out.png [zoom] renders the desk to an image and exits,
         without opening the audio device. Used to check the look without touching a running copy. */
     static bool isSnapshot() { return getCommandLineParameterArray().contains ("--snapshot"); }
 
     /** Plugin scanner child process (see PluginManager). */
     static bool isScanner() { return getCommandLineParameterArray().contains ("--scan-plugin"); }
+
+    /** The app was called ConsoleTape: the first time Oxide-3216 starts, it copies that settings folder
+        (audio device, routing, plugin list, auto-save) to its own. The old folder is left as it was. */
+    static void bringOverOldSettings (const juce::File& settingsFile)
+    {
+        const auto newFolder = settingsFile.getParentDirectory();
+        const auto oldFolder = newFolder.getSiblingFile ("ConsoleTape");
+        if (settingsFile.existsAsFile() || ! oldFolder.getChildFile ("ConsoleTape.settings").existsAsFile())
+            return;
+        if (oldFolder.copyDirectoryTo (newFolder))
+            newFolder.getChildFile ("ConsoleTape.settings").moveFileTo (settingsFile);
+    }
 
     void initialise (const juce::String&) override
     {
@@ -48,10 +60,11 @@ public:
         }
 
         juce::PropertiesFile::Options options;
-        options.applicationName = "ConsoleTape";
-        options.folderName = "ConsoleTape";
+        options.applicationName = "Oxide-3216";
+        options.folderName = "Oxide-3216";
         options.filenameSuffix = ".settings";
         options.osxLibrarySubFolder = "Application Support";
+        bringOverOldSettings (options.getDefaultFile());
         properties.setStorageParameters (options);
         plugins = std::make_unique<PluginManager> (*properties.getUserSettings());
 
@@ -244,4 +257,4 @@ private:
     std::unique_ptr<MainWindow> mainWindow;
 };
 
-START_JUCE_APPLICATION (ConsoleTapeApplication)
+START_JUCE_APPLICATION (Oxide3216Application)

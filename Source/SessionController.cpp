@@ -75,7 +75,11 @@ SessionController::~SessionController()
 
 juce::File SessionController::sessionsFolder()
 {
-    auto f = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("ConsoleTape Sessions");
+    const auto docs = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory);
+    auto f = docs.getChildFile ("Oxide-3216 Sessions");
+    // Sessions saved while the app was called ConsoleTape stay where they are.
+    if (const auto old = docs.getChildFile ("ConsoleTape Sessions"); ! f.isDirectory() && old.isDirectory())
+        return old;
     f.createDirectory();
     return f;
 }
@@ -118,7 +122,7 @@ void SessionController::markClean()       { cleanPrint = autosavedPrint = finger
 
 juce::String SessionController::windowTitle() const
 {
-    return "ConsoleTape  -  " + engine.projectName.toString() + (isDirty() ? "  *" : "")
+    return "Oxide-3216  -  " + engine.projectName.toString() + (isDirty() ? "  *" : "")
          + (folder != juce::File() ? "   (" + folder.getFullPathName() + ")" : juce::String());
 }
 
@@ -355,7 +359,7 @@ void SessionController::startUp()
         auto options = juce::MessageBoxOptions()
                            .withIconType (juce::MessageBoxIconType::QuestionIcon)
                            .withTitle ("Recover?")
-                           .withMessage ("ConsoleTape did not close properly last time.\n\nRecover the auto-saved session from "
+                           .withMessage ("Oxide-3216 did not close properly last time.\n\nRecover the auto-saved session from "
                                          + autosaved.getLastModificationTime().toString (true, true, false) + "?")
                            .withButton ("Recover")
                            .withButton ("Start fresh");

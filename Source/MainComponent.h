@@ -64,6 +64,7 @@ private:
     void applyCassetteAnimation();
     juce::Slider zoomSlider;
     juce::Label zoomLabel, statusLabel;
+    std::unique_ptr<juce::Drawable> logo;   // Resources/oxide-3216-logo.svg, in the top bar
 
     Desk desk;
     juce::Component deskHolder;   // sized to the zoomed desk, so the viewport scrolls correctly

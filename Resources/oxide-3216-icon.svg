@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>Oxide 3216</title>
+  <!-- The app icon: the logo's striped O and 3216 numerals on its black inset, in the aluminium frame. -->
+  <defs>
+    <linearGradient id="alu" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e9e8e3"/>
+      <stop offset="0.45" stop-color="#c9c8c2"/>
+      <stop offset="0.55" stop-color="#d6d5cf"/>
+      <stop offset="1" stop-color="#a9a8a2"/>
+    </linearGradient>
+    <linearGradient id="panelShade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#241a13"/>
+      <stop offset="1" stop-color="#120c08"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="8" y="8" width="496" height="496" rx="56" fill="url(#alu)"/>
+  <rect x="8.5" y="8.5" width="495" height="495" rx="56" fill="none" stroke="#8d8c86" stroke-width="1"/>
+  <rect x="38" y="38" width="436" height="436" rx="30" fill="#7d7c76"/>
+  <rect x="40" y="40" width="432" height="432" rx="29" fill="url(#panelShade)"/>
+
+  <g transform="translate(155,104) scale(1.55)">
+    <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke="#0d0805" stroke-width="44">
+      <rect x="0" y="0" width="130" height="120" rx="50"/>
+    </g>
+    <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke="#c8471b" stroke-width="38">
+      <rect x="0" y="0" width="130" height="120" rx="50"/>
+    </g>
+    <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke="#0d0805" stroke-width="27">
+      <rect x="0" y="0" width="130" height="120" rx="50"/>
+    </g>
+    <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke="#e8901f" stroke-width="23">
+      <rect x="0" y="0" width="130" height="120" rx="50"/>
+    </g>
+    <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke="#0d0805" stroke-width="12">
+      <rect x="0" y="0" width="130" height="120" rx="50"/>
+    </g>
+    <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke="#f3c74b" stroke-width="8">
+      <rect x="0" y="0" width="130" height="120" rx="50"/>
+    </g>
+  </g>
+
+  <g transform="translate(118,356) scale(1.25)" fill="none" stroke-linecap="square" stroke-linejoin="round" stroke="#ece4d2" stroke-width="10">
+      <path d="M0,0 H40 Q50,0 50,10 V20 Q50,30 40,30 H14 M40,30 Q50,30 50,40 V50 Q50,60 40,60 H0"/>
+      <path d="M68,0 H108 Q118,0 118,10 V20 Q118,30 108,30 H78 Q68,30 68,40 V60 H118"/>
+      <path d="M138,8 L152,0 V60"/>
+      <path d="M220,0 H180 Q170,0 170,10 V50 Q170,60 180,60 H210 Q220,60 220,50 V40 Q220,30 210,30 H170"/>
+  </g>
+</svg>

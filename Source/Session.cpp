@@ -85,7 +85,7 @@ Session::Result Session::save (AudioEngine& e, const juce::File& folder, TrackRe
 
     auto& tape = e.tape;
     auto* root = new juce::DynamicObject();
-    root->setProperty ("format", "ConsoleTape session");
+    root->setProperty ("format", "Oxide-3216 session");
     root->setProperty ("version", formatVersion);
     root->setProperty ("projectName", e.projectName.toString());
     root->setProperty ("savedAt", juce::Time::getCurrentTime().toISO8601 (true));
@@ -195,10 +195,11 @@ Session::Result Session::load (AudioEngine& e, PluginManager* plugins, const juc
 {
     Result r;
     const auto json = juce::JSON::parse (folder.getChildFile (fileName));
-    if (! json.isObject() || json["format"].toString() != "ConsoleTape session")
+    const auto format = json["format"].toString();
+    if (! json.isObject() || (format != "Oxide-3216 session" && format != "ConsoleTape session"))   // the app was called ConsoleTape before
     {
         r.ok = false;
-        r.error = folder.getChildFile (fileName).getFullPathName() + " is not a ConsoleTape session.";
+        r.error = folder.getChildFile (fileName).getFullPathName() + " is not an Oxide-3216 session.";
         return r;
     }
 

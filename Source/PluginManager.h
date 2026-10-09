@@ -28,7 +28,7 @@ public:
 
     juce::File deadMansPedalFile() const;
 
-    /** Child-process entry point: ConsoleTape.exe --scan-plugin <plugin file> <result.xml>. Returns the exit code. */
+    /** Child-process entry point: Oxide-3216.exe --scan-plugin <plugin file> <result.xml>. Returns the exit code. */
     static int runScanner (const juce::StringArray& args);
 
 private:

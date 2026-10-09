@@ -138,7 +138,7 @@ private:
 //==============================================================================
 SectionWindow::SectionWindow (Desk::Section s, juce::Component& sectionComponent,
                               std::function<void()> onPutBack, std::function<bool (const juce::KeyPress&)> keyHandler)
-    : juce::DocumentWindow ("ConsoleTape  -  " + Desk::sectionName (s), room, juce::DocumentWindow::allButtons),
+    : juce::DocumentWindow ("Oxide-3216  -  " + Desk::sectionName (s), room, juce::DocumentWindow::allButtons),
       section (s), putBack (std::move (onPutBack)), keys (std::move (keyHandler))
 {
     setUsingNativeTitleBar (true);

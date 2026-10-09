@@ -1,6 +1,7 @@
 #include "MainComponent.h"
 #include "AudioSettingsComponent.h"
 #include "TalkbackSettings.h"
+#include "BinaryData.h"
 
 using namespace ConsoleColours;
 
@@ -33,6 +34,7 @@ MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionControll
       desk (e, &pluginContext),
       patchBay (e, [this] { if (saveSettings) saveSettings(); })
 {
+    logo = juce::Drawable::createFromImageData (BinaryData::oxide3216logo_svg, (size_t) BinaryData::oxide3216logo_svgSize);
     audioButton.onClick = [this] { openAudioSettings(); };
     patchButton.setTooltip ("Open the patch bay");
     patchButton.onClick = [this] { patchBay.setVisible (true); patchBay.toFront (true); };
@@ -263,17 +265,16 @@ void MainComponent::paint (juce::Graphics& g)
     g.setColour (juce::Colour (0xff3a3f42));
     g.fillRect (0, topBarH - 1, getWidth(), 1);
 
-    auto plateR = bar.reduced (14, 8).removeFromLeft (200).toFloat();
-    g.setColour (plate);
-    g.fillRect (plateR);
-    g.setColour (edge);
-    g.drawRect (plateR, 1.0f);
-    g.setColour (juce::Colour (0xffe4e6e7));
-    g.setFont (ConsoleLookAndFeel::uiFont (20.0f, true));
-    g.drawText ("Console 32", plateR.withTrimmedLeft (12).withWidth (110), juce::Justification::centredLeft);
-    g.setFont (ConsoleLookAndFeel::uiFont (15.0f));
-    g.setColour (juce::Colour (0xffe4e6e7).withAlpha (0.8f));
-    g.drawText ("Tape 16", plateR.withTrimmedLeft (122), juce::Justification::centredLeft);
+    // The logo's black inset (OXIDE | MODEL 3216), without its aluminium faceplate.
+    if (logo != nullptr)
+    {
+        const juce::Rectangle<float> inset (68.0f, 68.0f, 1064.0f, 234.0f);   // in the SVG's coordinates
+        const auto plateR = bar.reduced (14, 6).removeFromLeft (200).toFloat()
+                                .withWidth ((float) (topBarH - 12) * inset.getWidth() / inset.getHeight());
+        juce::Graphics::ScopedSaveState s (g);
+        g.reduceClipRegion (plateR.toNearestInt());
+        logo->draw (g, 1.0f, juce::RectanglePlacement (juce::RectanglePlacement::stretchToFit).getTransformToFit (inset, plateR));
+    }
 }
 
 void MainComponent::resized()

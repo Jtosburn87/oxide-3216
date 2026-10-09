@@ -22,7 +22,7 @@ AudioImport::Info AudioImport::probe (const juce::File& file)
     std::unique_ptr<juce::AudioFormatReader> reader (m.createReaderFor (file));
     if (reader == nullptr)
     {
-        info.error = "\"" + file.getFileName() + "\" is not an audio file ConsoleTape can read (WAV, AIFF, FLAC, Ogg, MP3).";
+        info.error = "\"" + file.getFileName() + "\" is not an audio file Oxide-3216 can read (WAV, AIFF, FLAC, Ogg, MP3).";
         return info;
     }
     if (reader->numChannels == 0 || reader->lengthInSamples <= 0 || reader->sampleRate <= 0)

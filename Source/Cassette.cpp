@@ -314,7 +314,7 @@ void Cassette::paint (juce::Graphics& g)
     g.setFont (ConsoleLookAndFeel::uiFont (8.5f, true).withExtraKerningFactor (0.08f));
     const auto meta = labelBox.withTrimmedTop (window.getBottom() + 6.0f - labelBox.getY()).reduced (8.0f, 2.0f);
     g.drawText ("NORMAL BIAS  TYPE I", meta, juce::Justification::centredLeft, false);
-    g.drawText ("CONSOLE 32", meta, juce::Justification::centredRight, false);
+    g.drawText ("OXIDE 3216", meta, juce::Justification::centredRight, false);
     g.restoreState();
     g.setColour (Colour (0x50362a14));
     g.drawRoundedRectangle (labelBox, 3.0f, 1.0f);

@@ -1,4 +1,4 @@
-# Builds ConsoleTape.exe and runs the engine tests.
+# Builds Oxide-3216.exe and runs the engine tests.
 # Usage:  powershell -ExecutionPolicy Bypass -File build.ps1 [-Config Release|Debug]
 param([string]$Config = "Release")
 $ErrorActionPreference = "Stop"
@@ -13,7 +13,7 @@ if (-not $cmake) {
 if (-not (Test-Path $cmake)) { throw "CMake not found. Install Visual Studio Build Tools with the C++ workload." }
 
 # A running copy locks the .exe and makes the link step fail.
-Get-Process ConsoleTape -ErrorAction SilentlyContinue | ForEach-Object {
+Get-Process Oxide-3216, ConsoleTape -ErrorAction SilentlyContinue | ForEach-Object {
     $_.CloseMainWindow() | Out-Null
     if (-not $_.WaitForExit(15000)) { $_.Kill(); $_.WaitForExit() }
 }
@@ -26,4 +26,4 @@ if ($LASTEXITCODE) { exit $LASTEXITCODE }
 & "build\$Config\EngineTests.exe"
 if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
-Write-Host "`nBuilt: build\ConsoleTape_artefacts\$Config\ConsoleTape.exe"
+Write-Host "`nBuilt: build\Oxide3216_artefacts\$Config\Oxide-3216.exe"

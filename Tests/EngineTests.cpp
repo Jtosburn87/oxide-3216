@@ -1800,7 +1800,7 @@ namespace
     void testSessions()
     {
         std::puts ("Sessions: save, load, export");
-        const auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("ConsoleTapeTestSession");
+        const auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("Oxide3216TestSession");
         folder.deleteRecursively();
 
         std::vector<float> take (100000);
@@ -1902,7 +1902,7 @@ namespace
     void testImport()
     {
         std::puts ("Import audio onto tape tracks");
-        const auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("ConsoleTapeTestImport");
+        const auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("Oxide3216TestImport");
         dir.deleteRecursively();
         dir.createDirectory();
 

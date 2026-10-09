@@ -1,0 +1,119 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 420" width="1200" height="420">
+  <title>Oxide 3216</title>
+  <!-- oxide-3216-logo.svg written out for JUCE's SVG parser: its <use> only takes single shapes, so the
+       layered groups are repeated inline, and the brushed-metal pattern (not supported) is left out. -->
+  <defs>
+    <linearGradient id="alu" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e9e8e3"/>
+      <stop offset="0.45" stop-color="#c9c8c2"/>
+      <stop offset="0.55" stop-color="#d6d5cf"/>
+      <stop offset="1" stop-color="#a9a8a2"/>
+    </linearGradient>
+    <linearGradient id="panelShade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#241a13"/>
+      <stop offset="1" stop-color="#120c08"/>
+    </linearGradient>
+    <radialGradient id="screw" cx="0.35" cy="0.3" r="0.8">
+      <stop offset="0" stop-color="#f4f4f0"/>
+      <stop offset="0.6" stop-color="#a5a49e"/>
+      <stop offset="1" stop-color="#6c6b66"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Faceplate -->
+  <rect x="20" y="20" width="1160" height="380" rx="10" fill="url(#alu)"/>
+  <rect x="20.5" y="20.5" width="1159" height="379" rx="10" fill="none" stroke="#8d8c86" stroke-width="1"/>
+  <rect x="23" y="23" width="1154" height="374" rx="8" fill="none" stroke="#ffffff" stroke-opacity="0.5" stroke-width="1"/>
+
+  <!-- Screws -->
+  <g transform="translate(48,48)">
+    <circle r="11" fill="url(#screw)" stroke="#5a5954" stroke-width="1"/>
+    <path d="M-7,-3 L7,3" stroke="#4a4944" stroke-width="2.5" stroke-linecap="round"/>
+  </g>
+  <g transform="translate(1152,48)">
+    <circle r="11" fill="url(#screw)" stroke="#5a5954" stroke-width="1"/>
+    <path d="M-7,-3 L7,3" stroke="#4a4944" stroke-width="2.5" stroke-linecap="round"/>
+  </g>
+  <g transform="translate(48,372)">
+    <circle r="11" fill="url(#screw)" stroke="#5a5954" stroke-width="1"/>
+    <path d="M-7,-3 L7,3" stroke="#4a4944" stroke-width="2.5" stroke-linecap="round"/>
+  </g>
+  <g transform="translate(1152,372)">
+    <circle r="11" fill="url(#screw)" stroke="#5a5954" stroke-width="1"/>
+    <path d="M-7,-3 L7,3" stroke="#4a4944" stroke-width="2.5" stroke-linecap="round"/>
+  </g>
+
+  <!-- Black anodized inset -->
+  <rect x="68" y="68" width="1064" height="234" rx="6" fill="#7d7c76"/>
+  <rect x="70" y="70" width="1060" height="230" rx="5" fill="url(#panelShade)"/>
+  <rect x="70.5" y="299" width="1059" height="1" fill="#ffffff" opacity="0.35"/>
+
+  <!-- OXIDE: layered stripes -->
+  <g transform="translate(112,134) scale(0.85)">
+    <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke="#0d0805" stroke-width="44">
+      <rect x="0" y="0" width="130" height="120" rx="50"/>
+      <path d="M200,0 L310,120 M310,0 L200,120"/>
+      <path d="M380,0 V120"/>
+      <path d="M450,0 H510 A60,60 0 0 1 510,120 H450 Z"/>
+      <path d="M750,0 H640 V120 H750 M640,60 H720"/>
+    </g>
+    <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke="#c8471b" stroke-width="38">
+      <rect x="0" y="0" width="130" height="120" rx="50"/>
+      <path d="M200,0 L310,120 M310,0 L200,120"/>
+      <path d="M380,0 V120"/>
+      <path d="M450,0 H510 A60,60 0 0 1 510,120 H450 Z"/>
+      <path d="M750,0 H640 V120 H750 M640,60 H720"/>
+    </g>
+    <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke="#0d0805" stroke-width="27">
+      <rect x="0" y="0" width="130" height="120" rx="50"/>
+      <path d="M200,0 L310,120 M310,0 L200,120"/>
+      <path d="M380,0 V120"/>
+      <path d="M450,0 H510 A60,60 0 0 1 510,120 H450 Z"/>
+      <path d="M750,0 H640 V120 H750 M640,60 H720"/>
+    </g>
+    <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke="#e8901f" stroke-width="23">
+      <rect x="0" y="0" width="130" height="120" rx="50"/>
+      <path d="M200,0 L310,120 M310,0 L200,120"/>
+      <path d="M380,0 V120"/>
+      <path d="M450,0 H510 A60,60 0 0 1 510,120 H450 Z"/>
+      <path d="M750,0 H640 V120 H750 M640,60 H720"/>
+    </g>
+    <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke="#0d0805" stroke-width="12">
+      <rect x="0" y="0" width="130" height="120" rx="50"/>
+      <path d="M200,0 L310,120 M310,0 L200,120"/>
+      <path d="M380,0 V120"/>
+      <path d="M450,0 H510 A60,60 0 0 1 510,120 H450 Z"/>
+      <path d="M750,0 H640 V120 H750 M640,60 H720"/>
+    </g>
+    <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke="#f3c74b" stroke-width="8">
+      <rect x="0" y="0" width="130" height="120" rx="50"/>
+      <path d="M200,0 L310,120 M310,0 L200,120"/>
+      <path d="M380,0 V120"/>
+      <path d="M450,0 H510 A60,60 0 0 1 510,120 H450 Z"/>
+      <path d="M750,0 H640 V120 H750 M640,60 H720"/>
+    </g>
+  </g>
+
+  <!-- Divider -->
+  <rect x="790" y="96" width="2" height="178" fill="#4a3a2e"/>
+
+  <!-- Model block -->
+  <text x="822" y="124" fill="#a99c8a" font-family="Eurostile, 'Microgramma D Extended', 'Bank Gothic', 'Arial Black', Arial, sans-serif" font-size="13" font-weight="700" letter-spacing="5">MODEL</text>
+  <g transform="translate(826,142) scale(1.14)" fill="none" stroke-linecap="square" stroke-linejoin="round" stroke="#ece4d2" stroke-width="10">
+      <path d="M0,0 H40 Q50,0 50,10 V20 Q50,30 40,30 H14 M40,30 Q50,30 50,40 V50 Q50,60 40,60 H0"/>
+      <path d="M68,0 H108 Q118,0 118,10 V20 Q118,30 108,30 H78 Q68,30 68,40 V60 H118"/>
+      <path d="M138,8 L152,0 V60"/>
+      <path d="M220,0 H180 Q170,0 170,10 V50 Q170,60 180,60 H210 Q220,60 220,50 V40 Q220,30 210,30 H170"/>
+  </g>
+  <rect x="822" y="232" width="270" height="7" fill="#c8471b"/>
+  <rect x="822" y="243" width="270" height="7" fill="#e8901f"/>
+  <rect x="822" y="254" width="270" height="7" fill="#f3c74b"/>
+
+  <!-- Engraved legend on the aluminum -->
+  <g font-family="Eurostile, 'Microgramma D Extended', 'Bank Gothic', 'Arial Black', Arial, sans-serif" font-weight="700" font-size="17" letter-spacing="7">
+    <text x="91" y="352" fill="#ffffff" fill-opacity="0.55">MULTITRACK RECORDING CONSOLE</text>
+    <text x="90" y="351" fill="#3a3935">MULTITRACK RECORDING CONSOLE</text>
+    <text x="1111" y="352" fill="#ffffff" fill-opacity="0.55" text-anchor="end" font-size="13" letter-spacing="4">32 IN · 16 TRACK</text>
+    <text x="1110" y="351" fill="#3a3935" text-anchor="end" font-size="13" letter-spacing="4">32 IN · 16 TRACK</text>
+  </g>
+</svg>

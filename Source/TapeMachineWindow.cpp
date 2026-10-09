@@ -165,10 +165,11 @@ void TapeMachinePanel::paint (juce::Graphics& g)
     // The machine's name.
     g.setColour (logoRed);
     g.setFont (ConsoleLookAndFeel::uiFont (22.0f, true));
-    g.drawText ("TAPE 16", 20, 10, 110, 26, juce::Justification::centredLeft, false);
+    const auto nameFont = ConsoleLookAndFeel::uiFont (22.0f, true);
+    const int oxideW = juce::roundToInt (juce::GlyphArrangement::getStringWidth (nameFont, "OXIDE")) + 8;
+    g.drawText ("OXIDE", 20, 10, oxideW, 26, juce::Justification::centredLeft, false);
     g.setColour (silk);
-    g.setFont (ConsoleLookAndFeel::uiFont (11.0f, true));
-    g.drawText ("MULTITRACK", 112, 10, 100, 26, juce::Justification::centredLeft, false);
+    g.drawText ("3216", 20 + oxideW, 10, 80, 26, juce::Justification::centredLeft, false);
 
     // The cassette well: a recessed window in the panel.
     const auto well = wellBox.toFloat();
