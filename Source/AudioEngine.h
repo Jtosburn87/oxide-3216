@@ -7,6 +7,7 @@
 #include "Config.h"
 #include "Params.h"
 #include "ChannelStrip.h"
+#include "StripLink.h"
 #include "TapeMachine.h"
 #include "BusCompressor.h"
 #include "InsertChain.h"
@@ -59,8 +60,8 @@ public:
     struct Patch
     {
         // Sources
-        static constexpr int channelOut = 0, returnOut = 16, tapeOut = 32, auxOut = 48, subOut = 56, mainL = 60, mainR = 61;
-        static constexpr int numSources = 62;
+        static constexpr int channelOut = 0, returnOut = 16, tapeOut = 32, auxOut = 48, subOut = 56, mainL = 60, mainR = 61, oscillator = 62;
+        static constexpr int numSources = 63;
         // Destinations
         static constexpr int tapeIn = 0, returnIn = 16, channelIn = 32;
         static constexpr int numDestinations = 48;
@@ -85,6 +86,9 @@ public:
     // The console.
     ParamSet params;
     juce::OwnedArray<ChannelStrip> inputStrips, returnStrips;
+    /** Stereo links between neighbouring strips (1+2, 3+4, ...): everything follows, pan mirrors. See StripLink. */
+    std::array<Param*, Config::numInputStrips / 2> inputLink {};
+    std::array<Param*, Config::numReturnStrips / 2> returnLink {};
     TapeMachine tape { params };
     juce::OwnedArray<FourBandEq> groupEq;                  // one stereo group EQ per sub
     std::array<Param*, Config::numSubs> subFader {};       // 0..100, unity at 80 (faders arrive in stage 5)
@@ -124,7 +128,11 @@ public:
     /** Project name, written on the cassette label (message thread only). */
     juce::Value projectName { juce::var ("Untitled song") };
 
-    std::atomic<bool> testToneOn { false };   // 440 Hz at -18 dBFS into main
+    /** Test oscillator, an output on the patch bay: sine (frequency swept by a knob), white or pink noise. */
+    Param* oscType = nullptr;    // Dsp::Oscillator::Type: 0 sine, 1 white noise, 2 pink noise
+    Param* oscFreq = nullptr;    // Hz, 20..20000 (sine)
+    Param* oscLevel = nullptr;   // dBFS, the sine's peak (the noises have the same RMS)
+    std::atomic<bool> oscillatorMuted { false };   // export: the mix is rendered without it
 
     /** Export: runs the console with no live inputs and writes main L/R (post limiter) to the given buffers.
         Only call while the device is not calling the engine (see MainComponent::exportMix). */
@@ -144,6 +152,7 @@ public:
 
 private:
     juce::AudioDeviceManager deviceManager;
+    juce::OwnedArray<StripLink> stripLinks;
 
     std::array<std::atomic<int>, Patch::numDestinations> interfaceSource;
     std::array<std::atomic<int>, 2> mainOutput, monitorOutput;
@@ -161,7 +170,7 @@ private:
     std::array<std::atomic<float>, Config::numAux> auxPeak;
     std::atomic<std::uint64_t> callbackCount { 0 };
     double currentSampleRate = 48000.0;
-    double tonePhase = 0.0;
+    Dsp::Oscillator oscillator;
     Dsp::Smoothed mainGainL;
     Dsp::Smoothed monitorSolo;   // 0 = monitor outs carry main, 1 = the solo bus
     Dsp::Smoothed monitorGainS;
@@ -176,6 +185,7 @@ private:
     std::array<Block, Config::numReturnStrips> returnDirect {};
     std::array<Block, Config::numTracks> tapeOut {};
     Block mixL {}, mixR {};
+    Block oscOut {};
     Block soloL {}, soloR {};
     std::array<Block, Config::numSubs> subL {}, subR {};
     std::array<Block, Config::numAux> aux {};

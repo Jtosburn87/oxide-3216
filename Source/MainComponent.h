@@ -9,6 +9,7 @@
 #include "PluginWindows.h"
 #include "InsertsUI.h"
 #include "SessionController.h"
+#include "ImportAudioDialog.h"
 #include "SectionWindow.h"
 
 /** Top bar (name plate, zoom, status) above the zoomable desk. The app buttons live on the desk. */
@@ -36,7 +37,7 @@ private:
     enum CommandIDs
     {
         playStop = 1, play, stop, record, rewind, fastForward, returnToZero,
-        newSession, openSession, saveSession, saveSessionAs, exportMix
+        newSession, openSession, saveSession, saveSessionAs, exportMix, importAudio
     };
     juce::ApplicationCommandManager commands;
     juce::Component::SafePointer<juce::DialogWindow> keysWindow;

@@ -2,7 +2,6 @@
 
 namespace
 {
-    constexpr float testToneLevel = 0.125893f;   // -18 dBFS
     constexpr int maxBlock = Config::maxBlock;
 }
 
@@ -52,6 +51,24 @@ AudioEngine::AudioEngine()
 
     mainFader = &params.add ("main.fader", "Main fader", 0.0f, 100.0f, 80.0f);
     monitorLevel = &params.add ("monitor.level", "Monitor level", -60.0f, 10.0f, 0.0f);
+    oscType = &params.addStepped ("osc.type", "Oscillator type", 3, Dsp::Oscillator::sine);
+    oscFreq = &params.add ("osc.freq", "Oscillator frequency", 20.0f, 20000.0f, 1000.0f, Param::Scale::log);
+    oscLevel = &params.add ("osc.level", "Oscillator level", -60.0f, 0.0f, -18.0f);
+
+    // Stereo links, made last so every strip control exists.
+    const auto makeLinks = [this] (juce::OwnedArray<ChannelStrip>& strips, auto& links, const juce::String& bank)
+    {
+        for (int k = 0; k < (int) links.size(); ++k)
+        {
+            auto& a = *strips[2 * k];
+            auto& b = *strips[2 * k + 1];
+            const auto pair = juce::String (2 * k + 1) + "-" + juce::String (2 * k + 2);
+            links[(size_t) k] = &params.addToggle ("link." + a.idPrefix, bank + " " + pair + " link", false);
+            stripLinks.add (new StripLink (params, a, b, *links[(size_t) k]));
+        }
+    };
+    makeLinks (inputStrips, inputLink, "Input");
+    makeLinks (returnStrips, returnLink, "Return");
     resetBusNames();
 }
 
@@ -259,7 +276,7 @@ void AudioEngine::prepare (double sampleRate, const juce::BigInteger& activeInpu
                            int reportedRoundTripLatency)
 {
     currentSampleRate = sampleRate > 0 ? sampleRate : 48000.0;
-    tonePhase = 0.0;
+    oscillator.prepare (currentSampleRate, oscFreq->get());
 
     // The callback only receives the active channels, packed in order.
     inputSlot.fill (-1);
@@ -379,8 +396,6 @@ void AudioEngine::render (const float* const* inputs, int numInputs, float* cons
     for (auto* s : inputStrips)  anySolo = anySolo || s->controls.solo->on();
     for (auto* s : returnStrips) anySolo = anySolo || s->controls.solo->on();
 
-    const bool tone = testToneOn.load (std::memory_order_relaxed);
-    const double toneInc = juce::MathConstants<double>::twoPi * 440.0 / currentSampleRate;
     const float mainT = Dsp::faderGain (mainFader->get());
 
     const float* tapeInPtrs[Config::numTracks];
@@ -406,9 +421,17 @@ void AudioEngine::render (const float* const* inputs, int numInputs, float* cons
     for (auto& p : patch)
         patchedSources |= p.load (std::memory_order_relaxed);
 
+    // The oscillator only runs while a cable carries it.
+    const bool osc = ((patchedSources >> Patch::oscillator) & 1u) != 0;
+    const int oscTypeNow = juce::roundToInt (oscType->get());
+    const float oscFreqNow = oscFreq->get();
+    const float oscGain = oscillatorMuted.load (std::memory_order_relaxed) ? 0.0f : Dsp::dbToGain (oscLevel->get());
+
     for (int start = 0; start < numSamples; start += maxBlock)
     {
         const int n = juce::jmin (maxBlock, numSamples - start);
+        if (osc)
+            oscillator.process (oscOut.data(), n, oscTypeNow, oscFreqNow, oscGain);
         juce::FloatVectorOperations::clear (mixL.data(), n);
         juce::FloatVectorOperations::clear (mixR.data(), n);
         juce::FloatVectorOperations::clear (soloL.data(), n);
@@ -534,18 +557,6 @@ void AudioEngine::render (const float* const* inputs, int numInputs, float* cons
             }
         }
 
-        if (tone)
-        {
-            for (int i = 0; i < n; ++i)
-            {
-                const float s = testToneLevel * (float) std::sin (tonePhase);
-                mixL[(size_t) i] += s;
-                mixR[(size_t) i] += s;
-                tonePhase += toneInc;
-            }
-            tonePhase = std::fmod (tonePhase, juce::MathConstants<double>::twoPi);
-        }
-
         // Master section: bus compressor -> master inserts -> main fader -> limiter -> outputs.
         busComp.process (mixL.data(), mixR.data(), n);
         masterInserts.process (mixL.data(), mixR.data(), n);
@@ -651,6 +662,7 @@ const float* AudioEngine::patchSource (int s, int phase) const noexcept
     // phase: 0 = nothing processed yet this block, 1 = input strips done, 2 = tape done, 3 = returns done, 4 = all.
     // Anything not processed yet comes from the previous block.
     const float* previous = patchPrevious[(size_t) s].data();
+    if (s == Patch::oscillator) return oscOut.data();   // made at the start of every block
     if (s < Patch::returnOut) return phase >= 1 ? inputDirect[(size_t) s].data() : previous;
     if (s < Patch::tapeOut)   return phase >= 3 ? returnDirect[(size_t) (s - Patch::returnOut)].data() : previous;
     if (s < Patch::auxOut)    return phase >= 2 ? tapeOut[(size_t) (s - Patch::tapeOut)].data() : previous;

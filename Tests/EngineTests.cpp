@@ -6,6 +6,7 @@
 #include "AudioEngine.h"
 #include "PluginManager.h"
 #include "Session.h"
+#include "AudioImport.h"
 #include <cstdio>
 #include <deque>
 #include <vector>
@@ -151,19 +152,123 @@ namespace
         b.run (e);
         check (near (b.out[0][0], 0.5f * pan) && near (b.out[0][2047], 0.5f * pan), "main fader -6 dB across a 2048-sample block");
 
+        // The test oscillator, patched into return strip 1 (centre pan: -3 dB per side).
         std::fill (b.in[0].begin(), b.in[0].end(), 0.0f);
         e.mainFader->set (80.0f);
-        e.testToneOn.store (true);
-        b.run (e);
+        e.oscFreq->set (440.0f);
+        e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }));
+        e.setPatch (AudioEngine::Patch::returnIn, std::uint64_t (1) << AudioEngine::Patch::oscillator);
+        for (int i = 0; i < 4; ++i)
+            b.run (e);
         e.takeMainPeak (0);
         b.run (e);
-        check (near (e.takeMainPeak (0), 0.125893f, 2.0e-3f), "test tone peaks at -18 dBFS");
+        check (near (e.takeMainPeak (0), 0.125893f * pan, 2.0e-3f), "oscillator sine peaks at -18 dBFS (default level)");
 
         int crossings = 0;   // 440 Hz over 2048 samples at 48 kHz: about 18.8 cycles
         for (size_t i = 1; i < b.out[0].size(); ++i)
             if (b.out[0][i - 1] < 0.0f && b.out[0][i] >= 0.0f)
                 ++crossings;
-        check (crossings >= 18 && crossings <= 19, "test tone is 440 Hz");
+        check (crossings >= 18 && crossings <= 19, "oscillator at 440 Hz");
+    }
+
+    void testStripLink()
+    {
+        std::puts ("Linked channel pairs: everything follows, pan mirrors");
+        AudioEngine e;
+        auto& a = *e.inputStrips[2];   // channels 3 and 4
+        auto& b = *e.inputStrips[3];
+        auto& link = *e.inputLink[1];
+
+        a.controls.trim->set (6.0f);
+        a.controls.pan->set (-0.6f);
+        a.eq.gain[FourBandEq::HF]->set (3.0f);
+        b.controls.trim->set (-4.0f);
+        b.controls.fader->set (30.0f);
+        check (b.controls.trim->get() == -4.0f, "unlinked strips are independent");
+
+        link.set (1.0f);
+        check (b.controls.trim->get() == 6.0f && b.eq.gain[FourBandEq::HF]->get() == 3.0f && b.controls.fader->get() == a.controls.fader->get(),
+               "linking copies channel 3's settings onto channel 4");
+        check (near (b.controls.pan->get(), 0.6f), "linking mirrors the pan");
+
+        b.controls.fader->set (65.0f);
+        a.comp.ratio->set (2.0f);
+        a.controls.mute->set (1.0f);
+        a.controls.sub[1]->set (1.0f);
+        b.controls.auxLevel[4]->set (0.4f);
+        check (a.controls.fader->get() == 65.0f && b.comp.ratio->get() == 2.0f && b.controls.mute->on() && b.controls.sub[1]->on()
+                   && a.controls.auxLevel[4]->get() == 0.4f, "either strip moves both (fader, compressor, mute, assigns, sends)");
+
+        b.controls.pan->set (-0.25f);
+        check (near (a.controls.pan->get(), 0.25f), "pan turns the other way");
+        a.controls.pan->set (-1.0f);
+        check (near (b.controls.pan->get(), 1.0f), "hard left on one is hard right on the other");
+
+        check (e.inputStrips[1]->controls.fader->get() == 0.0f && e.inputStrips[4]->controls.fader->get() == 0.0f, "other strips untouched");
+
+        link.set (0.0f);
+        a.controls.trim->set (0.0f);
+        check (b.controls.trim->get() == 6.0f, "unlinking makes them independent again");
+
+        // Return strips link too.
+        e.returnLink[0]->set (1.0f);
+        e.returnStrips[0]->controls.fader->set (50.0f);
+        check (e.returnStrips[1]->controls.fader->get() == 50.0f, "return strips 1 and 2 link");
+    }
+
+    void testOscillator()
+    {
+        std::puts ("Test oscillator: sine sweep, white and pink noise, patching");
+        const auto rmsOf = [] (int type, float freq)
+        {
+            Dsp::Oscillator o;
+            o.prepare (48000.0, freq);
+            std::vector<float> buf (96000);
+            o.process (buf.data(), (int) buf.size(), type, freq, 1.0f);
+            double sum = 0.0;
+            for (size_t i = 24000; i < buf.size(); ++i)
+                sum += (double) buf[i] * buf[i];
+            return (float) std::sqrt (sum / (double) (buf.size() - 24000));
+        };
+        const float sine = rmsOf (Dsp::Oscillator::sine, 1000.0f), white = rmsOf (Dsp::Oscillator::white, 1000.0f), pink = rmsOf (Dsp::Oscillator::pink, 1000.0f);
+        std::printf ("      RMS at 0 dBFS: sine %.3f, white %.3f, pink %.3f\n", sine, white, pink);
+        check (near (sine, pan, 0.002f) && near (white, pan, 0.02f) && near (pink, pan, 0.07f), "sine, white and pink read the same RMS");
+
+        // Sweeping the knob glides the frequency without a jump in phase.
+        Dsp::Oscillator o;
+        o.prepare (48000.0, 100.0f);
+        std::vector<float> buf (48000);
+        o.process (buf.data(), 24000, Dsp::Oscillator::sine, 100.0f, 1.0f);
+        o.process (buf.data() + 24000, 24000, Dsp::Oscillator::sine, 5000.0f, 1.0f);
+        float maxStep = 0.0f;
+        for (size_t i = 1; i < buf.size(); ++i)
+            maxStep = juce::jmax (maxStep, std::abs (buf[i] - buf[i - 1]));
+        int crossings = 0;
+        for (size_t i = 36001; i < buf.size(); ++i)
+            crossings += buf[i - 1] < 0.0f && buf[i] >= 0.0f ? 1 : 0;
+        check (crossings >= 1249 && crossings <= 1251, "sweeps to 5 kHz (1250 cycles in the last quarter second)");
+        check (maxStep < 0.7f, "no clicks while sweeping (largest step is the 5 kHz slope)");
+
+        // In the console: one oscillator feeding a tape in and a channel strip in at once; silent for export.
+        TestEngine e;
+        e.oscType->set ((float) Dsp::Oscillator::pink);
+        e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }));
+        e.setPatch (AudioEngine::Patch::channelIn + 1, std::uint64_t (1) << AudioEngine::Patch::oscillator);
+        e.setPatch (AudioEngine::Patch::tapeIn + 2, std::uint64_t (1) << AudioEngine::Patch::oscillator);
+        e.tape.arm[2]->set (1.0f);
+        Buffers b (1, 2, 512);
+        for (int i = 0; i < 10; ++i)
+            b.run (e);
+        e.takeInputPeak (1);
+        b.run (e);
+        check (e.takeInputPeak (1) > 0.03f, "pink noise reaches channel strip 2");
+        check (e.takeInputPeak (0) == 0.0f, "nothing on channel strip 1");
+        e.oscillatorMuted = true;
+        for (int i = 0; i < 10; ++i)
+            b.run (e);
+        e.takeInputPeak (1);
+        b.run (e);
+        check (e.takeInputPeak (1) < 1.0e-4f, "muted for export");
     }
 
     void testStripControls()
@@ -1350,6 +1455,85 @@ namespace
         folder.deleteRecursively();
     }
 
+    void testImport()
+    {
+        std::puts ("Import audio onto tape tracks");
+        const auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("ConsoleTapeTestImport");
+        dir.deleteRecursively();
+        dir.createDirectory();
+
+        const auto writeWav = [] (const juce::File& f, double rate, const std::vector<std::vector<float>>& chans)
+        {
+            juce::WavAudioFormat wav;
+            f.deleteFile();
+            std::unique_ptr<juce::OutputStream> out (f.createOutputStream().release());
+            std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (out.get(), rate, (unsigned) chans.size(), 32, {}, 0));
+            if (w == nullptr)
+                return false;
+            out.release();
+            std::vector<const float*> ptrs;
+            for (auto& c : chans)
+                ptrs.push_back (c.data());
+            return w->writeFromFloatArrays (ptrs.data(), (int) ptrs.size(), (int) chans[0].size());
+        };
+
+        std::vector<float> mono (70000), left (44100), right (44100);
+        for (size_t i = 0; i < mono.size(); ++i)
+            mono[i] = 0.25f * (float) std::sin ((double) i * 0.05);
+        for (size_t i = 0; i < left.size(); ++i)
+        {
+            left[i] = 0.5f * (float) std::sin (juce::MathConstants<double>::twoPi * 441.0 * (double) i / 44100.0);
+            right[i] = 0.1f * (float) std::sin (juce::MathConstants<double>::twoPi * 441.0 * (double) i / 44100.0);
+        }
+        const auto monoFile = dir.getChildFile ("mono.wav"), stereoFile = dir.getChildFile ("stereo.wav");
+        check (writeWav (monoFile, 48000.0, { mono }) && writeWav (stereoFile, 44100.0, { left, right }), "test files written");
+
+        TestEngine e;
+        e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }));
+        const auto none = [] (double) { return true; };
+
+        auto info = AudioImport::probe (stereoFile);
+        check (info.ok && info.channels == 2 && info.tracksNeeded() == 2 && info.sampleRate == 44100.0 && info.length == 44100, "probe: stereo 44.1 kHz, 1 s");
+        check (! AudioImport::probe (dir.getChildFile ("missing.wav")).ok, "probe: unreadable file is refused");
+
+        // Mono at the tape's rate: bit for bit, from the start position given.
+        auto a = AudioImport::read (monoFile, 48000.0, e.tape.getCapacity(), none);
+        check (a.ok && a.channels.size() == 1 && a.length() == (juce::int64) mono.size() && a.channels[0] == mono, "mono, same rate: unchanged");
+        AudioImport::place (e.tape, a, 6, 1000);
+        std::vector<float> got (mono.size());
+        e.tape.readTrack (6, 1000, got.data(), (int) got.size());
+        check (got == mono && e.tape.trackHasAudio (6) && ! e.tape.trackHasAudio (5) && ! e.tape.trackHasAudio (7), "mono lands on track 7 only");
+        check (e.tape.getLength() == 1000 + (juce::int64) mono.size(), "tape length covers the import");
+
+        // Stereo at 44.1 kHz onto tracks 15 + 16: converted to 48 kHz, left and right on their own tracks.
+        a = AudioImport::read (stereoFile, 48000.0, e.tape.getCapacity(), none);
+        check (a.ok && a.channels.size() == 2 && a.length() == 48000, "stereo converted to 48 kHz: 1 s = 48000 samples");
+        AudioImport::place (e.tape, a, 14, 0);
+        std::vector<float> l (48000), r (48000);
+        e.tape.readTrack (14, 0, l.data(), 48000);
+        e.tape.readTrack (15, 0, r.data(), 48000);
+        float peakL = 0, peakR = 0;
+        for (int i = 4800; i < 43200; ++i)
+        {
+            peakL = juce::jmax (peakL, std::abs (l[(size_t) i]));
+            peakR = juce::jmax (peakR, std::abs (r[(size_t) i]));
+        }
+        check (std::abs (peakL - 0.5f) < 0.02f && std::abs (peakR - 0.1f) < 0.01f, "left on track 15, right on track 16, levels kept");
+        int crossings = 0;
+        for (int i = 4801; i < 43200; ++i)
+            crossings += (l[(size_t) i - 1] < 0.0f) != (l[(size_t) i] < 0.0f) ? 1 : 0;
+        check (std::abs (crossings - 2 * 441 * 38400 / 48000) <= 2, "pitch kept after rate conversion (441 Hz)");
+        check (e.tape.getLength() == 1000 + (juce::int64) mono.size(), "a shorter import does not shorten the tape");
+
+        // Cancel and truncation.
+        a = AudioImport::read (monoFile, 48000.0, e.tape.getCapacity(), [] (double) { return false; });
+        check (! a.ok && a.channels.empty(), "cancel stops the import");
+        a = AudioImport::read (monoFile, 48000.0, 5000, none);
+        check (a.ok && a.truncated && a.length() == 5000, "cut off at the end of the tape");
+
+        dir.deleteRecursively();
+    }
+
     void testNoDeviceIsSafe()
     {
         std::puts ("Callback with zero channels");
@@ -1556,6 +1740,8 @@ int main (int argc, char** argv)
     testInputMappingWithInactiveChannels();
     testOutputMapping();
     testMainFaderToneAndLargeBlocks();
+    testOscillator();
+    testStripLink();
     testStripControls();
     testRecordingIsLatencyCompensated();
     testTapeStorageAndTransport();
@@ -1574,6 +1760,7 @@ int main (int argc, char** argv)
     testWinding();
     testWowFlutter();
     testSessions();
+    testImport();
     testNoDeviceIsSafe();
 
     for (int i = 1; i < argc; ++i)

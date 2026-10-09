@@ -18,6 +18,7 @@ namespace
         if (s < P::auxOut)    return "Tape out " + juce::String (s - P::tapeOut + 1);
         if (s < P::subOut)    return "Aux out " + juce::String (s - P::auxOut + 1);
         if (s < P::mainL)     return "Sub out " + juce::String (s - P::subOut + 1);
+        if (s == P::oscillator) return "Oscillator";
         return s == P::mainL ? "Main L" : "Main R";
     }
 
@@ -124,6 +125,7 @@ public:
 //==============================================================================
 juce::Colour PatchBayField::sourceColour (int s)
 {
+    if (s == Patch::oscillator) return juce::Colour (0xff3fc1b8); // oscillator: teal
     if (s < Patch::returnOut) return juce::Colour (0xffd6392d);   // channel: red
     if (s < Patch::tapeOut)   return juce::Colour (0xff3a8fd6);   // return: blue
     if (s < Patch::auxOut)    return juce::Colour (0xffe0a83a);   // tape: amber
@@ -133,12 +135,14 @@ juce::Colour PatchBayField::sourceColour (int s)
 }
 
 PatchBayField::PatchBayField (AudioEngine& e, std::function<void()> changedCallback)
-    : engine (e), onChanged (std::move (changedCallback))
+    : engine (e), onChanged (std::move (changedCallback)),
+      oscFreqKnob (*e.oscFreq, "Freq", juce::Colour (0xff3fc1b8)), oscLevelKnob (*e.oscLevel, "Level")
 {
     for (int s = 0; s < Patch::numSources; ++s)
     {
         juce::String number;
-        if (s >= Patch::mainL)          number = s == Patch::mainL ? "L" : "R";
+        if (s == Patch::oscillator)     number = "OSC";
+        else if (s >= Patch::mainL)     number = s == Patch::mainL ? "L" : "R";
         else if (s >= Patch::subOut)    number = juce::String (s - Patch::subOut + 1);
         else if (s >= Patch::auxOut)    number = juce::String (s - Patch::auxOut + 1);
         else                            number = juce::String (s % 16 + 1);
@@ -147,10 +151,43 @@ PatchBayField::PatchBayField (AudioEngine& e, std::function<void()> changedCallb
     for (int d = 0; d < Patch::numDestinations; ++d)
         addAndMakeVisible (destinations.add (new Jack (*this, Kind::destination, d, destinationName (d), juce::String (d % 16 + 1))));
 
+    // Oscillator: waveform switch, frequency sweep (sine) and level.
+    const char* const typeNames[] = { "Sine", "White", "Pink" };
+    for (int t = 0; t < 3; ++t)
+    {
+        auto* b = oscTypeButtons.add (new RadioParamButton (*e.oscType, t, typeNames[t]));
+        b->setTooltip (t == 0 ? "Sine wave, frequency set by the Freq knob" : juce::String (typeNames[t]) + " noise");
+        addAndMakeVisible (b);
+    }
+    oscFreqKnob.setFormatter ([] (float hz)
+    {
+        return hz < 1000.0f ? juce::String (juce::roundToInt (hz)) + " Hz"
+                            : juce::String (hz / 1000.0f, hz < 10000.0f ? 2 : 1) + " kHz";
+    });
+    oscFreqKnob.setEndLabels ("20", "20k");
+    oscFreqKnob.setDialSize (40);
+    oscLevelKnob.setFormatter ([] (float db) { return juce::String (juce::roundToInt (db)) + " dB"; });
+    oscLevelKnob.setEndLabels ("-60", "0");
+    oscLevelKnob.setDialSize (40);
+    addAndMakeVisible (oscFreqKnob);
+    addAndMakeVisible (oscLevelKnob);
+    e.oscType->addListener (this);
+    paramChanged (*e.oscType);
+
     refresh();
 }
 
-PatchBayField::~PatchBayField() = default;
+PatchBayField::~PatchBayField()
+{
+    engine.oscType->removeListener (this);
+}
+
+void PatchBayField::paramChanged (Param&)
+{
+    const bool sine = juce::roundToInt (engine.oscType->get()) == Dsp::Oscillator::sine;
+    oscFreqKnob.setEnabled (sine);
+    oscFreqKnob.setAlpha (sine ? 1.0f : 0.35f);
+}
 
 void PatchBayField::placeGroup (const juce::String& title, juce::OwnedArray<Jack>& jacks, int first, int count, int x, int y)
 {
@@ -183,6 +220,15 @@ void PatchBayField::rebuild (int interfaceJacks)
     placeGroup ("Channel direct out", sources, P::channelOut, 16, x2, row1Top);
     placeGroup ("Channel strip in", destinations, P::channelIn, 16, pad, row1Bottom);
     placeGroup ("Tape in", destinations, P::tapeIn, 16, x2, row1Bottom);
+
+    // The oscillator at the end of pair 1: its output jack, then the waveform switch over the two knobs.
+    const int x3 = x2 + 16 * jackW + groupGap;
+    placeGroup ("Oscillator", sources, P::oscillator, 1, x3, row1Top);
+    groups.back().area.setWidth (36 + 3 * 54);
+    for (int t = 0; t < oscTypeButtons.size(); ++t)
+        oscTypeButtons[t]->setBounds (x3 + 36 + t * 54, row1Top + 20, 50, 22);
+    oscFreqKnob.setBounds (x3 + 44, row1Top + 52, 64, 56);
+    oscLevelKnob.setBounds (x3 + 128, row1Top + 52, 64, 56);
 
     // Pair 2. Return strip in sits under the tape outs that are normalled to it.
     int x = pad;

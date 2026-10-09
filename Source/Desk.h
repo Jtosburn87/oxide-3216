@@ -40,6 +40,9 @@ public:
     static int heightFor (int collapsedMask);
     std::function<void (int bit)> onToggleSection;
 
+    /** Where the pan knob sits (the link button of a pair goes between two of them). */
+    juce::Rectangle<int> getPanBounds() const { return pan.getBounds(); }
+
     /** Unlocked: EQ, gate and compressor show a button to move them earlier in this channel's chain. */
     void setChainUnlocked (bool);
 
@@ -174,7 +177,7 @@ private:
 class StripBank : public juce::Component
 {
 public:
-    explicit StripBank (const juce::OwnedArray<ChannelStrip>&);
+    StripBank (const juce::OwnedArray<ChannelStrip>&, const std::vector<Param*>& links);
 
     void resized() override;
     void update();
@@ -187,6 +190,7 @@ public:
 
 private:
     juce::OwnedArray<StripComponent> strips;
+    juce::OwnedArray<ParamButton> linkButtons;   // one per pair of strips, between their pan knobs
     juce::TextButton meterButton { "OUT" };   // flips the whole bank's meters between input and output
     bool meterInput = false;
     int collapsed = 0;

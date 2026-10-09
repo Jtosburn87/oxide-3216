@@ -1011,7 +1011,7 @@ void CentreSection::update()
 }
 
 //==============================================================================
-StripBank::StripBank (const juce::OwnedArray<ChannelStrip>& channelStrips)
+StripBank::StripBank (const juce::OwnedArray<ChannelStrip>& channelStrips, const std::vector<Param*>& links)
 {
     for (auto* s : channelStrips)
     {
@@ -1038,6 +1038,17 @@ StripBank::StripBank (const juce::OwnedArray<ChannelStrip>& channelStrips)
             s->setMeterInput (meterInput);
     };
     addAndMakeVisible (meterButton);
+
+    for (size_t k = 0; k < links.size(); ++k)
+    {
+        auto* b = linkButtons.add (new ParamButton (*links[k], "Link"));
+        b->setTooltip ("Links channels " + juce::String (2 * k + 1) + " and " + juce::String (2 * k + 2)
+                       + ": every control moves both, and the pan knobs turn in opposite directions. "
+                         "Linking copies channel " + juce::String (2 * k + 1) + "'s settings onto channel " + juce::String (2 * k + 2) + ".");
+        b->setColour (juce::TextButton::buttonOnColourId, amber);
+        b->setColour (juce::TextButton::textColourOnId, juce::Colours::black);
+        addAndMakeVisible (b);
+    }
     setSize (strips.size() * stripW, totalH);
 }
 
@@ -1065,6 +1076,14 @@ void StripBank::resized()
     }
     meterButton.setBounds (5 + stripW - 10 - 36, 5, 34, 14);   // on the first strip's "Input" title line
     meterButton.toFront (false);
+
+    // Each link button sits on the line between its two strips, level with their pan knobs.
+    for (int k = 0; k < linkButtons.size() && 2 * k + 1 < strips.size(); ++k)
+    {
+        const auto panY = strips[2 * k]->getPanBounds().getCentreY();
+        linkButtons[k]->setBounds (juce::Rectangle<int> (40, 18).withCentre ({ (2 * k + 1) * stripW, panY - 4 }));
+        linkButtons[k]->toFront (false);
+    }
 }
 
 void StripBank::update()
@@ -1075,7 +1094,8 @@ void StripBank::update()
 
 //==============================================================================
 Desk::Desk (AudioEngine& e, PluginContext* plugins)
-    : engine (e), inputs (e.inputStrips), returns (e.returnStrips), centre (e, plugins)
+    : engine (e), inputs (e.inputStrips, { e.inputLink.begin(), e.inputLink.end() }),
+      returns (e.returnStrips, { e.returnLink.begin(), e.returnLink.end() }), centre (e, plugins)
 {
     centre.setSize (centreW, totalH);
     centre.setTitle ("Centre section");

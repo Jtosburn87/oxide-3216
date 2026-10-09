@@ -2,12 +2,15 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "AudioEngine.h"
+#include "Widgets.h"
 
 /** The jack field, laid out like a rack: two pairs of rows, outputs above inputs.
     Pair 1: interface inputs and channel direct outs over the channel strip ins and tape ins.
     Pair 2: tape outs, return direct outs, aux, sub and main over the return strip ins.
+    The test oscillator sits at the end of pair 1: an output like any other, with its controls beside it.
     Every normal runs straight down from an output to the input under it. */
-class PatchBayField : public juce::Component
+class PatchBayField : public juce::Component,
+                      private Param::Listener
 {
 public:
     PatchBayField (AudioEngine&, std::function<void()> onChanged);
@@ -44,6 +47,11 @@ private:
 
     struct Group { juce::String title; juce::Rectangle<int> area; };
     std::vector<Group> groups;
+
+    // Test oscillator controls.
+    juce::OwnedArray<RadioParamButton> oscTypeButtons;
+    Knob oscFreqKnob, oscLevelKnob;
+    void paramChanged (Param&) override;   // the frequency knob only applies to the sine
 
     void rebuild (int interfaceJacks);
     void placeGroup (const juce::String& title, juce::OwnedArray<Jack>&, int first, int count, int x, int y);

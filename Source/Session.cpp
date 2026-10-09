@@ -326,13 +326,13 @@ Session::Result Session::exportMix (AudioEngine& e, const juce::File& file, doub
     }
     stream.release();
 
-    // Play every track back (armed tracks too, nothing recorded, no loop, no test tone). No Params are touched,
+    // Play every track back (armed tracks too, nothing recorded, no loop, no test oscillator). No Params are touched,
     // so this is safe on a worker thread.
-    const bool wasLoop = tape.loopOn.load(), wasTone = e.testToneOn.load();
+    const bool wasLoop = tape.loopOn.load(), wasMuted = e.oscillatorMuted.load();
     const auto wasPosition = tape.getPosition();
     tape.exporting = true;
     tape.loopOn = false;
-    e.testToneOn = false;
+    e.oscillatorMuted = true;
     forEachChain (e, [] (InsertChain& c) { for (int s = 0; s < InsertChain::numSlots; ++s) if (auto* p = c.getProcessor (s)) p->setNonRealtime (true); });
 
     tape.locate (0);
@@ -360,7 +360,7 @@ Session::Result Session::exportMix (AudioEngine& e, const juce::File& file, doub
     forEachChain (e, [] (InsertChain& c) { for (int s = 0; s < InsertChain::numSlots; ++s) if (auto* p = c.getProcessor (s)) p->setNonRealtime (false); });
     tape.exporting = false;
     tape.loopOn = wasLoop;
-    e.testToneOn = wasTone;
+    e.oscillatorMuted = wasMuted;
     tape.locate (wasPosition);
 
     if (cancelled)

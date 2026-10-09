@@ -320,6 +320,7 @@ void MainComponent::showSessionMenu()
     m.addCommandItem (&commands, saveSession);
     m.addCommandItem (&commands, saveSessionAs, "Save as...");
     m.addSeparator();
+    m.addCommandItem (&commands, importAudio, "Import audio...");
     m.addCommandItem (&commands, exportMix, "Export mix to WAV...");
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (sessionButton));
 }
@@ -334,7 +335,7 @@ bool MainComponent::keyPressed (const juce::KeyPress& k)
 void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
 {
     ids.addArray ({ playStop, play, stop, record, rewind, fastForward, returnToZero,
-                    newSession, openSession, saveSession, saveSessionAs, exportMix });
+                    newSession, openSession, saveSession, saveSessionAs, exportMix, importAudio });
 }
 
 void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommandInfo& info)
@@ -362,6 +363,8 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
                             info.addDefaultKeypress ('s', cmd | juce::ModifierKeys::shiftModifier); break;
         case exportMix:     info.setInfo ("Export mix", "Exports the mix to a WAV file", "Session", 0);
                             info.addDefaultKeypress ('e', cmd); break;
+        case importAudio:   info.setInfo ("Import audio", "Imports an audio file onto one tape track (a stereo file onto two)", "Session", 0);
+                            info.addDefaultKeypress ('i', cmd); break;
         default: break;
     }
 }
@@ -383,6 +386,7 @@ bool MainComponent::perform (const InvocationInfo& info)
         case saveSession:   sessions.save(); return true;
         case saveSessionAs: sessions.saveAs(); return true;
         case exportMix:     sessions.exportMix(); return true;
+        case importAudio:   ImportAudioDialog::show (engine, settings); return true;
         default:            return false;
     }
 }

@@ -186,4 +186,66 @@ namespace Dsp
             return (float) (int) state * (1.0f / 2147483648.0f);
         }
     };
+
+    /** Test oscillator: sine, white noise or pink noise. The level is the sine's peak; both noises are
+        scaled to the same RMS as that sine, so all three read the same on a meter that averages. */
+    struct Oscillator
+    {
+        enum Type { sine, white, pink };
+
+        void prepare (double sr, float freqHz) noexcept
+        {
+            sampleRate = sr;
+            gain.prepare (sr, 0.0f, 10.0f);
+            logFreq.prepare (sr, std::log2 (freqHz), 30.0f);   // a jump in frequency glides instead of stepping
+            phase = 0.0;
+            p0 = p1 = p2 = p3 = p4 = p5 = p6 = 0.0f;
+        }
+
+        /** level: linear peak of the sine. */
+        void process (float* out, int n, int type, float freqHz, float level) noexcept
+        {
+            constexpr double twoPi = 6.283185307179586;
+            const float target = std::log2 (std::clamp (freqHz, 1.0f, (float) (sampleRate * 0.49)));
+            for (int i = 0; i < n; ++i)
+            {
+                float s;
+                if (type == white)
+                {
+                    s = whiteScale * noise.next();
+                }
+                else if (type == pink)
+                {
+                    // Paul Kellet's refined pink filter (within 0.05 dB of -3 dB/octave above 9 Hz).
+                    const float w = noise.next();
+                    p0 = 0.99886f * p0 + w * 0.0555179f;
+                    p1 = 0.99332f * p1 + w * 0.0750759f;
+                    p2 = 0.96900f * p2 + w * 0.1538520f;
+                    p3 = 0.86650f * p3 + w * 0.3104856f;
+                    p4 = 0.55000f * p4 + w * 0.5329522f;
+                    p5 = -0.7616f * p5 - w * 0.0168980f;
+                    s = pinkScale * (p0 + p1 + p2 + p3 + p4 + p5 + p6 + w * 0.5362f);
+                    p6 = w * 0.115926f;
+                }
+                else
+                {
+                    s = (float) std::sin (phase);
+                }
+                // The sine keeps turning under the noise, so switching back starts cleanly.
+                phase += twoPi * std::exp2 ((double) logFreq.next (target)) / sampleRate;
+                if (phase >= twoPi)
+                    phase -= twoPi;
+                out[i] = gain.next (level) * s;
+            }
+        }
+
+        static constexpr float whiteScale = 1.2247449f;   // uniform noise (RMS 1/sqrt 3) to RMS 1/sqrt 2, like a sine
+        static constexpr float pinkScale = 0.4049f;       // the filter's output (RMS 1.746 for uniform noise) to the same
+
+    private:
+        double sampleRate = 48000.0, phase = 0.0;
+        Smoothed gain, logFreq;
+        Noise noise;
+        float p0 = 0, p1 = 0, p2 = 0, p3 = 0, p4 = 0, p5 = 0, p6 = 0;
+    };
 }

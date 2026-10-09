@@ -102,6 +102,7 @@ public:
     bool isRecording (int track) const noexcept;
     juce::int64 getPosition() const noexcept { return position.load(); }
     juce::int64 getLength() const noexcept   { return length.load(); }
+    juce::int64 getCapacity() const noexcept { return (juce::int64) maxChunks * chunkSize; }   // samples per track
     double getSampleRate() const noexcept    { return sampleRate; }
     int getLatency() const noexcept          { return latency.load(); }
     void setLatency (int samples) noexcept   { latency.store (juce::jmax (0, samples)); }

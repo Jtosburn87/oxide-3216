@@ -29,12 +29,14 @@ endif()
 # library (linked PRIVATE); their include paths and defines are re-exported below.
 add_library(ConsoleTapeCore STATIC
     Source/AudioEngine.cpp
+    Source/AudioImport.cpp
     Source/BusCompressor.cpp
     Source/ChannelStrip.cpp
     Source/Dynamics.cpp
     Source/InsertChain.cpp
     Source/PluginManager.cpp
     Source/Session.cpp
+    Source/StripLink.cpp
     Source/Params.cpp
     Source/TapeMachine.cpp)
 target_include_directories(ConsoleTapeCore PUBLIC Source "${ASIO_SDK_DIR}/common")
@@ -48,6 +50,7 @@ target_compile_definitions(ConsoleTapeCore PUBLIC
     JUCE_DIRECTSOUND=0
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
+    JUCE_USE_MP3AUDIOFORMAT=1
     JUCE_APPLICATION_NAME_STRING="ConsoleTape"
     JUCE_APPLICATION_VERSION_STRING="${PROJECT_VERSION}")
 target_link_libraries(ConsoleTapeCore
@@ -69,6 +72,7 @@ juce_add_gui_app(ConsoleTape
     VERSION ${PROJECT_VERSION})
 
 target_sources(ConsoleTape PRIVATE
+    Source/ImportAudioDialog.cpp
     Source/Main.cpp
     Source/MainComponent.cpp
     Source/PatchBay.cpp
