@@ -31,6 +31,7 @@ namespace
         if (d == P::talkbackIn)  return "TB In (the talkback mic)";
         if (d == P::tbLimiterIn) return "TB Limiter In (normalled from TB In)";
         if (d == P::tbSend)      return "TB Send (to the talkback auxes; normalled from TB Limiter Out)";
+        if (d >= P::interfaceOut) return "Interface out " + juce::String (d - P::interfaceOut + 1);
         return "Channel strip in " + juce::String (d - P::channelIn + 1);
     }
 
@@ -155,9 +156,14 @@ PatchBayField::PatchBayField (AudioEngine& e, std::function<void()> changedCallb
         addAndMakeVisible (sources.add (new Jack (*this, Kind::source, s, sourceName (s), number)));
     }
     for (int d = 0; d < Patch::numDestinations; ++d)
-        addAndMakeVisible (destinations.add (new Jack (*this, Kind::destination, d, destinationName (d),
-                                                       d == Patch::talkbackIn || d == Patch::tbLimiterIn ? juce::String ("IN")
-                                                       : d == Patch::tbSend ? juce::String ("SEND") : juce::String (d % 16 + 1))));
+    {
+        juce::String number;
+        if (d == Patch::talkbackIn || d == Patch::tbLimiterIn) number = "IN";
+        else if (d == Patch::tbSend)                           number = "SEND";
+        else if (d >= Patch::interfaceOut)                     number = juce::String (d - Patch::interfaceOut + 1);
+        else                                                   number = juce::String (d % 16 + 1);
+        addChildComponent (destinations.add (new Jack (*this, Kind::destination, d, destinationName (d), number)));
+    }
 
     // Oscillator: waveform switch, frequency sweep (sine) and level.
     const char* const typeNames[] = { "Sine", "White", "Pink" };
@@ -201,14 +207,17 @@ void PatchBayField::placeGroup (const juce::String& title, juce::OwnedArray<Jack
 {
     if (count <= 0)
         return;
-    groups.push_back ({ title, { x, y, count * jackW, 58 } });
+    // A group is never narrower than its title (a two-jack interface still reads "Interface in").
+    const int titleW = (int) std::ceil (juce::GlyphArrangement::getStringWidth (ConsoleLookAndFeel::uiFont (12.0f), title)) + 4;
+    groups.push_back ({ title, { x, y, juce::jmax (count * jackW, titleW), 58 } });
     for (int k = 0; k < count; ++k)
         jacks[first + k]->setBounds (x + k * jackW, y + 18, jackW, 40);
 }
 
-void PatchBayField::rebuild (int interfaceJacks)
+void PatchBayField::rebuild (int interfaceJacks, int outputJacks)
 {
     numInterfaceJacks = interfaceJacks;
+    numOutputJacks = outputJacks;
     interfaceIns.clear();
     for (int i = 0; i < interfaceJacks; ++i)
     {
@@ -229,26 +238,26 @@ void PatchBayField::rebuild (int interfaceJacks)
     placeGroup ("Channel strip in", destinations, P::channelIn, 16, pad, row1Bottom);
     placeGroup ("Tape in", destinations, P::tapeIn, 16, x2, row1Bottom);
 
-    // The oscillator at the end of pair 1: its output jack, then the waveform switch over the two knobs.
+    // Next to them: Talkback (TB In, TB Send) on the top row, the TB Limiter (In, Out) under it.
+    // Normals: TB In -> TB Limiter In, TB Limiter Out -> TB Send (the limiter cannot be patched into itself).
     const int x3 = x2 + 16 * jackW + groupGap;
-    placeGroup ("Oscillator", sources, P::oscillator, 1, x3, row1Top);
+    const auto pairOf = [this] (const juce::String& title, Jack& a, Jack& b, int x, int y)
+    {
+        groups.push_back ({ title, { x, y, 2 * jackW + 12, 58 } });
+        a.setBounds (x, y + 18, jackW, 40);
+        b.setBounds (x + jackW, y + 18, jackW, 40);
+    };
+    pairOf ("Talkback", *destinations[P::talkbackIn], *destinations[P::tbSend], x3, row1Top);
+    pairOf ("TB Limiter", *destinations[P::tbLimiterIn], *sources[P::tbLimiterOut], x3, row1Bottom);
+
+    // The oscillator at the end of pair 1: its output jack, then the waveform switch over the two knobs.
+    const int x4 = x3 + 2 * jackW + 12 + groupGap;
+    placeGroup ("Oscillator", sources, P::oscillator, 1, x4, row1Top);
     groups.back().area.setWidth (36 + 3 * 54);
     for (int t = 0; t < oscTypeButtons.size(); ++t)
-        oscTypeButtons[t]->setBounds (x3 + 36 + t * 54, row1Top + 20, 50, 22);
-    oscFreqKnob.setBounds (x3 + 44, row1Top + 52, 64, 56);
-    oscLevelKnob.setBounds (x3 + 128, row1Top + 52, 64, 56);
-
-    // Talkback after it: TB In and TB Send side by side, then the TB limiter with its out over its in.
-    // Normals: TB In -> TB Limiter In, TB Limiter Out -> TB Send (the limiter cannot be patched into itself).
-    const int x4 = x3 + 36 + 3 * 54 + groupGap;
-    placeGroup ("Talkback", destinations, P::talkbackIn, 1, x4, row1Bottom);
-    destinations[P::tbSend]->setBounds (destinations[P::talkbackIn]->getBounds().translated (jackW, 0));
-    groups.back().area.setWidth (2 * jackW + 8);
-    const int x5 = x4 + 2 * jackW + groupGap;
-    placeGroup ("TB Limiter", sources, P::tbLimiterOut, 1, x5, row1Top);
-    groups.back().area.setWidth (2 * jackW + 16);
-    placeGroup ("TB Limiter", destinations, P::tbLimiterIn, 1, x5, row1Bottom);
-    groups.back().area.setWidth (2 * jackW + 16);
+        oscTypeButtons[t]->setBounds (x4 + 36 + t * 54, row1Top + 20, 50, 22);
+    oscFreqKnob.setBounds (x4 + 44, row1Top + 52, 64, 56);
+    oscLevelKnob.setBounds (x4 + 128, row1Top + 52, 64, 56);
 
     // Pair 2. Return strip in sits under the tape outs that are normalled to it.
     int x = pad;
@@ -259,10 +268,20 @@ void PatchBayField::rebuild (int interfaceJacks)
     placeGroup ("Main", sources, P::mainL, 2, x, row2Top);
     placeGroup ("Return strip in", destinations, P::returnIn, 16, pad, row2Bottom);
 
+    // Interface outs beside them, as many as the device has.
+    placeGroup ("Interface out", destinations, P::interfaceOut, outputJacks, pad + 16 * jackW + groupGap, row2Bottom);
+    for (auto* j : destinations)
+        j->setVisible (isShown (Kind::destination, j->index));
+
     int width = 0;
     for (auto& gr : groups)
         width = juce::jmax (width, gr.area.getRight());
     setSize (width + pad, fieldH);
+}
+
+bool PatchBayField::isShown (Kind kind, int index) const
+{
+    return kind != Kind::destination || index < Patch::interfaceOut || index - Patch::interfaceOut < numOutputJacks;
 }
 
 juce::Point<float> PatchBayField::holeCentre (const Jack& j) const
@@ -291,15 +310,28 @@ bool PatchBayField::isPlugged (Kind kind, int index) const
 
 void PatchBayField::refresh()
 {
-    juce::StringArray names;
+    juce::StringArray names, outNames;
     auto* device = engine.getDeviceManager().getCurrentAudioDevice();
     if (device != nullptr)
+    {
         names = device->getInputChannelNames();
+        outNames = device->getOutputChannelNames();
+    }
+    // The interface jacks follow the device: as many ins and outs as it has (16 / 8 with no device).
     const int wanted = device != nullptr ? juce::jmin (names.size(), maxInterfaceJacks) : 16;
-    if (wanted != numInterfaceJacks || names != interfaceNames)
+    const int wantedOuts = device != nullptr ? juce::jmin (outNames.size(), Patch::numInterfaceOuts) : 8;
+    if (wanted != numInterfaceJacks || names != interfaceNames || wantedOuts != numOutputJacks || outNames != outputNames)
     {
         interfaceNames = names;
-        rebuild (wanted);
+        outputNames = outNames;
+        rebuild (wanted, wantedOuts);
+        for (int k = 0; k < Patch::numInterfaceOuts; ++k)
+        {
+            auto name = "Interface out " + juce::String (k + 1);
+            if (outNames[k].isNotEmpty() && outNames[k] != juce::String (k + 1))
+                name << " (" << outNames[k] << ")";
+            destinations[Patch::interfaceOut + k]->setTooltip (name + ": anything patched here is added to this output");
+        }
         if (auto* parent = getParentComponent())
             parent->resized();
     }
@@ -433,7 +465,7 @@ void PatchBayField::paintOverChildren (juce::Graphics& g)
     for (int d = 0; d < Patch::numDestinations; ++d)
     {
         const int dev = engine.getInterfaceInput (d);
-        if (juce::isPositiveAndBelow (dev, interfaceIns.size()))
+        if (juce::isPositiveAndBelow (dev, interfaceIns.size()) && destinations[d]->isVisible())
             g.strokePath (cablePath (holeCentre (*interfaceIns[dev]), holeCentre (*destinations[d])),
                           juce::PathStrokeType (1.5f));
     }
@@ -442,9 +474,10 @@ void PatchBayField::paintOverChildren (juce::Graphics& g)
     struct Cable { int s, d; };
     std::vector<Cable> cables;
     for (int d = 0; d < Patch::numDestinations; ++d)
-        for (int s = 0; s < Patch::numSources; ++s)
-            if ((engine.getPatch (d) >> s) & 1u)
-                cables.push_back ({ s, d });
+        if (destinations[d]->isVisible())   // an interface out the current device does not have
+            for (int s = 0; s < Patch::numSources; ++s)
+                if ((engine.getPatch (d) >> s) & 1u)
+                    cables.push_back ({ s, d });
 
     const juce::PathStrokeType shadowStroke (6.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
     const juce::PathStrokeType cableStroke (4.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);

@@ -6,9 +6,10 @@
 
 /** The jack field, laid out like a rack: two pairs of rows, outputs above inputs.
     Pair 1: interface inputs and channel direct outs over the channel strip ins and tape ins.
-    Pair 2: tape outs, return direct outs, aux, sub and main over the return strip ins.
-    The test oscillator sits at the end of pair 1: an output like any other, with its controls beside it;
-    after it the talkback jacks: TB In and TB Send side by side, then the TB Limiter with its Out above its In.
+    Pair 2: tape outs, return direct outs, aux, sub and main over the return strip ins and the interface outs
+    (as many as the device has; anything patched into one is added to that output).
+    Between the channel direct outs and the test oscillator: Talkback (TB In, TB Send) above the TB Limiter
+    (its In and Out side by side). The oscillator is an output like any other, with its controls beside it.
     Every normal runs straight down from an output to the input under it. */
 class PatchBayField : public juce::Component,
                       private Param::Listener
@@ -43,8 +44,8 @@ private:
     std::function<void()> onChanged;
     juce::OwnedArray<Jack> sources, destinations, interfaceIns;
     std::optional<Selection> selected;
-    int numInterfaceJacks = -1;
-    juce::StringArray interfaceNames;
+    int numInterfaceJacks = -1, numOutputJacks = -1;
+    juce::StringArray interfaceNames, outputNames;
 
     struct Group { juce::String title; juce::Rectangle<int> area; };
     std::vector<Group> groups;
@@ -54,7 +55,8 @@ private:
     Knob oscFreqKnob, oscLevelKnob;
     void paramChanged (Param&) override;   // the frequency knob only applies to the sine
 
-    void rebuild (int interfaceJacks);
+    void rebuild (int interfaceJacks, int outputJacks);
+    bool isShown (Kind, int index) const;   // interface outs beyond the device's outputs are hidden
     void placeGroup (const juce::String& title, juce::OwnedArray<Jack>&, int first, int count, int x, int y);
     void jackClicked (Kind, int index);
     void pullCables (Kind, int index);

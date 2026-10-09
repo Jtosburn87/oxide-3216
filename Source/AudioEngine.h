@@ -66,8 +66,10 @@ public:
                              tbLimiterOut = 63;
         static constexpr int numSources = 64;   // every bit of a 64-bit cable mask
         // Destinations
-        static constexpr int tapeIn = 0, returnIn = 16, channelIn = 32, talkbackIn = 48, tbLimiterIn = 49, tbSend = 50;
-        static constexpr int numDestinations = 51;
+        static constexpr int tapeIn = 0, returnIn = 16, channelIn = 32, talkbackIn = 48, tbLimiterIn = 49, tbSend = 50,
+                             interfaceOut = 51;   // interface outputs 1..numInterfaceOuts: whatever is patched in is added to them
+        static constexpr int numInterfaceOuts = 32;
+        static constexpr int numDestinations = interfaceOut + numInterfaceOuts;
 
     };
 
@@ -235,8 +237,9 @@ private:
 
     // Patch bay.
     std::array<std::atomic<std::uint64_t>, Patch::numDestinations> patch;
-    std::array<Block, Patch::numSources> patchPrevious {};      // last block of each source, for patches that point backwards
-    std::array<Block, Patch::numDestinations> patchInput {};    // summed cables into each destination
+    // On the heap: together they are far too big for the stack (the tests build engines as locals).
+    std::vector<Block> patchPrevious = std::vector<Block> (Patch::numSources);   // last block of each source, for patches that point backwards
+    std::vector<Block> patchInput = std::vector<Block> (Patch::numDestinations); // summed cables into each destination
     std::array<Block, Config::numSubs> subMono {};
     Block returnL {}, returnR {};
     Dsp::DelayLine mainDelayL, mainDelayR;

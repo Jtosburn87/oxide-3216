@@ -178,6 +178,8 @@ void AudioEngine::initialise (const juce::XmlElement* savedState)
         setInterfaceInput (Patch::talkbackIn, routing->getIntAttribute ("talkbackIn", -1));
         setInterfaceInput (Patch::tbLimiterIn, routing->getIntAttribute ("tbLimiterIn", -1));
         setInterfaceInput (Patch::tbSend, routing->getIntAttribute ("tbSend", -1));
+        for (int k = 0; k < Patch::numInterfaceOuts; ++k)
+            setInterfaceInput (Patch::interfaceOut + k, routing->getIntAttribute ("interfaceOut" + juce::String (k + 1), -1));
         setMainOutput (0, routing->getIntAttribute ("mainL", 0));
         setMainOutput (1, routing->getIntAttribute ("mainR", 1));
         setMonitorOutput (0, routing->getIntAttribute ("monitorL", -1));
@@ -212,6 +214,9 @@ std::unique_ptr<juce::XmlElement> AudioEngine::createStateXml() const
     for (auto [dest, key] : { std::pair { Patch::talkbackIn, "talkbackIn" }, std::pair { Patch::tbLimiterIn, "tbLimiterIn" }, std::pair { Patch::tbSend, "tbSend" } })
         if (getInterfaceInput (dest) >= 0)
             routing->setAttribute (key, getInterfaceInput (dest));
+    for (int k = 0; k < Patch::numInterfaceOuts; ++k)
+        if (getInterfaceInput (Patch::interfaceOut + k) >= 0)
+            routing->setAttribute ("interfaceOut" + juce::String (k + 1), getInterfaceInput (Patch::interfaceOut + k));
     routing->setAttribute ("mainL", getMainOutput (0));
     routing->setAttribute ("mainR", getMainOutput (1));
     routing->setAttribute ("monitorL", getMonitorOutput (0));
@@ -764,6 +769,19 @@ void AudioEngine::render (const float* const* inputs, int numInputs, float* cons
             monitorSolo.prepare (currentSampleRate, soloT, 10.0f);
             monitorGainS.prepare (currentSampleRate, levelT);
         }
+
+        // Interface outs on the patch bay: whatever is patched into one (any output, or an interface input)
+        // is added to what that output already carries. Not while exporting.
+        if (mainLeft == nullptr && mainRight == nullptr)
+            for (int k = 0; k < Patch::numInterfaceOuts; ++k)
+            {
+                const int d = Patch::interfaceOut + k;
+                if (patch[(size_t) d].load (std::memory_order_relaxed) == 0 && interfaceIn[d] == nullptr)
+                    continue;
+                if (float* out = outFor (k))
+                    if (const float* signal = patchedInput (d, nullptr, interfaceAt (d, start), 4, n))
+                        juce::FloatVectorOperations::add (out + start, signal, n);
+            }
 
         // Keep this block of every patched source for cables that point backwards in the signal flow.
         if (patchedSources != 0)

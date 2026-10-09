@@ -1038,6 +1038,34 @@ namespace
         e.setPatch (P::channelIn, 0);
     }
 
+    void testInterfaceOuts()
+    {
+        std::puts ("Patch bay: interface outs take anything patched into them");
+        TestEngine e;
+        using P = AudioEngine::Patch;
+        e.prepare (48000.0, channels ({ 0, 1 }), channels ({ 0, 1, 2, 3 }));
+        mapOnly (e, 0, 0);
+        Buffers b (2, 4, 256);
+        std::fill (b.in[0].begin(), b.in[0].end(), 0.25f);
+        std::fill (b.in[1].begin(), b.in[1].end(), 0.5f);
+
+        settle (e, b);
+        check (b.out[3][100] == 0.0f, "nothing patched: output 4 is silent");
+
+        e.setPatch (P::interfaceOut + 3, std::uint64_t (1) << P::channelOut);   // channel 1 direct out -> interface out 4
+        settle (e, b);
+        check (near (b.out[3][100], 0.25f), "channel 1 direct out patched into interface out 4");
+
+        e.setInterfaceInput (P::interfaceOut + 3, 1);   // and interface input 2 straight through
+        b.run (e);
+        check (near (b.out[3][100], 0.75f), "an interface input patched in adds to it");
+
+        e.setPatch (P::interfaceOut + 3, 0);
+        e.setInterfaceInput (P::interfaceOut + 3, -1);
+        b.run (e);
+        check (b.out[3][100] == 0.0f, "unpatched: silent again");
+    }
+
     void testTapeOutMeters()
     {
         std::puts ("Meter bridge: each track's tape out peak, read and reset");
@@ -2172,6 +2200,7 @@ int main (int argc, char** argv)
     testSpeedAndPitch();
     testEraseSections();
     testTalkback();
+    testInterfaceOuts();
     testPreampColour();
     testBusCompressor();
     testMasterSection();
