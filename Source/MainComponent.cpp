@@ -17,11 +17,10 @@ MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionControll
       patchBay (e, [this] { if (saveSettings) saveSettings(); })
 {
     audioButton.onClick = [this] { openAudioSettings(); };
-    toneButton.setClickingTogglesState (true);
-    toneButton.setTooltip ("Sends a 440 Hz tone at -18 dBFS to the main outputs");
-    toneButton.onClick = [this] { engine.testToneOn.store (toneButton.getToggleState()); };
-    fitButton.setTooltip ("Zoom so the whole console fits the window");
-    fitButton.onClick = [this] { fitToWindow(); };
+    vFitButton.setTooltip ("Zoom so the console's full height fits the window");
+    vFitButton.onClick = [this] { fitToWindow (true, false); };
+    hFitButton.setTooltip ("Zoom so the console's full width fits the window");
+    hFitButton.onClick = [this] { fitToWindow (false, true); };
     patchButton.setTooltip ("Open the patch bay");
     patchButton.onClick = [this] { patchBay.setVisible (true); patchBay.toFront (true); };
     patchBay.onClose = [this] { patchBay.setVisible (false); patchButton.grabKeyboardFocus(); };
@@ -33,6 +32,7 @@ MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionControll
     sessionButton.onClick = [this] { showSessionMenu(); };
     sectionsButton.setTooltip ("Sections of the console in windows of their own; unlock the channel chain order");
     desk.setChainUnlocked (settings.getBoolValue ("chainUnlocked"));
+    desk.setCassetteAnimated (settings.getBoolValue ("cassetteAnimation", true));
     sectionsButton.onClick = [this] { showSectionsMenu(); };
     // Minimised strip sections are remembered between launches.
     desk.setCollapsed (Desk::inputSection, settings.getIntValue ("collapsed.input"));
@@ -69,9 +69,12 @@ MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionControll
     statusLabel.setColour (juce::Label::textColourId, bridgeText);
     statusLabel.setJustificationType (juce::Justification::centredRight);
 
-    for (juce::Component* c : { (juce::Component*) &sessionButton, (juce::Component*) &audioButton, (juce::Component*) &toneButton, (juce::Component*) &zoomLabel,
-                                (juce::Component*) &zoomSlider, (juce::Component*) &fitButton, (juce::Component*) &patchButton, (juce::Component*) &pluginsButton, (juce::Component*) &sectionsButton, (juce::Component*) &statusLabel })
+    for (juce::Component* c : { (juce::Component*) &zoomLabel, (juce::Component*) &zoomSlider, (juce::Component*) &statusLabel })
         addAndMakeVisible (c);
+
+    // The app buttons sit on the console, in a column between the tape machine and the bus compressor.
+    for (auto* b : { &sessionButton, &audioButton, &patchButton, &pluginsButton, &sectionsButton, &vFitButton, &hFitButton })
+        desk.getAppButtons().addAndMakeVisible (b);
 
     deskHolder.addAndMakeVisible (desk);
     viewport.setViewedComponent (&deskHolder, false);
@@ -120,11 +123,20 @@ void MainComponent::applyZoom()
     deskHolder.setSize (juce::roundToInt ((float) desk.getWidth() * z), juce::roundToInt ((float) desk.getHeight() * z));
 }
 
-void MainComponent::fitToWindow()
+void MainComponent::fitToWindow (bool height, bool width)
 {
     const float zw = (float) viewport.getWidth() / (float) desk.getWidth();
     const float zh = (float) viewport.getHeight() / (float) desk.getHeight();
-    zoomSlider.setValue (juce::jlimit (30.0, 200.0, std::floor (juce::jmin (zw, zh) * 100.0)), juce::sendNotificationSync);
+    const float bar = (float) viewport.getScrollBarThickness();
+
+    // Fitting one way only: when the other way overflows, its scroll bar takes some of the room.
+    float z = juce::jmin (zw, zh);
+    if (height && ! width)
+        z = zh * (float) desk.getWidth() > (float) viewport.getWidth() ? ((float) viewport.getHeight() - bar) / (float) desk.getHeight() : zh;
+    else if (width && ! height)
+        z = zw * (float) desk.getHeight() > (float) viewport.getHeight() ? ((float) viewport.getWidth() - bar) / (float) desk.getWidth() : zw;
+
+    zoomSlider.setValue (juce::jlimit (30.0, 200.0, std::floor (z * 100.0)), juce::sendNotificationSync);
 }
 
 void MainComponent::openAudioSettings()
@@ -226,23 +238,9 @@ void MainComponent::resized()
 {
     auto bar = getLocalBounds().removeFromTop (topBarH).reduced (14, 9);
     bar.removeFromLeft (214);
-    sessionButton.setBounds (bar.removeFromLeft (90));
-    bar.removeFromLeft (8);
-    audioButton.setBounds (bar.removeFromLeft (120));
-    bar.removeFromLeft (8);
-    toneButton.setBounds (bar.removeFromLeft (100));
-    bar.removeFromLeft (16);
     zoomLabel.setBounds (bar.removeFromLeft (48));
     zoomSlider.setBounds (bar.removeFromLeft (150));
-    bar.removeFromLeft (6);
-    fitButton.setBounds (bar.removeFromLeft (60));
-    bar.removeFromLeft (8);
-    patchButton.setBounds (bar.removeFromLeft (100));
-    bar.removeFromLeft (8);
-    pluginsButton.setBounds (bar.removeFromLeft (90));
-    bar.removeFromLeft (8);
-    sectionsButton.setBounds (bar.removeFromLeft (90));
-    bar.removeFromLeft (8);
+    bar.removeFromLeft (16);
     statusLabel.setBounds (bar);
 
     viewport.setBounds (getLocalBounds().withTrimmedTop (topBarH));
@@ -428,6 +426,13 @@ void MainComponent::showSectionsMenu()
     {
         settings.setValue ("chainUnlocked", ! unlocked);
         desk.setChainUnlocked (! unlocked);
+        if (saveSettings) saveSettings();
+    });
+    const bool animated = settings.getBoolValue ("cassetteAnimation", true);
+    m.addItem ("Animate the cassette (turn off to save CPU)", true, animated, [this, animated]
+    {
+        settings.setValue ("cassetteAnimation", ! animated);
+        desk.setCassetteAnimated (! animated);
         if (saveSettings) saveSettings();
     });
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (sectionsButton));

@@ -22,4 +22,6 @@ struct BusPointers
     float* subL[Config::numSubs] {};
     float* subR[Config::numSubs] {};
     float* aux[Config::numAux] {};
+    float* soloL = nullptr;   // solo bus: what the monitor outs carry while anything is soloed
+    float* soloR = nullptr;
 };

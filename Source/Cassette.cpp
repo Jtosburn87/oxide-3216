@@ -4,11 +4,20 @@
 namespace
 {
     using juce::Colour;
+    using Pt = juce::Point<float>;
     constexpr float pi = juce::MathConstants<float>::pi;
 
-    // Window and hub positions (cassette coordinates).
-    const juce::Rectangle<float> window { 58.0f, 102.0f, 156.0f, 42.0f };
-    const juce::Point<float> leftHub { 102.0f, 123.0f }, rightHub { 170.0f, 123.0f };
+    // Layout in cassette coordinates, roughly to the proportions of a real compact cassette.
+    const juce::Rectangle<float> shellBox { 1.0f, 1.0f, Cassette::width - 2.0f, Cassette::height - 2.0f };
+    const juce::Rectangle<float> labelBox { 18.0f, 8.0f, 236.0f, 116.0f };
+    const juce::Rectangle<float> window   { 50.0f, 50.0f, 172.0f, 52.0f };
+    const Pt hubs[2]   { { 84.0f, 76.0f }, { 188.0f, 76.0f } };
+    const Pt guides[2] { { 26.0f, 155.0f }, { 246.0f, 155.0f } };   // guide rollers in the bottom corners
+    constexpr float hubR = 17.0f, packMax = 50.0f, guideR = 5.0f;
+
+    // Openings along the bottom edge, where the heads, pinch rollers and guides reach the tape.
+    const juce::Rectangle<float> openings[] { { 60, 160, 12, 11 }, { 92, 160, 16, 11 }, { 122, 150, 28, 21 },
+                                              { 164, 160, 16, 11 }, { 200, 160, 12, 11 } };
 
     juce::String handwritingFont()
     {
@@ -23,11 +32,27 @@ namespace
         return name;
     }
 
-    void radialSpot (juce::Graphics& g, juce::Rectangle<float> area, juce::Point<float> centre, float radius, Colour c)
+    /** A point at radius r and angle a (clockwise from 12 o'clock, as Path::addPieSegment). */
+    Pt polar (Pt c, float r, float a) { return { c.x + r * std::sin (a), c.y - r * std::cos (a) }; }
+
+    /** Where a line from p touches the circle (c, r), on its outer side (left or right). */
+    Pt tangentPoint (Pt c, float r, Pt p, bool leftSide)
     {
-        juce::ColourGradient grad (c, centre, c.withAlpha (0.0f), centre.translated (radius, 0.0f), true);
-        g.setGradientFill (grad);
-        g.fillRect (area);
+        const auto d = p - c;
+        const float dist = d.getDistanceFromOrigin();
+        if (dist <= r)
+            return c + d * (r / juce::jmax (dist, 0.001f));
+        const float base = std::atan2 (d.y, d.x), off = std::acos (r / dist);
+        const Pt a { c.x + r * std::cos (base + off), c.y + r * std::sin (base + off) };
+        const Pt b { c.x + r * std::cos (base - off), c.y + r * std::sin (base - off) };
+        return (leftSide ? a.x < b.x : a.x > b.x) ? a : b;
+    }
+
+    juce::Path roundedBox (juce::Rectangle<float> r, float corner)
+    {
+        juce::Path p;
+        p.addRoundedRectangle (r, corner);
+        return p;
     }
 }
 
@@ -39,7 +64,7 @@ Cassette::Cassette()
     label.setReturnKeyStartsNewLine (false);
     label.setInputRestrictions (30);
     label.setJustification (juce::Justification::centredLeft);
-    label.setFont (juce::Font (juce::FontOptions (handwritingFont(), 25.0f, juce::Font::bold)));
+    label.setFont (juce::Font (juce::FontOptions (handwritingFont(), 22.0f, juce::Font::bold)));
     label.setColour (juce::TextEditor::backgroundColourId, juce::Colours::transparentBlack);
     label.setColour (juce::TextEditor::textColourId, Colour (0xff1d2f6b));
     label.setColour (juce::TextEditor::outlineColourId, juce::Colours::transparentBlack);
@@ -60,207 +85,274 @@ Cassette::Cassette()
 
 void Cassette::resized()
 {
-    // Written slightly askew across the label.
-    label.setBounds (22, 38, 228, 34);
-    label.setTransform (juce::AffineTransform::rotation (-1.4f * pi / 180.0f, 22.0f, 55.0f));
+    // Written slightly askew across the top of the label.
+    label.setBounds (24, 18, 224, 30);
+    label.setTransform (juce::AffineTransform::rotation (-1.2f * pi / 180.0f, 24.0f, 33.0f));
 }
 
-void Cassette::update (double seconds, bool running, float secondsPerTurn, float progress, const juce::String& speedText)
+void Cassette::setAnimated (bool shouldAnimate)
+{
+    animated = shouldAnimate;
+    blur = { 0.0f, 0.0f };
+    repaint();
+}
+
+float Cassette::packRadius (int reel) const
+{
+    // The tape on a pack is proportional to its area (minus the hub's).
+    const float share = reel == 0 ? 1.0f - packProgress : packProgress;
+    return std::sqrt (hubR * hubR + (packMax * packMax - hubR * hubR) * share);
+}
+
+void Cassette::update (double seconds, float hubTurnsPerSecond, float progress, const juce::String& speedText)
 {
     if (! label.hasKeyboardFocus (true) && label.getText() != name.toString())
         label.setText (name.toString(), false);
 
     bool changed = false;
-    if (running && secondsPerTurn != 0.0f)   // negative: the reels turn the other way (rewinding)
+    progress = juce::jlimit (0.0f, 1.0f, progress);
+    if (std::abs (progress - packProgress) > (animated ? 0.001f : 0.01f)) { packProgress = progress; changed = true; }
+    if (speedText != speed) { speed = speedText; changed = true; }
+
+    std::array<float, 2> newBlur { 0.0f, 0.0f };
+    if (animated && hubTurnsPerSecond != 0.0f)
     {
-        hubAngle = std::fmod (hubAngle - (float) seconds / secondsPerTurn * 2.0f * pi, 2.0f * pi);   // turns anticlockwise
+        // The tape moves at one speed; each reel turns at that speed over its own radius. Above about
+        // 25 degrees a frame the reels would strobe, so they are held there and blurred instead.
+        const float tapeSpeed = 2.0f * pi * hubR * hubTurnsPerSecond;   // px per second
+        for (int i = 0; i < 2; ++i)
+        {
+            const float step = tapeSpeed / packRadius (i) * (float) seconds;
+            newBlur[(size_t) i] = juce::jlimit (0.0f, 1.0f, (std::abs (step) - 0.2f) / 0.3f);
+            reelAngle[(size_t) i] = std::fmod (reelAngle[(size_t) i] - juce::jlimit (-0.45f, 0.45f, step), 2.0f * pi);   // play: anticlockwise
+        }
         changed = true;
     }
-    progress = juce::jlimit (0.0f, 1.0f, progress);
-    if (std::abs (progress - packProgress) > 0.001f) { packProgress = progress; changed = true; }
-    if (speedText != speed) { speed = speedText; changed = true; }
+    if (newBlur != blur) { blur = newBlur; changed = true; }
 
     if (changed)
         repaint();
 }
 
-void Cassette::drawHub (juce::Graphics& g, juce::Point<float> c) const
+void Cassette::drawReel (juce::Graphics& g, int reel) const
 {
-    const float r = 13.0f;
-    // Spokes: alternating light and dark wedges, turned by the hub angle.
-    for (int i = 0; i < 12; ++i)
+    const auto c = hubs[reel];
+    const float r = packRadius (reel), a = reelAngle[(size_t) reel], b = blur[(size_t) reel];
+
+    // Tape pack: dark brown oxide, a lighter edge, faint winding rings and a sheen that turns with it.
+    if (r > hubR + 0.5f)
     {
-        juce::Path wedge;
-        const float a0 = hubAngle + (float) i * pi / 6.0f;
-        wedge.addPieSegment (c.x - r, c.y - r, 2 * r, 2 * r, a0, a0 + pi / 6.0f, 0.27f);
-        g.setColour (i % 2 == 0 ? Colour (0xffd9d4c0) : Colour (0xff7a7565));
-        g.fillPath (wedge);
+        juce::ColourGradient pack (Colour (0xff24170c), c, Colour (0xff4a3019), c.translated (r, 0.0f), true);
+        pack.addColour (0.85, Colour (0xff3a2512));
+        g.setGradientFill (pack);
+        g.fillEllipse (c.x - r, c.y - r, 2 * r, 2 * r);
+        g.setColour (Colour (0xff8a6a48).withAlpha (0.08f));
+        for (float f : { 0.33f, 0.52f, 0.71f, 0.87f })
+        {
+            const float rr = hubR + (r - hubR) * f;
+            g.drawEllipse (c.x - rr, c.y - rr, 2 * rr, 2 * rr, 0.8f);
+        }
+        g.setColour (Colour (0xff9a7650).withAlpha (0.4f));
+        g.drawEllipse (c.x - r + 0.5f, c.y - r + 0.5f, 2 * r - 1.0f, 2 * r - 1.0f, 1.0f);
+
+        g.setColour (Colour (0xffd8b48a).withAlpha (0.07f * (1.0f - b)));
+        for (int k = 0; k < 3; ++k)
+        {
+            juce::Path sheen;
+            const float a0 = a + (float) k * 2.0f * pi / 3.0f;
+            sheen.addPieSegment (c.x - r, c.y - r, 2 * r, 2 * r, a0, a0 + 0.35f, hubR / r);
+            g.fillPath (sheen);
+        }
     }
-    g.setColour (Colour (0xff0a0a0a));
-    g.fillEllipse (c.x - r * 0.25f, c.y - r * 0.25f, r * 0.5f, r * 0.5f);
-    g.setColour (Colour (0xffe6e2d2));
-    g.drawEllipse (c.x - r, c.y - r, 2 * r, 2 * r, 2.0f);
+
+    // White hub: the drive hole with six teeth, and the clamp that holds the tape leader.
+    g.setColour (Colour (0xffe9e5d9));
+    g.fillEllipse (c.x - hubR, c.y - hubR, 2 * hubR, 2 * hubR);
+    g.setColour (Colour (0xffb9b4a6));
+    g.drawEllipse (c.x - hubR + 0.5f, c.y - hubR + 0.5f, 2 * hubR - 1.0f, 2 * hubR - 1.0f, 1.0f);
+    g.drawEllipse (c.x - 12.5f, c.y - 12.5f, 25.0f, 25.0f, 0.8f);
+
+    const float hole = 9.5f;
+    g.setColour (Colour (0xff0b0b0b));
+    g.fillEllipse (c.x - hole, c.y - hole, 2 * hole, 2 * hole);
+
+    g.setColour (Colour (0xffe9e5d9).withAlpha (1.0f - 0.65f * b));
+    for (int k = 0; k < 6; ++k)
+    {
+        const float ak = a + (float) k * pi / 3.0f;
+        g.drawLine ({ polar (c, hole + 0.5f, ak), polar (c, 6.0f, ak) }, 2.6f);
+    }
+    if (b > 0.0f)   // spinning too fast to see the teeth: a grey blur ring instead
+    {
+        g.setColour (Colour (0xffe9e5d9).withAlpha (0.35f * b));
+        g.drawEllipse (c.x - 7.8f, c.y - 7.8f, 15.6f, 15.6f, 3.4f);
+    }
+
+    g.setColour (Colour (0xff7d786b).withAlpha (1.0f - 0.7f * b));
+    g.drawLine ({ polar (c, 13.0f, a + 0.5f), polar (c, hubR - 0.5f, a + 0.5f) }, 3.0f);
 }
 
 void Cassette::paint (juce::Graphics& g)
 {
-    const auto body = juce::Rectangle<float> (1.0f, 1.0f, width - 2.0f, height - 2.0f);
+    const auto shell = roundedBox (shellBox, 8.0f);
 
-    // Drop shadow and worn plastic shell.
     g.setColour (juce::Colours::black.withAlpha (0.5f));
-    g.fillRoundedRectangle (body.translated (0.0f, 3.0f), 9.0f);
+    g.fillRoundedRectangle (shellBox.translated (0.0f, 3.0f), 8.0f);
 
-    juce::Path shell;
-    shell.addRoundedRectangle (body, 9.0f);
     g.saveState();
     g.reduceClipRegion (shell);
-    g.setGradientFill (juce::ColourGradient (Colour (0xffbab29a), 0.0f, 0.0f, Colour (0xffa49c85), 0.0f, (float) height, false));
-    g.fillRect (body);
-    radialSpot (g, body, { 49.0f, 21.0f }, 150.0f, juce::Colours::white.withAlpha (0.14f));
-    radialSpot (g, body, { 239.0f, 158.0f }, 160.0f, Colour (0xff462d14).withAlpha (0.4f));
-    g.setGradientFill (juce::ColourGradient (Colour (0x00462d14), 0.0f, height - 22.0f, Colour (0x4d462d14), 0.0f, (float) height, false));
-    g.fillRect (body);
-    g.restoreState();
-    g.setColour (Colour (0xff23211d));
-    g.drawRoundedRectangle (body, 9.0f, 2.0f);
-    g.setColour (juce::Colours::white.withAlpha (0.1f));
-    g.drawRoundedRectangle (body.reduced (2.0f), 7.5f, 1.0f);
 
-    // Stained paper label with ruled lines and a faded red stripe.
-    const auto lab = juce::Rectangle<float> (14.0f, 14.0f, 244.0f, 80.0f);
-    g.saveState();
-    g.reduceClipRegion (lab.toNearestInt());
-    g.setColour (Colour (0xffe6dcc0));
-    g.fillRect (lab);
-    radialSpot (g, lab, { lab.getX() + lab.getWidth() * 0.12f, lab.getY() + 64.0f }, 70.0f, Colour (0x476e5023));
-    radialSpot (g, lab, { lab.getX() + lab.getWidth() * 0.92f, lab.getY() + 8.0f }, 60.0f, Colour (0x385a3c19));
-    g.setColour (Colour (0x42284682));
-    for (float y : { 45.0f, 65.0f })
-        g.fillRect (lab.getX(), lab.getY() + y, lab.getWidth(), 1.0f);
-    g.setColour (Colour (0xffb04a3c).withAlpha (0.78f));
-    g.fillRect (lab.withHeight (11.0f));
-    g.setColour (Colour (0x403c2d14));
-    g.fillRect (lab.getX() + lab.getWidth() * 0.38f, lab.getY(), 1.0f, lab.getHeight());
-    g.setColour (juce::Colours::white.withAlpha (0.35f));
-    g.fillRect (lab.getX() + lab.getWidth() * 0.38f + 1.0f, lab.getY(), 1.0f, lab.getHeight());
+    // Inside the shell: the packs, the guide rollers and the tape path between them.
+    g.setColour (Colour (0xff121314));
+    g.fillRect (shellBox);
+    drawReel (g, 0);
+    drawReel (g, 1);
 
-    g.setColour (Colour (0xff5a4d36));
-    g.setFont (ConsoleLookAndFeel::uiFont (10.5f, true).withExtraKerningFactor (0.06f));
-    const auto meta = lab.withTrimmedLeft (8.0f).withTrimmedRight (8.0f).removeFromBottom (15.0f);
-    g.drawText ("SIDE A", meta, juce::Justification::centredLeft, false);
-    g.drawText (speed.toUpperCase(), meta, juce::Justification::centredRight, false);
-    g.restoreState();
-    g.setColour (Colour (0x593c2d14));
-    g.drawRoundedRectangle (lab, 2.0f, 1.0f);
-
-    // Window: dark tape packs that move across as the tape plays, and the two hubs.
-    g.saveState();
-    juce::Path win;
-    win.addRoundedRectangle (window, 4.0f);
-    g.reduceClipRegion (win);
-    g.setColour (Colour (0xff17120d));
-    g.fillRect (window);
-    g.setColour (Colour (0xff3b2615));
-    g.fillRect (window.getX(), window.getBottom() - 8.0f, window.getWidth(), 2.0f);   // the tape itself
-
-    const float leftD = 56.0f - 28.0f * packProgress, rightD = 30.0f + 26.0f * packProgress;
-    for (auto [c, d] : { std::pair { leftHub, leftD }, std::pair { rightHub, rightD } })
+    const auto tapePath = [this]
     {
-        juce::ColourGradient pack (Colour (0xff2b1a0c), c, Colour (0xff22150a), c.translated (d * 0.5f, 0.0f), true);
-        pack.addColour (0.55, Colour (0xff2b1a0c));
-        pack.addColour (0.58, Colour (0xff3a2410));
-        g.setGradientFill (pack);
-        g.fillEllipse (c.x - d * 0.5f, c.y - d * 0.5f, d, d);
+        const Pt outL { guides[0].x - guideR, guides[0].y }, outR { guides[1].x + guideR, guides[1].y };
+        juce::Path p;
+        p.startNewSubPath (tangentPoint (hubs[0], packRadius (0), outL, true));
+        p.lineTo (outL);
+        p.quadraticTo (outL.x, guides[0].y + guideR, guides[0].x, guides[0].y + guideR);
+        p.lineTo (guides[1].x, guides[1].y + guideR);
+        p.quadraticTo (outR.x, guides[1].y + guideR, outR.x, outR.y);
+        p.lineTo (tangentPoint (hubs[1], packRadius (1), outR, false));
+        return p;
+    }();
+    g.setColour (Colour (0xff7a4e26));
+    g.strokePath (tapePath, juce::PathStrokeType (1.8f));
+    for (auto p : guides)
+    {
+        g.setColour (Colour (0xffd5d1c6));
+        g.fillEllipse (p.x - guideR + 1.0f, p.y - guideR + 1.0f, 2 * guideR - 2.0f, 2 * guideR - 2.0f);
+        g.setColour (Colour (0xff6e6a60));
+        g.fillEllipse (p.x - 1.5f, p.y - 1.5f, 3.0f, 3.0f);
     }
-    drawHub (g, leftHub);
-    drawHub (g, rightHub);
 
-    // Glare across the window.
+    // Smoked plastic over everything but the clear window.
+    juce::Path smoke;
+    smoke.addRoundedRectangle (shellBox, 8.0f);
+    smoke.addRoundedRectangle (window, 6.0f);
+    smoke.setUsingNonZeroWinding (false);
+    g.setGradientFill (juce::ColourGradient (Colour (0xb8383b3f), 0.0f, 0.0f, Colour (0xc41d1f22), 0.0f, (float) height, false));
+    g.fillPath (smoke);
+    juce::ColourGradient sheen (juce::Colours::white.withAlpha (0.08f), 0.0f, 0.0f, juce::Colours::transparentWhite, 120.0f, 90.0f, false);
+    g.setGradientFill (sheen);
+    g.fillPath (smoke);
+
+    // Head area along the bottom: a raised trapezoid with the openings, the felt pressure pad, capstan holes.
+    juce::Path ridge;
+    ridge.addQuadrilateral (60.0f, 138.0f, 212.0f, 138.0f, 222.0f, (float) height - 1.0f, 50.0f, (float) height - 1.0f);
+    g.setColour (Colour (0xff1a1b1d));
+    g.fillPath (ridge);
+    g.setColour (juce::Colours::white.withAlpha (0.07f));
+    g.drawLine (60.0f, 138.5f, 212.0f, 138.5f, 1.0f);
+    for (auto o : openings)
+    {
+        g.setColour (Colour (0xff050505));
+        g.fillRect (o);
+        g.saveState();
+        g.reduceClipRegion (o.toNearestInt());
+        g.setColour (Colour (0xff6a4423));
+        g.fillRect (o.getX(), guides[0].y + guideR - 0.8f, o.getWidth(), 1.8f);
+        g.restoreState();
+    }
+    g.setColour (Colour (0xffb59a72));
+    g.fillRect (130.0f, 152.0f, 12.0f, 6.0f);   // felt pad, behind the tape
+    g.setColour (Colour (0xff8a8a86));
+    g.fillRect (133.0f, 150.0f, 6.0f, 2.0f);    // its spring
+    for (float x : { 82.0f, 190.0f })
+    {
+        g.setColour (Colour (0xff050505));
+        g.fillEllipse (x - 3.5f, 148.5f, 7.0f, 7.0f);
+        g.setColour (Colour (0xff3d3f42));
+        g.drawEllipse (x - 3.5f, 148.5f, 7.0f, 7.0f, 1.0f);
+    }
+    g.restoreState();
+
+    g.setColour (Colour (0xff0d0e0f));
+    g.drawRoundedRectangle (shellBox, 8.0f, 2.0f);
+    g.setColour (juce::Colours::white.withAlpha (0.12f));
+    g.drawRoundedRectangle (shellBox.reduced (2.5f), 6.5f, 1.0f);
+
+    // Paper label, with the window cut out of it.
+    juce::Path paper;
+    paper.addRoundedRectangle (labelBox, 3.0f);
+    paper.addRoundedRectangle (window.expanded (4.0f), 8.0f);
+    paper.setUsingNonZeroWinding (false);
+    g.saveState();
+    g.reduceClipRegion (paper);
+    g.setColour (Colour (0xffece4cd));
+    g.fillRect (labelBox);
+    juce::ColourGradient age (Colour (0x00000000), labelBox.getCentreX(), labelBox.getCentreY(),
+                              Colour (0x1e6e5023), labelBox.getX(), labelBox.getY(), true);
+    g.setGradientFill (age);
+    g.fillRect (labelBox);
+
+    g.setColour (Colour (0xffc0392b));
+    g.fillRect (labelBox.withHeight (8.0f));
+    g.setColour (Colour (0xffe08a2e));
+    g.fillRect (labelBox.getX(), labelBox.getY() + 8.0f, labelBox.getWidth(), 2.5f);
+    g.setColour (Colour (0x40284682));
+    g.fillRect (labelBox.getX() + 4.0f, 46.5f, labelBox.getWidth() - 8.0f, 0.8f);   // the line the name is written on
+
+    const auto sideCol = juce::Rectangle<float> (labelBox.getX(), window.getY(), window.getX() - 4.0f - labelBox.getX(), window.getHeight());
+    const auto speedCol = juce::Rectangle<float> (window.getRight() + 4.0f, window.getY(), labelBox.getRight() - window.getRight() - 4.0f, window.getHeight());
+    g.setColour (Colour (0xff3b3328));
+    g.setFont (ConsoleLookAndFeel::uiFont (30.0f, true));
+    g.drawText ("A", sideCol, juce::Justification::centred, false);
+    const auto ips = speed.upToFirstOccurrenceOf (" ", false, false);
+    g.setFont (ConsoleLookAndFeel::uiFont (ips.length() > 2 ? 14.0f : 17.0f, true));
+    g.drawText (ips, speedCol.withTrimmedBottom (20.0f), juce::Justification::centredBottom, false);
+    g.setFont (ConsoleLookAndFeel::uiFont (9.0f, true));
+    g.drawText ("IPS", speedCol.withTrimmedTop (speedCol.getHeight() - 18.0f), juce::Justification::centredTop, false);
+
+    g.setColour (Colour (0xff6a5c45));
+    g.setFont (ConsoleLookAndFeel::uiFont (8.5f, true).withExtraKerningFactor (0.08f));
+    const auto meta = labelBox.withTrimmedTop (window.getBottom() + 6.0f - labelBox.getY()).reduced (8.0f, 2.0f);
+    g.drawText ("NORMAL BIAS  TYPE I", meta, juce::Justification::centredLeft, false);
+    g.drawText ("CONSOLE 32", meta, juce::Justification::centredRight, false);
+    g.restoreState();
+    g.setColour (Colour (0x50362a14));
+    g.drawRoundedRectangle (labelBox, 3.0f, 1.0f);
+
+    // Window: moulded frame and a glare across the clear plastic.
+    g.saveState();
+    g.reduceClipRegion (roundedBox (window, 6.0f));
     juce::ColourGradient glare (juce::Colours::transparentWhite, window.getX(), window.getY(),
                                 juce::Colours::transparentWhite, window.getRight(), window.getBottom(), false);
-    glare.addColour (0.44, juce::Colours::white.withAlpha (0.16f));
+    glare.addColour (0.38, juce::Colours::white.withAlpha (0.13f));
+    glare.addColour (0.46, juce::Colours::transparentWhite);
     g.setGradientFill (glare);
     g.fillRect (window);
     g.restoreState();
-    g.setColour (Colour (0xff0a0a0a));
-    g.drawRoundedRectangle (window, 4.0f, 2.0f);
+    g.setColour (Colour (0xff101112));
+    g.drawRoundedRectangle (window, 6.0f, 2.0f);
+    g.setColour (juce::Colours::white.withAlpha (0.18f));
+    g.drawRoundedRectangle (window.reduced (1.5f), 5.0f, 0.8f);
 
-    // Bottom ridge with the two capstan holes.
-    juce::Path ridge;
-    ridge.addQuadrilateral (65.5f, 150.0f, 206.5f, 150.0f, 218.0f, (float) height - 1.0f, 54.0f, (float) height - 1.0f);
-    g.setColour (Colour (0xff1c1b18));
-    g.fillPath (ridge);
-    for (float x : { 80.0f, 184.0f })
+    // Screws: four corners and one below the label.
+    for (auto p : { Pt (9.5f, 12.0f), Pt (262.5f, 12.0f), Pt (9.5f, 160.0f), Pt (262.5f, 160.0f), Pt (136.0f, 131.0f) })
     {
-        g.setColour (Colour (0xff070707));
-        g.fillEllipse (x, 158.0f, 8.0f, 8.0f);
-        g.setColour (Colour (0xff3a3833));
-        g.drawEllipse (x, 158.0f, 8.0f, 8.0f, 1.0f);
-    }
-
-    // Corner screws.
-    for (auto p : { juce::Point<float> (9.5f, 9.5f), juce::Point<float> (262.5f, 9.5f),
-                    juce::Point<float> (9.5f, 162.5f), juce::Point<float> (262.5f, 162.5f) })
-    {
-        juce::ColourGradient screw (Colour (0xff9b9b92), p, Colour (0xff4a4a44), p.translated (4.5f, 0.0f), true);
+        juce::ColourGradient screw (Colour (0xffb8b8b0), p.translated (-1.5f, -1.5f), Colour (0xff4a4a44), p.translated (4.5f, 0.0f), true);
         g.setGradientFill (screw);
-        g.fillEllipse (p.x - 4.5f, p.y - 4.5f, 9.0f, 9.0f);
+        g.fillEllipse (p.x - 4.0f, p.y - 4.0f, 8.0f, 8.0f);
         g.setColour (Colour (0xff2a2a2a));
-        g.drawLine (p.x - 2.5f, p.y - 2.5f, p.x + 2.5f, p.y + 2.5f, 1.2f);
+        g.drawLine (p.x - 2.2f, p.y, p.x + 2.2f, p.y, 1.1f);
+        g.drawLine (p.x, p.y - 2.2f, p.x, p.y + 2.2f, 1.1f);
     }
 }
 
 void Cassette::paintOverChildren (juce::Graphics& g)
 {
-    // Wear on top of everything (after the prototype's SVG): coffee ring, cracks, chipped corner,
-    // a strip of old tape, scratches and smudges.
-    g.setColour (Colour (0xff6b4a1f).withAlpha (0.28f));
-    g.drawEllipse (196.0f - 17.0f, 48.0f - 17.0f, 34.0f, 34.0f, 3.0f);
-    juce::Path arc;
-    arc.startNewSubPath (178.0f, 40.0f);
-    arc.quadraticTo (186.0f, 30.0f, 200.0f, 34.0f);
-    g.setColour (Colour (0xff6b4a1f).withAlpha (0.18f));
-    g.strokePath (arc, juce::PathStrokeType (2.0f));
-
-    // Chipped corner: a piece of the shell is missing.
-    juce::Path chip;
-    chip.addTriangle (0.0f, 0.0f, 30.0f, 0.0f, 0.0f, 26.0f);
-    g.setColour (Colour (0xff0b0c0d));
-    g.fillPath (chip);
-    juce::Path chipEdge;
-    chipEdge.startNewSubPath (30.0f, 0.0f);
-    chipEdge.lineTo (12.0f, 14.0f);
-    chipEdge.lineTo (22.0f, 20.0f);
-    chipEdge.lineTo (0.0f, 26.0f);
-    g.setColour (Colour (0xff2b2924));
-    g.strokePath (chipEdge, juce::PathStrokeType (1.2f));
-
-    juce::Path crack;
-    crack.startNewSubPath (272.0f, 120.0f);
-    crack.lineTo (258.0f, 126.0f);
-    crack.lineTo (264.0f, 134.0f);
-    crack.lineTo (254.0f, 140.0f);
-    crack.lineTo (259.0f, 147.0f);
-    g.strokePath (crack, juce::PathStrokeType (1.2f));
-
-    g.saveState();
-    g.addTransform (juce::AffineTransform::rotation (-3.0f * pi / 180.0f, 204.0f, 96.0f));
-    g.setColour (Colour (0xff8b6b3c).withAlpha (0.35f));
-    g.fillRect (204.0f, 96.0f, 46.0f, 13.0f);
-    g.restoreState();
-
-    struct Line { float x1, y1, x2, y2; bool light; float alpha; };
-    for (auto l : { Line { 20, 132, 120, 148, true, 0.35f }, Line { 40, 160, 180, 112, false, 0.3f },
-                    Line { 96, 98, 250, 90, true, 0.22f },   Line { 8, 86, 70, 104, false, 0.28f },
-                    Line { 150, 168, 262, 140, true, 0.3f }, Line { 60, 118, 88, 150, false, 0.22f },
-                    Line { 214, 160, 246, 108, true, 0.25f }, Line { 120, 6, 170, 12, false, 0.25f } })
+    // A little wear: scuffs on the plastic and a smudge on the label.
+    struct Line { float x1, y1, x2, y2; float alpha; };
+    for (auto l : { Line { 30, 140, 46, 132, 0.18f }, Line { 228, 150, 250, 138, 0.15f }, Line { 120, 4, 160, 6, 0.14f } })
     {
-        g.setColour ((l.light ? juce::Colours::white : juce::Colours::black).withAlpha (l.alpha));
-        g.drawLine (l.x1, l.y1, l.x2, l.y2, 1.0f);
+        g.setColour (juce::Colours::white.withAlpha (l.alpha));
+        g.drawLine (l.x1, l.y1, l.x2, l.y2, 0.8f);
     }
-
-    g.setColour (juce::Colours::black.withAlpha (0.16f));
-    g.fillEllipse (38.0f - 14.0f, 150.0f - 5.0f, 28.0f, 10.0f);
-    g.fillEllipse (236.0f - 18.0f, 156.0f - 6.0f, 36.0f, 12.0f);
-    g.fillEllipse (250.0f - 12.0f, 22.0f - 7.0f, 24.0f, 14.0f);
+    g.setColour (Colour (0xff6e5023).withAlpha (0.08f));
+    g.fillEllipse (214.0f, 108.0f, 30.0f, 12.0f);
 }

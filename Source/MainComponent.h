@@ -11,7 +11,7 @@
 #include "SessionController.h"
 #include "SectionWindow.h"
 
-/** Top bar (name plate, audio device, zoom, Fit, status) above the zoomable desk. */
+/** Top bar (name plate, zoom, status) above the zoomable desk. The app buttons live on the desk. */
 class MainComponent : public juce::Component,
                       public juce::ApplicationCommandTarget,
                       private juce::Timer,
@@ -49,7 +49,7 @@ private:
     PluginWindows pluginWindows;
     PluginContext pluginContext;
 
-    juce::TextButton audioButton { "Audio device" }, toneButton { "Test tone" }, fitButton { "Fit" }, patchButton { "Patch bay" }, pluginsButton { "Plugins" }, sessionButton { "Session" }, sectionsButton { "Options" };
+    juce::TextButton audioButton { "Audio device" }, vFitButton { "V Fit" }, hFitButton { "H Fit" }, patchButton { "Patch bay" }, pluginsButton { "Plugins" }, sessionButton { "Session" }, sectionsButton { "Options" };
     juce::Slider zoomSlider;
     juce::Label zoomLabel, statusLabel;
 
@@ -82,5 +82,6 @@ private:
     void openAudioSettings();
     void refreshDeviceText();
     void applyZoom();
-    void fitToWindow();
+    /** Zoom so the console fits the window: its height, its width, or both. */
+    void fitToWindow (bool height = true, bool width = true);
 };

@@ -58,6 +58,17 @@ namespace
         int n;
     };
 
+    /** The engine with its input faders at unity: they default to fully down, and the tests were written
+        around signals passing straight through. */
+    struct TestEngine : AudioEngine
+    {
+        TestEngine()
+        {
+            for (auto* s : inputStrips)
+                s->controls.fader->set (80.0f);
+        }
+    };
+
     constexpr float pan = 0.70710678f;
 
     /** Run enough blocks for the 5 ms control smoothing to settle completely. */
@@ -77,7 +88,7 @@ namespace
     void testPassThrough()
     {
         std::puts ("Pass-through: input 1 -> strip 1 -> main L/R");
-        AudioEngine e;
+        TestEngine e;
         e.prepare (48000.0, channels ({ 0, 1, 2, 3 }), channels ({ 0, 1 }));
         Buffers b (4, 2, 256);
         std::fill (b.in[0].begin(), b.in[0].end(), 0.5f);
@@ -93,7 +104,7 @@ namespace
     void testInputMappingWithInactiveChannels()
     {
         std::puts ("Input mapping when only some interface inputs are active");
-        AudioEngine e;
+        TestEngine e;
         // Device inputs 0, 2 and 5 are active, so the callback receives them packed as slots 0, 1, 2.
         e.prepare (48000.0, channels ({ 0, 2, 5 }), channels ({ 0, 1 }));
         mapOnly (e, 3, 5);   // console channel 4 <- device input 6
@@ -113,7 +124,7 @@ namespace
     void testOutputMapping()
     {
         std::puts ("Main outputs on interface outputs 3/4");
-        AudioEngine e;
+        TestEngine e;
         e.prepare (44100.0, channels ({ 0 }), channels ({ 0, 1, 2, 3 }));
         e.setMainOutput (0, 2);
         e.setMainOutput (1, 3);
@@ -132,7 +143,7 @@ namespace
     void testMainFaderToneAndLargeBlocks()
     {
         std::puts ("Main fader, test tone, blocks larger than the internal chunk");
-        AudioEngine e;
+        TestEngine e;
         e.mainFader->set (faderFor (-6.0206f));
         e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }));
         Buffers b (1, 2, 2048);
@@ -157,15 +168,24 @@ namespace
 
     void testStripControls()
     {
-        std::puts ("Strip controls: trim, pan, mute, solo, main assign");
-        AudioEngine e;
+        std::puts ("Strip controls: trim, pan, mute, solo to the monitor outs, main assign");
+        {
+            AudioEngine fresh;
+            check (fresh.inputStrips[0]->controls.fader->get() == 0.0f && fresh.inputStrips[15]->controls.fader->get() == 0.0f
+                       && fresh.returnStrips[0]->controls.fader->get() == 80.0f,
+                   "input faders start fully down, return faders at unity");
+            fresh.inputStrips[3]->controls.fader->set (60.0f);
+            fresh.inputStrips[3]->controls.fader->reset();
+            check (fresh.inputStrips[3]->controls.fader->get() == 0.0f, "an input fader resets to fully down");
+        }
+        TestEngine e;
         auto& s1 = e.inputStrips[0]->controls;
         auto& s2 = e.inputStrips[1]->controls;
         s1.trim->set (6.0206f);
         s1.pan->set (-1.0f);
-        e.prepare (48000.0, channels ({ 0, 1 }), channels ({ 0, 1 }));
+        e.prepare (48000.0, channels ({ 0, 1 }), channels ({ 0, 1, 2, 3 }));
         mapOnly (e, 0, 0);
-        Buffers b (2, 2, 512);
+        Buffers b (2, 4, 512);
         std::fill (b.in[0].begin(), b.in[0].end(), 0.25f);
         b.run (e);
         check (near (b.out[0][300], 0.5f) && near (b.out[1][300], 0.0f), "trim +6 dB, pan hard left");
@@ -187,14 +207,31 @@ namespace
         check (near (b.out[0][511], 0.0f, 1.0e-5f), "mute silences main");
         s1.mute->set (0.0f);
 
-        s2.solo->set (1.0f);   // another strip soloed: strip 1 leaves main but still feeds tape
+        // Monitor outs on interface outputs 3/4: a copy of main, or the solo bus while anything is soloed.
+        e.setMonitorOutput (0, 2);
+        e.setMonitorOutput (1, 3);
         settle (e, b);
-        check (near (b.out[0][511], 0.0f, 1.0e-5f), "solo on another strip cuts strip 1 from main");
+        check (near (b.out[2][511], 0.5f) && near (b.out[3][511], 0.0f), "monitor outs copy main when nothing is soloed");
+        s2.solo->set (1.0f);   // another (silent) strip soloed
+        settle (e, b);
+        check (near (b.out[0][511], 0.5f), "solo never changes main");
+        check (near (b.out[2][511], 0.0f, 1.0e-5f), "monitor outs play only the soloed strip");
         s1.solo->set (1.0f);
         settle (e, b);
-        check (near (b.out[0][511], 0.5f), "soloed strip 1 is heard");
+        check (near (b.out[2][511], 0.5f) && near (b.out[3][511], 0.0f), "soloed strip 1 is on the monitor outs, after fader and pan");
         s1.solo->set (0.0f);
         s2.solo->set (0.0f);
+        settle (e, b);
+        check (near (b.out[2][511], 0.5f), "monitor outs back to main when solo is released");
+        e.monitorLevel->set (-6.0206f);
+        settle (e, b);
+        check (near (b.out[2][511], 0.25f) && near (b.out[0][511], 0.5f), "monitor level -6 dB turns down the monitor outs only");
+        e.monitorLevel->set (-60.0f);
+        settle (e, b);
+        check (near (b.out[2][511], 0.0f, 1.0e-5f), "monitor level fully down is off");
+        e.monitorLevel->set (0.0f);
+        e.setMonitorOutput (0, -1);
+        e.setMonitorOutput (1, -1);
 
         s1.main->set (0.0f);
         settle (e, b);
@@ -207,7 +244,7 @@ namespace
     struct LoopbackRig
     {
         static constexpr int block = 256;
-        AudioEngine e;
+        TestEngine e;
         Buffers b { 2, 2, block };
         std::deque<float> wire;   // output 1 -> input 2
         juce::int64 now = 0;      // stream time in samples
@@ -298,7 +335,7 @@ namespace
     void testTapeStorageAndTransport()
     {
         std::puts ("Tape: storage across chunk boundaries, auto-stop, erase");
-        AudioEngine e;
+        TestEngine e;
         constexpr int L = 100;
         e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }), L);
         mapOnly (e, 0, 0);
@@ -352,7 +389,7 @@ namespace
     void testUnarmedPlaybackAndArmedMonitoring()
     {
         std::puts ("Tape: unarmed tracks play back, armed tracks monitor input");
-        AudioEngine e;
+        TestEngine e;
         e.inputStrips[0]->controls.main->set (0.0f);   // hear only the return strip
         e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }), 0);
         e.tape.characterOn = false;   // check plain monitoring and record level
@@ -377,7 +414,7 @@ namespace
         divided by the centre pan gain, i.e. the strip's own gain. */
     struct SineRig
     {
-        AudioEngine e;
+        TestEngine e;
         Buffers b { 1, 2, 256 };
         double phase = 0.0;
 
@@ -650,7 +687,7 @@ namespace
         check (hot30 > hot75, "30 ips saturates less than 7.5 ips");
 
         // Hiss: only while the tape rolls, only on tracks playing back.
-        AudioEngine e;
+        TestEngine e;
         e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }));
         for (int r = 1; r < Config::numReturnStrips; ++r)
             e.returnStrips[r]->controls.main->set (0.0f);   // listen to track 1 only
@@ -776,7 +813,7 @@ namespace
             check (nearDb (r.measure (1000.0f, 0.01f) / 0.01f, -6.0f, 0.05f), "sub 1 fader -6 dB");
         }
         {
-            AudioEngine e;
+            TestEngine e;
             e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1, 2, 3, 4, 5 }));
             mapOnly (e, 0, 0);
             auto& c = e.inputStrips[0]->controls;
@@ -800,7 +837,7 @@ namespace
         std::puts ("Patch bay");
         const auto bit = [] (int source) { return std::uint64_t (1) << source; };
 
-        AudioEngine e;
+        TestEngine e;
         e.prepare (48000.0, channels ({ 0, 1 }), channels ({ 0, 1, 2 }));
         e.setInputSource (0, 0);
         e.setInputSource (1, 1);
@@ -833,6 +870,20 @@ namespace
         check (near (returnLevel (1), 0.25f), "cable into tape in 2 replaces channel 2");
         e.setPatch (P::tapeIn + 1, 0);
         check (near (returnLevel (1), 0.5f), "pulling the cable restores the normal");
+
+        // Interface input 2 straight into tape in 1 breaks channel 1's normal; a cable adds to it.
+        e.setInterfaceInput (P::tapeIn + 0, 1);
+        check (near (returnLevel (0), 0.5f), "interface input 2 -> tape in 1 replaces channel 1");
+        e.setPatch (P::tapeIn + 0, bit (P::channelOut + 0));
+        check (near (returnLevel (0), 0.75f), "interface input and a cable into tape in 1 add up");
+        e.setPatch (P::tapeIn + 0, 0);
+        e.setInterfaceInput (P::tapeIn + 0, -1);
+        check (near (returnLevel (0), 0.25f), "unwiring the interface input restores the normal");
+
+        // An interface input into a return strip in breaks the tape out normal.
+        e.setInterfaceInput (P::returnIn + 1, 0);
+        check (near (returnLevel (1), 0.25f), "interface input 1 -> return strip in 2 replaces tape out 2");
+        e.setInterfaceInput (P::returnIn + 1, -1);
 
         // Channel strip ins are not normalled: a cable adds to the interface input.
         e.setPatch (P::channelIn + 1, bit (P::channelOut + 0));
@@ -963,7 +1014,7 @@ namespace
         }
         {
             // Strip 1 feeds main directly AND through sub 1, which has a 100-sample plugin on it.
-            AudioEngine e;
+            TestEngine e;
             e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }), 0);
             mapOnly (e, 0, 0);
             e.inputStrips[0]->controls.sub[0]->set (1.0f);
@@ -980,7 +1031,7 @@ namespace
         }
         {
             // Aux 1 send with a 64-sample "reverb" on the return.
-            AudioEngine e;
+            TestEngine e;
             e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }), 0);
             mapOnly (e, 0, 0);
             e.inputStrips[0]->controls.auxLevel[0]->set (1.0f);   // send x 1.5
@@ -1005,7 +1056,7 @@ namespace
         }
         {
             // A plugin with a mono input on the stereo master: gets (L+R)/2, output on both sides.
-            AudioEngine e;
+            TestEngine e;
             e.inputStrips[0]->controls.pan->set (-1.0f);
             e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }), 0);
             mapOnly (e, 0, 0);
@@ -1030,7 +1081,7 @@ namespace
     void testPunchAndLoop()
     {
         std::puts ("Tape: auto-punch and loop");
-        AudioEngine e;
+        TestEngine e;
         e.inputStrips[0]->controls.main->set (0.0f);   // hear tape (return 1) only
         e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }), 0);
         mapOnly (e, 0, 0);
@@ -1112,7 +1163,7 @@ namespace
     /** Clicks every 4800 samples on track 1, played back: how much the click positions wander. */
     int wowWander (int speedIndex, bool wowOn)
     {
-        AudioEngine e;
+        TestEngine e;
         e.inputStrips[0]->controls.main->set (0.0f);
         e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }), 0);
         mapOnly (e, 0, 0);
@@ -1149,7 +1200,7 @@ namespace
     void testWinding()
     {
         std::puts ("Tape: rewind and fast forward wind up and brake like a real transport");
-        AudioEngine e;
+        TestEngine e;
         e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }), 0);
         auto& tape = e.tape;
         Buffers b (1, 2, 480);   // 10 ms blocks
@@ -1221,7 +1272,7 @@ namespace
 
         Session::TrackRevisions written {};
         {
-            AudioEngine a;
+            TestEngine a;
             a.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }));
             a.projectName = "My Song";
             a.inputStrips[2]->controls.trim->set (7.5f);
@@ -1250,7 +1301,7 @@ namespace
             check (folder.getChildFile ("Track 05.wav").getLastModificationTime() == before, "unchanged tracks are not rewritten");
         }
         {
-            AudioEngine b;
+            TestEngine b;
             b.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }));
             const auto r = Session::load (b, nullptr, folder);
             check (r.ok, "session loaded");
@@ -1289,7 +1340,7 @@ namespace
             check (! b.tape.isPlaying() && b.tape.getPosition() == 0 && ! b.tape.exporting, "transport put back after export");
         }
         {
-            AudioEngine c;
+            TestEngine c;
             c.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }));
             c.inputStrips[0]->controls.trim->set (10.0f);
             c.tape.writeTrack (0, 0, take.data(), 1000);
@@ -1302,7 +1353,7 @@ namespace
     void testNoDeviceIsSafe()
     {
         std::puts ("Callback with zero channels");
-        AudioEngine e;
+        TestEngine e;
         e.prepare (48000.0, {}, {});
         Buffers b (0, 0, 64);
         b.run (e);
@@ -1327,7 +1378,7 @@ namespace
     void benchmark()
     {
         std::puts ("\nBenchmark (worst case, 64-sample blocks, 48 kHz):");
-        AudioEngine e;
+        TestEngine e;
         // BENCH_PRIORITY=1: time-critical, like a real audio thread, so the slowest blocks are the engine's
         // own and not Windows scheduling. BENCH_NO_CHARACTER=1: tape character off.
         if (juce::SystemStats::getEnvironmentVariable ("BENCH_PRIORITY", {}) == "1")

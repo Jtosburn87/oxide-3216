@@ -8,10 +8,14 @@ namespace
 
 AudioEngine::AudioEngine()
 {
+    for (auto& i : interfaceSource)
+        i.store (-1);
     for (int c = 0; c < numConsoleInputs; ++c)
-        inputSource[(size_t) c].store (c);
+        setInputSource (c, c);
     mainOutput[0].store (0);
     mainOutput[1].store (1);
+    monitorOutput[0].store (-1);
+    monitorOutput[1].store (-1);
     for (auto& p : patch)
         p.store (0);
     for (auto& o : auxOutput)
@@ -25,7 +29,7 @@ AudioEngine::AudioEngine()
     outputSlot.fill (-1);
 
     for (int i = 0; i < Config::numInputStrips; ++i)
-        inputStrips.add (new ChannelStrip (params, "ch" + juce::String (i + 1), "Input " + juce::String (i + 1)));
+        inputStrips.add (new ChannelStrip (params, "ch" + juce::String (i + 1), "Input " + juce::String (i + 1), false, 0.0f));   // input faders start down
     for (int i = 0; i < Config::numReturnStrips; ++i)
         returnStrips.add (new ChannelStrip (params, "rt" + juce::String (i + 1), "Return " + juce::String (i + 1), true));
 
@@ -47,6 +51,7 @@ AudioEngine::AudioEngine()
     }
 
     mainFader = &params.add ("main.fader", "Main fader", 0.0f, 100.0f, 80.0f);
+    monitorLevel = &params.add ("monitor.level", "Monitor level", -60.0f, 10.0f, 0.0f);
     resetBusNames();
 }
 
@@ -87,8 +92,14 @@ void AudioEngine::initialise (const juce::XmlElement* savedState)
     {
         for (int c = 0; c < numConsoleInputs; ++c)
             setInputSource (c, routing->getIntAttribute ("in" + juce::String (c + 1), c));
+        for (int t = 0; t < Config::numTracks; ++t)
+            setInterfaceInput (Patch::tapeIn + t, routing->getIntAttribute ("tapeIn" + juce::String (t + 1), -1));
+        for (int r = 0; r < Config::numReturnStrips; ++r)
+            setInterfaceInput (Patch::returnIn + r, routing->getIntAttribute ("returnIn" + juce::String (r + 1), -1));
         setMainOutput (0, routing->getIntAttribute ("mainL", 0));
         setMainOutput (1, routing->getIntAttribute ("mainR", 1));
+        setMonitorOutput (0, routing->getIntAttribute ("monitorL", -1));
+        setMonitorOutput (1, routing->getIntAttribute ("monitorR", -1));
         setRecordOffset (routing->getIntAttribute ("recordOffset", 0));
         for (int k = 0; k < Config::numAux; ++k)
             setAuxOutput (k, routing->getIntAttribute ("aux" + juce::String (k + 1), -1));
@@ -110,8 +121,16 @@ std::unique_ptr<juce::XmlElement> AudioEngine::createStateXml() const
     auto* routing = xml->createNewChildElement ("ROUTING");
     for (int c = 0; c < numConsoleInputs; ++c)
         routing->setAttribute ("in" + juce::String (c + 1), getInputSource (c));
+    for (int t = 0; t < Config::numTracks; ++t)
+        if (getInterfaceInput (Patch::tapeIn + t) >= 0)
+            routing->setAttribute ("tapeIn" + juce::String (t + 1), getInterfaceInput (Patch::tapeIn + t));
+    for (int r = 0; r < Config::numReturnStrips; ++r)
+        if (getInterfaceInput (Patch::returnIn + r) >= 0)
+            routing->setAttribute ("returnIn" + juce::String (r + 1), getInterfaceInput (Patch::returnIn + r));
     routing->setAttribute ("mainL", getMainOutput (0));
     routing->setAttribute ("mainR", getMainOutput (1));
+    routing->setAttribute ("monitorL", getMonitorOutput (0));
+    routing->setAttribute ("monitorR", getMonitorOutput (1));
     routing->setAttribute ("recordOffset", getRecordOffset());
     for (int k = 0; k < Config::numAux; ++k)
         routing->setAttribute ("aux" + juce::String (k + 1), getAuxOutput (k));
@@ -140,12 +159,23 @@ void AudioEngine::setPower (bool on)
 void AudioEngine::setInputSource (int consoleChannel, int deviceInput)
 {
     if (juce::isPositiveAndBelow (consoleChannel, numConsoleInputs))
-        inputSource[(size_t) consoleChannel].store (juce::jlimit (-1, maxDeviceChannels - 1, deviceInput));
+        setInterfaceInput (Patch::channelIn + consoleChannel, deviceInput);
 }
 
 int AudioEngine::getInputSource (int consoleChannel) const
 {
-    return juce::isPositiveAndBelow (consoleChannel, numConsoleInputs) ? inputSource[(size_t) consoleChannel].load() : -1;
+    return juce::isPositiveAndBelow (consoleChannel, numConsoleInputs) ? getInterfaceInput (Patch::channelIn + consoleChannel) : -1;
+}
+
+void AudioEngine::setInterfaceInput (int dest, int deviceInput)
+{
+    if (juce::isPositiveAndBelow (dest, Patch::numDestinations))
+        interfaceSource[(size_t) dest].store (juce::jlimit (-1, maxDeviceChannels - 1, deviceInput));
+}
+
+int AudioEngine::getInterfaceInput (int dest) const
+{
+    return juce::isPositiveAndBelow (dest, Patch::numDestinations) ? interfaceSource[(size_t) dest].load() : -1;
 }
 
 void AudioEngine::setMainOutput (int side, int deviceOutput)
@@ -157,6 +187,17 @@ void AudioEngine::setMainOutput (int side, int deviceOutput)
 int AudioEngine::getMainOutput (int side) const
 {
     return (side == 0 || side == 1) ? mainOutput[(size_t) side].load() : -1;
+}
+
+void AudioEngine::setMonitorOutput (int side, int deviceOutput)
+{
+    if (side == 0 || side == 1)
+        monitorOutput[(size_t) side].store (juce::jlimit (-1, maxDeviceChannels - 1, deviceOutput));
+}
+
+int AudioEngine::getMonitorOutput (int side) const
+{
+    return (side == 0 || side == 1) ? monitorOutput[(size_t) side].load() : -1;
 }
 
 void AudioEngine::setAuxOutput (int k, int dev)
@@ -237,6 +278,8 @@ void AudioEngine::prepare (double sampleRate, const juce::BigInteger& activeInpu
     reportedLatency.store (reportedRoundTripLatency);
     tape.prepare (currentSampleRate, reportedRoundTripLatency + recordOffset.load());
     mainGainL.prepare (currentSampleRate, Dsp::faderGain (mainFader->get()));
+    monitorSolo.prepare (currentSampleRate, 0.0f, 10.0f);
+    monitorGainS.prepare (currentSampleRate, monitorGain (monitorLevel->get()));
     busComp.prepare (currentSampleRate);
     for (auto* c : subInserts) c->prepare (currentSampleRate, Config::maxBlock);
     for (auto* c : auxInserts) c->prepare (currentSampleRate, Config::maxBlock);
@@ -292,13 +335,14 @@ void AudioEngine::render (const float* const* inputs, int numInputs, float* cons
             juce::FloatVectorOperations::clear (outputs[o], numSamples);
 
     // Resolve routing once per callback.
-    const float* sources[Config::numInputStrips] {};
-    for (int c = 0; c < Config::numInputStrips; ++c)
+    const float* interfaceIn[Patch::numDestinations] {};
+    for (int d = 0; d < Patch::numDestinations; ++d)
     {
-        const int dev = inputSource[(size_t) c].load (std::memory_order_relaxed);
+        const int dev = interfaceSource[(size_t) d].load (std::memory_order_relaxed);
         const int slot = juce::isPositiveAndBelow (dev, maxDeviceChannels) ? inputSlot[(size_t) dev] : -1;
-        sources[c] = juce::isPositiveAndBelow (slot, numInputs) ? inputs[slot] : nullptr;
+        interfaceIn[d] = juce::isPositiveAndBelow (slot, numInputs) ? inputs[slot] : nullptr;
     }
+    const auto interfaceAt = [&] (int dest, int start) { return interfaceIn[dest] != nullptr ? interfaceIn[dest] + start : nullptr; };
 
     float* mainOut[2] {};
     for (int side = 0; side < 2; ++side)
@@ -326,6 +370,10 @@ void AudioEngine::render (const float* const* inputs, int numInputs, float* cons
     for (int k = 0; k < Config::numSubs; ++k)
         for (int side = 0; side < 2; ++side)
             subOut[k][side] = outFor (subOutput[(size_t) k][(size_t) side].load (std::memory_order_relaxed));
+    float* monitorOut[2] {};
+    if (mainLeft == nullptr && mainRight == nullptr)   // not when exporting
+        for (int side = 0; side < 2; ++side)
+            monitorOut[side] = outFor (monitorOutput[(size_t) side].load (std::memory_order_relaxed));
 
     bool anySolo = false;
     for (auto* s : inputStrips)  anySolo = anySolo || s->controls.solo->on();
@@ -341,6 +389,8 @@ void AudioEngine::render (const float* const* inputs, int numInputs, float* cons
     BusPointers buses;
     buses.mainL = mixL.data();
     buses.mainR = mixR.data();
+    buses.soloL = soloL.data();
+    buses.soloR = soloR.data();
     for (int k = 0; k < Config::numSubs; ++k)
     {
         buses.subL[k] = subL[(size_t) k].data();
@@ -361,6 +411,8 @@ void AudioEngine::render (const float* const* inputs, int numInputs, float* cons
         const int n = juce::jmin (maxBlock, numSamples - start);
         juce::FloatVectorOperations::clear (mixL.data(), n);
         juce::FloatVectorOperations::clear (mixR.data(), n);
+        juce::FloatVectorOperations::clear (soloL.data(), n);
+        juce::FloatVectorOperations::clear (soloR.data(), n);
         for (int k = 0; k < Config::numSubs; ++k)
         {
             juce::FloatVectorOperations::clear (subL[(size_t) k].data(), n);
@@ -371,22 +423,22 @@ void AudioEngine::render (const float* const* inputs, int numInputs, float* cons
 
         // Input bank: interface input, plus any cables patched into the channel strip input.
         for (int c = 0; c < Config::numInputStrips; ++c)
-            inputStrips[c]->process (patchedInput (Patch::channelIn + c, sources[c] != nullptr ? sources[c] + start : nullptr, 0, n),
-                                     inputDirect[(size_t) c].data(), buses, n, anySolo);
+            inputStrips[c]->process (patchedInput (Patch::channelIn + c, nullptr, interfaceAt (Patch::channelIn + c, start), 0, n),
+                                     inputDirect[(size_t) c].data(), buses, n);
 
-        // Tape: channel direct outs are normalled to tape ins; a cable breaks the normal.
+        // Tape: channel direct outs are normalled to tape ins; a cable (or an interface input) breaks the normal.
         for (int t = 0; t < Config::numTracks; ++t)
         {
             const float* normal = t < Config::numInputStrips ? inputDirect[(size_t) t].data() : nullptr;
-            tapeInPtrs[t] = patchedInput (Patch::tapeIn + t, normal, 1, n);
+            tapeInPtrs[t] = patchedInput (Patch::tapeIn + t, normal, interfaceAt (Patch::tapeIn + t, start), 1, n);
             tapeOutPtrs[t] = tapeOut[(size_t) t].data();
         }
         tape.process (tapeInPtrs, tapeOutPtrs, n);
 
-        // Return bank: tape outs are normalled to return strip ins; a cable breaks the normal.
+        // Return bank: tape outs are normalled to return strip ins; a cable (or an interface input) breaks the normal.
         for (int r = 0; r < Config::numReturnStrips; ++r)
-            returnStrips[r]->process (patchedInput (Patch::returnIn + r, tapeOut[(size_t) r].data(), 2, n),
-                                      returnDirect[(size_t) r].data(), buses, n, anySolo);
+            returnStrips[r]->process (patchedInput (Patch::returnIn + r, tapeOut[(size_t) r].data(), interfaceAt (Patch::returnIn + r, start), 2, n),
+                                      returnDirect[(size_t) r].data(), buses, n);
 
         // Latency compensation: the dry mix, every sub and every active aux return are delayed to line up
         // with the slowest plug-in chain (latencies as of the previous block).
@@ -546,6 +598,28 @@ void AudioEngine::render (const float* const* inputs, int numInputs, float* cons
                 juce::FloatVectorOperations::add (mainOut[side] + start, mix[side], n);
         }
 
+        // Monitor outs: main, or the solo bus while anything is soloed (a short crossfade between them),
+        // at the monitor level.
+        const float soloT = anySolo ? 1.0f : 0.0f;
+        const float levelT = monitorGain (monitorLevel->get());
+        if (monitorOut[0] != nullptr || monitorOut[1] != nullptr)
+        {
+            float* solo[2] = { soloL.data(), soloR.data() };
+            for (int i = 0; i < n; ++i)
+            {
+                const float b = monitorSolo.next (soloT), g = monitorGainS.next (levelT);
+                for (int side = 0; side < 2; ++side)
+                    if (monitorOut[side] != nullptr)
+                        monitorOut[side][start + i] += g * (mix[side][i] + b * (solo[side][i] - mix[side][i]));
+            }
+        }
+        else
+        {
+            // Nothing to fade: jump.
+            monitorSolo.prepare (currentSampleRate, soloT, 10.0f);
+            monitorGainS.prepare (currentSampleRate, levelT);
+        }
+
         // Keep this block of every patched source for cables that point backwards in the signal flow.
         if (patchedSources != 0)
             for (int s = 0; s < Patch::numSources; ++s)
@@ -585,16 +659,16 @@ const float* AudioEngine::patchSource (int s, int phase) const noexcept
     return phase >= 4 ? (s == Patch::mainL ? mixL.data() : mixR.data()) : previous;
 }
 
-const float* AudioEngine::patchedInput (int dest, const float* normal, int phase, int n) noexcept
+const float* AudioEngine::patchedInput (int dest, const float* normal, const float* interfaceIn, int phase, int n) noexcept
 {
     const auto cables = patch[(size_t) dest].load (std::memory_order_relaxed);
     if (cables == 0)
-        return normal;
+        return interfaceIn != nullptr ? interfaceIn : normal;
 
-    // A cable breaks a normal. Channel strip inputs are not normalled: the interface input stays.
+    // A cable or an interface input breaks a normal; the interface input and the cables add up.
     float* d = patchInput[(size_t) dest].data();
-    if (! Patch::isNormalled (dest) && normal != nullptr)
-        std::memcpy (d, normal, sizeof (float) * (size_t) n);
+    if (interfaceIn != nullptr)
+        std::memcpy (d, interfaceIn, sizeof (float) * (size_t) n);
     else
         std::memset (d, 0, sizeof (float) * (size_t) n);
 

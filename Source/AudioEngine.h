@@ -17,6 +17,7 @@
         interface input (mapped) -> input strip -> direct out -> tape in (normalled)
         tape out -> return strip
         input strips + return strips (main assign, pan) -> main fader -> mapped outputs
+        soloed strips -> solo bus -> monitor outputs (which otherwise copy main)
 
     Real-time rules: the audio callback never allocates, locks or blocks. The UI changes
     Params (atomics) and calls TapeMachine transport methods (atomics). */
@@ -45,6 +46,9 @@ public:
     int  getInputSource (int consoleChannel) const;
     void setMainOutput (int side, int deviceOutput);   // side 0 = left, 1 = right
     int  getMainOutput (int side) const;
+    /** Monitor outs (optional, -1 = none): a copy of main, or the solo bus while anything is soloed. */
+    void setMonitorOutput (int side, int deviceOutput);
+    int  getMonitorOutput (int side) const;
     void setAuxOutput (int aux, int deviceOutput);                // optional, -1 = none
     int  getAuxOutput (int aux) const;
     void setSubOutput (int sub, int side, int deviceOutput);      // optional, -1 = none
@@ -61,8 +65,12 @@ public:
         static constexpr int tapeIn = 0, returnIn = 16, channelIn = 32;
         static constexpr int numDestinations = 48;
 
-        static bool isNormalled (int dest) noexcept { return dest < channelIn; }   // tape ins and return strip ins
     };
+
+    /** The interface input wired straight into a patch destination (-1 = none). It acts like a cable:
+        into a tape in or a return strip in it breaks the normal. Channel strip ins are what setInputSource maps. */
+    void setInterfaceInput (int destination, int deviceInput);
+    int  getInterfaceInput (int destination) const;
 
     /** Which sources are plugged into a destination (bit n = source n). Message thread. */
     void setPatch (int destination, std::uint64_t sources);
@@ -98,6 +106,8 @@ public:
     /** Extra delay added by plugins (latency compensation + master inserts), in samples. */
     int getPluginLatency() const noexcept { return pluginLatency.load (std::memory_order_relaxed); }
     Param* mainFader = nullptr;
+    Param* monitorLevel = nullptr;   // dB, -60 (off) .. +10: level of the monitor outs (headphones)
+    static float monitorGain (float db) noexcept { return db <= -59.5f ? 0.0f : Dsp::dbToGain (db); }
 
     static constexpr float limiterCeiling = 0.70795f;   // -3 dBFS
 
@@ -135,8 +145,8 @@ public:
 private:
     juce::AudioDeviceManager deviceManager;
 
-    std::array<std::atomic<int>, numConsoleInputs> inputSource;
-    std::array<std::atomic<int>, 2> mainOutput;
+    std::array<std::atomic<int>, Patch::numDestinations> interfaceSource;
+    std::array<std::atomic<int>, 2> mainOutput, monitorOutput;
     std::array<std::atomic<int>, Config::numAux> auxOutput;
     std::array<std::array<std::atomic<int>, 2>, Config::numSubs> subOutput;
     float limiterEnv = 0.0f, limiterRelease = 0.0f;
@@ -153,6 +163,8 @@ private:
     double currentSampleRate = 48000.0;
     double tonePhase = 0.0;
     Dsp::Smoothed mainGainL;
+    Dsp::Smoothed monitorSolo;   // 0 = monitor outs carry main, 1 = the solo bus
+    Dsp::Smoothed monitorGainS;
     std::array<Dsp::Smoothed, Config::numSubs> subGain;
     std::array<Dsp::Smoothed, Config::numAux> auxGain;
     std::array<Dsp::Smoothed, Config::numAux> auxReturnGainL, auxReturnGainR;
@@ -164,6 +176,7 @@ private:
     std::array<Block, Config::numReturnStrips> returnDirect {};
     std::array<Block, Config::numTracks> tapeOut {};
     Block mixL {}, mixR {};
+    Block soloL {}, soloR {};
     std::array<Block, Config::numSubs> subL {}, subR {};
     std::array<Block, Config::numAux> aux {};
 
@@ -177,9 +190,9 @@ private:
     std::array<Dsp::DelayLine, Config::numSubs * 2> subDelay;
     std::array<Dsp::DelayLine, Config::numAux * 2> returnDelay;
     const float* patchSource (int source, int phase) const noexcept;
-    /** The signal arriving at a patch destination: the normal (or, for channel inputs, the interface input)
-        when nothing is plugged in; otherwise the cables, summed. Channel inputs keep the interface input too. */
-    const float* patchedInput (int dest, const float* normal, int phase, int n) noexcept;
+    /** The signal arriving at a patch destination: the normal when nothing is plugged in (channel strip ins
+        have none); otherwise its interface input and its cables, summed. */
+    const float* patchedInput (int dest, const float* normal, const float* interfaceIn, int phase, int n) noexcept;
 
     void render (const float* const* inputs, int numInputs, float* const* outputs, int numOutputs,
                  int numSamples, float* mainLeft, float* mainRight) noexcept;

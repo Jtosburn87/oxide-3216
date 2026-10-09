@@ -72,7 +72,7 @@ public:
 
     void paintButton (juce::Graphics& g, bool over, bool) override
     {
-        const bool dim = ! isEnabled() || (kind == Kind::destination && ! field.accepts (*this));
+        const bool dim = ! isEnabled();
         if (dim)
             g.beginTransparencyLayer (0.35f);
 
@@ -215,19 +215,12 @@ bool PatchBayField::isPlugged (Kind kind, int index) const
     }
     if (kind == Kind::interfaceIn)
     {
-        for (int c = 0; c < AudioEngine::numConsoleInputs; ++c)
-            if (engine.getInputSource (c) == index)
+        for (int d = 0; d < Patch::numDestinations; ++d)
+            if (engine.getInterfaceInput (d) == index)
                 return true;
         return false;
     }
-    return engine.getPatch (index) != 0
-        || (index >= Patch::channelIn && engine.getInputSource (index - Patch::channelIn) >= 0);
-}
-
-bool PatchBayField::accepts (const Jack& destination) const
-{
-    // Interface inputs can only feed channel strips.
-    return ! (selected && selected->kind == Kind::interfaceIn && destination.index < Patch::channelIn);
+    return engine.getPatch (index) != 0 || engine.getInterfaceInput (index) >= 0;
 }
 
 void PatchBayField::refresh()
@@ -255,7 +248,7 @@ void PatchBayField::refresh()
     {
         const auto mask = engine.getPatch (j->index);
         j->plugColour = juce::Colours::transparentBlack;
-        if (j->index >= Patch::channelIn && engine.getInputSource (j->index - Patch::channelIn) >= 0)
+        if (engine.getInterfaceInput (j->index) >= 0)
             j->plugColour = wiringColour;
         for (int s = 0; s < Patch::numSources; ++s)
             if ((mask >> s) & 1u) { j->plugColour = sourceColour (s); break; }
@@ -282,9 +275,9 @@ void PatchBayField::pullCables (Kind kind, int index)
         for (int d = 0; d < Patch::numDestinations; ++d)
             engine.setPatch (d, engine.getPatch (d) & ~(std::uint64_t (1) << index));
     else if (kind == Kind::interfaceIn)
-        for (int c = 0; c < AudioEngine::numConsoleInputs; ++c)
-            if (engine.getInputSource (c) == index)
-                engine.setInputSource (c, -1);
+        for (int d = 0; d < Patch::numDestinations; ++d)
+            if (engine.getInterfaceInput (d) == index)
+                engine.setInterfaceInput (d, -1);
     if (selected && selected->kind == kind && selected->index == index)
         selected.reset();
     changed();
@@ -322,16 +315,11 @@ void PatchBayField::jackClicked (Kind kind, int index)
     if (selected && selected->kind == Kind::source)
         engine.setPatch (index, engine.getPatch (index) ^ (std::uint64_t (1) << selected->index));
     else if (selected && selected->kind == Kind::interfaceIn)
-    {
-        if (index < Patch::channelIn)
-            return;   // interface inputs only feed channel strips
-        const int c = index - Patch::channelIn;
-        engine.setInputSource (c, engine.getInputSource (c) == selected->index ? -1 : selected->index);
-    }
+        engine.setInterfaceInput (index, engine.getInterfaceInput (index) == selected->index ? -1 : selected->index);
     else if (engine.getPatch (index) != 0)
         engine.setPatch (index, 0);   // patch cables come out first, then the interface input
-    else if (index >= Patch::channelIn)
-        engine.setInputSource (index - Patch::channelIn, -1);
+    else
+        engine.setInterfaceInput (index, -1);
 
     changed();
 }
@@ -362,7 +350,7 @@ void PatchBayField::paintOverChildren (juce::Graphics& g)
         const std::pair<int, int> normals[] = { { Patch::channelOut + i, Patch::tapeIn + i }, { Patch::tapeOut + i, Patch::returnIn + i } };
         for (auto [s, d] : normals)
         {
-            if (engine.getPatch (d) != 0)
+            if (engine.getPatch (d) != 0 || engine.getInterfaceInput (d) >= 0)
                 continue;
             const auto from = holeCentre (*sources[s]).translated (0.0f, 26.0f);
             const auto to = holeCentre (*destinations[d]).translated (0.0f, -11.0f);
@@ -374,13 +362,13 @@ void PatchBayField::paintOverChildren (juce::Graphics& g)
         }
     }
 
-    // Interface inputs: thin wiring into the channel strips.
+    // Interface inputs: thin wiring into whatever they feed.
     g.setColour (wiringColour.withAlpha (0.75f));
-    for (int c = 0; c < AudioEngine::numConsoleInputs; ++c)
+    for (int d = 0; d < Patch::numDestinations; ++d)
     {
-        const int dev = engine.getInputSource (c);
+        const int dev = engine.getInterfaceInput (d);
         if (juce::isPositiveAndBelow (dev, interfaceIns.size()))
-            g.strokePath (cablePath (holeCentre (*interfaceIns[dev]), holeCentre (*destinations[Patch::channelIn + c])),
+            g.strokePath (cablePath (holeCentre (*interfaceIns[dev]), holeCentre (*destinations[d])),
                           juce::PathStrokeType (1.5f));
     }
 
@@ -413,7 +401,7 @@ PatchBayPanel::PatchBayPanel (AudioEngine& e, std::function<void()> changed)
 
     help.setText ("Click an output, then as many inputs below it as you like (click the output again or press Escape when done). "
                   "Click an input to pull its cable; right-click an output to pull all of its cables. "
-                  "Dashed lines are normals. Thin lines are interface inputs, which feed Channel strip ins.",
+                  "Dashed lines are normals. Thin lines are interface inputs; into a Tape in they replace the channel direct out.",
                   juce::dontSendNotification);
     help.setFont (ConsoleLookAndFeel::uiFont (13.0f));
     help.setColour (juce::Label::textColourId, bridgeText.withAlpha (0.8f));

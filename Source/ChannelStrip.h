@@ -10,12 +10,14 @@
 
     Signal order (as in the prototype):
         input -> trim -> high-pass -> EQ (LF, LMF, HMF, HF) -> gate -> compressor
-              -> [pre-fader sends] -> fader -> mute -> direct out -> [post-fader sends] -> pan -> main / subs */
+              -> [pre-fader sends] -> fader -> mute -> direct out -> [post-fader sends] -> pan -> main / subs
+                                                                                     -> solo bus (when soloed) */
 class ChannelStrip
 {
 public:
     /** idPrefix is e.g. "ch1" or "rt1"; parameters are created as "ch1.trim", "ch1.eq.hf.gain", ... */
-    ChannelStrip (ParamSet&, const juce::String& idPrefix, const juce::String& defaultName, bool withDeEsser = false);
+    ChannelStrip (ParamSet&, const juce::String& idPrefix, const juce::String& defaultName, bool withDeEsser = false,
+                  float defaultFader = 80.0f);
 
     const juce::String idPrefix;
     juce::String name;   // scribble strip
@@ -50,7 +52,7 @@ public:
     void prepare (double sampleRate);
 
     /** in may be null (silence). direct receives the post-fader, post-mute signal (the direct out). */
-    void process (const float* in, float* direct, const BusPointers& buses, int numSamples, bool anySoloActive) noexcept;
+    void process (const float* in, float* direct, const BusPointers& buses, int numSamples) noexcept;
 
     float takePeak() noexcept { return peak.exchange (0.0f); }             // output: post-fader
     float takeInputPeak() noexcept { return inputPeak.exchange (0.0f); }   // input: after the trim
@@ -66,12 +68,12 @@ private:
     std::atomic<float> peak { 0.0f }, inputPeak { 0.0f };
 
     std::array<float, Config::maxBlock> pre {};
-    float lastMain[2] {}, lastSub[Config::numSubs][2] {}, lastAux[Config::numAux] {};
+    float lastMain[2] {}, lastSolo[2] {}, lastSub[Config::numSubs][2] {}, lastAux[Config::numAux] {};
 
     struct Targets
     {
-        float main[2], sub[Config::numSubs][2], aux[Config::numAux];
+        float main[2], solo[2], sub[Config::numSubs][2], aux[Config::numAux];
     };
-    Targets targets (bool anySoloActive) const noexcept;
+    Targets targets() const noexcept;
     float targetFader() const noexcept;
 };

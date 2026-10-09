@@ -11,7 +11,7 @@ namespace
     }
 }
 
-ChannelStrip::ChannelStrip (ParamSet& params, const juce::String& prefix, const juce::String& defaultName, bool withDeEsser)
+ChannelStrip::ChannelStrip (ParamSet& params, const juce::String& prefix, const juce::String& defaultName, bool withDeEsser, float defaultFader)
     : idPrefix (prefix), name (defaultName),
       eq (params, prefix, 1), gate (params, prefix), comp (params, prefix)
 {
@@ -25,7 +25,7 @@ ChannelStrip::ChannelStrip (ParamSet& params, const juce::String& prefix, const 
     controls.main  = &params.addToggle (id ("main"), "Main", true);
     controls.mute  = &params.addToggle (id ("mute"), "Mute", false);
     controls.solo  = &params.addToggle (id ("solo"), "Solo", false);
-    controls.fader = &params.add (id ("fader"), "Fader", 0.0f, 100.0f, 80.0f);
+    controls.fader = &params.add (id ("fader"), "Fader", 0.0f, 100.0f, defaultFader);
 
     for (int k = 0; k < Config::numSubs; ++k)
         controls.sub[k] = &params.addToggle (id ("sub" + juce::String (k + 1)), "Sub " + juce::String (k + 1), false);
@@ -49,21 +49,25 @@ float ChannelStrip::targetFader() const noexcept
     return controls.mute->on() ? 0.0f : Dsp::faderGain (controls.fader->get());
 }
 
-ChannelStrip::Targets ChannelStrip::targets (bool anySoloActive) const noexcept
+ChannelStrip::Targets ChannelStrip::targets() const noexcept
 {
     Targets t {};
     float l, r;
     Dsp::panGains (controls.pan->get(), l, r);
 
-    // Solo in place: when anything is soloed, strips that are not soloed leave main and the subs.
-    const bool heard = ! anySoloActive || controls.solo->on();
-    const bool toMain = heard && controls.main->on();
+    const bool toMain = controls.main->on();
     t.main[0] = toMain ? l : 0.0f;
     t.main[1] = toMain ? r : 0.0f;
 
+    // Solo never touches main or the subs: a soloed strip (after fader and pan) goes to the solo bus,
+    // which the monitor outs carry instead of the main mix.
+    const bool soloed = controls.solo->on();
+    t.solo[0] = soloed ? l : 0.0f;
+    t.solo[1] = soloed ? r : 0.0f;
+
     for (int k = 0; k < Config::numSubs; ++k)
     {
-        const bool on = heard && controls.sub[k]->on();
+        const bool on = controls.sub[k]->on();
         t.sub[k][0] = on ? l : 0.0f;
         t.sub[k][1] = on ? r : 0.0f;
     }
@@ -86,9 +90,11 @@ void ChannelStrip::prepare (double sr)
     trimGain.prepare (sr, Dsp::dbToGain (controls.trim->get()));
     faderGain.prepare (sr, targetFader());
 
-    const auto t = targets (false);
+    const auto t = targets();
     lastMain[0] = t.main[0];
     lastMain[1] = t.main[1];
+    lastSolo[0] = t.solo[0];
+    lastSolo[1] = t.solo[1];
     for (int k = 0; k < Config::numSubs; ++k)
     {
         lastSub[k][0] = t.sub[k][0];
@@ -98,7 +104,7 @@ void ChannelStrip::prepare (double sr)
         lastAux[k] = t.aux[k];
 }
 
-void ChannelStrip::process (const float* in, float* direct, const BusPointers& buses, int n, bool anySoloActive) noexcept
+void ChannelStrip::process (const float* in, float* direct, const BusPointers& buses, int n) noexcept
 {
     const float trimT = Dsp::dbToGain (controls.trim->get());
     const float faderT = targetFader();
@@ -153,12 +159,17 @@ void ChannelStrip::process (const float* in, float* direct, const BusPointers& b
     raisePeak (inputPeak, inPk);
 
     // Bus sends, each with its gain ramped across the block.
-    const auto t = targets (anySoloActive);
+    const auto t = targets();
 
     Dsp::addRamped (buses.mainL, direct, lastMain[0], t.main[0], n);
     Dsp::addRamped (buses.mainR, direct, lastMain[1], t.main[1], n);
     lastMain[0] = t.main[0];
     lastMain[1] = t.main[1];
+
+    if (buses.soloL != nullptr && (lastSolo[0] != 0.0f || t.solo[0] != 0.0f)) Dsp::addRamped (buses.soloL, direct, lastSolo[0], t.solo[0], n);
+    if (buses.soloR != nullptr && (lastSolo[1] != 0.0f || t.solo[1] != 0.0f)) Dsp::addRamped (buses.soloR, direct, lastSolo[1], t.solo[1], n);
+    lastSolo[0] = t.solo[0];
+    lastSolo[1] = t.solo[1];
 
     for (int k = 0; k < Config::numSubs; ++k)
     {

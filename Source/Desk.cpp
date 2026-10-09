@@ -176,6 +176,7 @@ StripComponent::StripComponent (ChannelStrip& s)
 
     redButton (mute);
     add (mute);
+    solo.setTooltip ("Solo: the monitor outs play the soloed channels instead of the main mix. Main is not affected.");
     add (solo);
     solo.onStateChange = [this] { repaint (solo.getBounds().expanded (0, 14)); };   // the LED above it
     fader.slider.getProperties().set ("capWidth", 30);
@@ -579,8 +580,16 @@ CentreSection::CentreSection (AudioEngine& e, PluginContext* plugins)
       wowButton (*e.tape.wowFlutter, "W&F"),
       mainFader (*e.mainFader),
       busPanel (e.busComp),
-      inserts (e, plugins)
+      inserts (e, plugins),
+      monitorLevel (*e.monitorLevel, "Level", juce::Colour (0xffd9d6cc))
 {
+    addAndMakeVisible (appButtons);
+    appButtons.setTitle ("App buttons");
+    appButtons.onChildrenChanged = [this] { resized(); repaint(); };
+    monitorLevel.setFormatter ([] (float db) { return db <= -59.5f ? juce::String ("off") : (db > 0.05f ? "+" : "") + juce::String (db, 1) + " dB"; });
+    monitorLevel.setEndLabels ("off", "+10");
+    addAndMakeVisible (monitorLevel);
+
     cassette.projectName().referTo (engine.projectName);
     addAndMakeVisible (cassette);
     addAndMakeVisible (clock);
@@ -817,8 +826,16 @@ void CentreSection::resized()
         }
     }
 
-    // Bus compressor faceplate, right column.
-    busPanel.setBounds (330 + ((centreW - 12) - 330 - BusCompPanel::width) / 2, 12, BusCompPanel::width, BusCompPanel::height);
+    // Bus compressor faceplate, at the right edge.
+    busPanel.setBounds (centreW - 12 - BusCompPanel::width, 12, BusCompPanel::width, BusCompPanel::height);
+
+    // Between the tape machine and the bus compressor: the app buttons, then the monitor (headphone) level.
+    const int panelX = deckBox.getRight() + 18, panelW = busPanel.getX() - 18 - panelX;
+    const int numButtons = appButtons.getNumChildComponents();
+    appBox = { panelX, 12, panelW, 28 + appButtons.heightFor (numButtons) + 10 };
+    appButtons.setBounds (appBox.reduced (10).withTrimmedTop (18));
+    monitorBox = { panelX, appBox.getBottom() + 16, panelW, 28 + Knob::preferredHeight + 10 };
+    monitorLevel.setBounds (monitorBox.withTrimmedTop (24).withSizeKeepingCentre (Knob::preferredWidth, Knob::preferredHeight));
 
     // Inserts and aux returns, along the bottom of the knob area.
     insertsBox = { 12, groupEqBox.getBottom() + 22, centreW - 24, knobH - 12 - (groupEqBox.getBottom() + 22) };
@@ -879,6 +896,18 @@ void CentreSection::paint (juce::Graphics& g)
     g.setFont (ConsoleLookAndFeel::uiFont (13.0f, true));
     g.drawText ("Tape machine, " + juce::String (TapeMachine::numTracks) + " track",
                 deckBox.reduced (10).withHeight (16), juce::Justification::centredLeft, false);
+
+    // App buttons and monitor level panels, in the same style.
+    for (auto [box, title] : { std::pair { appBox, "Console" }, std::pair { monitorBox, "Monitor / Phones" } })
+    {
+        g.setColour (faderArea);
+        g.fillRoundedRectangle (box.toFloat(), 2.0f);
+        g.setColour (juce::Colour (0xff2a2d2f));
+        g.drawRoundedRectangle (box.toFloat().reduced (0.5f), 2.0f, 1.0f);
+        g.setColour (juce::Colour (0xffaeb3b5));
+        g.setFont (ConsoleLookAndFeel::uiFont (13.0f, true));
+        g.drawText (title, box.reduced (10).withHeight (16), juce::Justification::centredLeft, false);
+    }
 
     paintSection (g, "Tape speed (ips) and record level", levelBox, faderArea);
     paintSection (g, "Record arm", armBox, faderArea);
@@ -961,11 +990,10 @@ void CentreSection::update()
     const auto& sp = tape.currentSpeed();
     const auto len = tape.getLength();
     const float progress = len > (juce::int64) sr ? (float) ((double) tape.getPosition() / (double) len) : 0.0f;
-    // Winding spins the reels faster (capped, so they do not strobe), backwards when rewinding.
+    // Tape motion in play speeds: 1 playing, up to +-20 winding (negative = rewinding).
     const float windSpeed = tape.getWindSpeed();
-    const float turn = windSpeed == 0.0f ? sp.secondsPerTurn
-                                         : std::copysign (juce::jmax (0.09f, sp.secondsPerTurn / std::abs (windSpeed)), windSpeed);
-    cassette.update (1.0 / 30.0, tape.isPlaying() || windSpeed != 0.0f, turn, progress, juce::String (sp.name) + " ips");
+    const float motion = windSpeed != 0.0f ? windSpeed : (tape.isPlaying() ? 1.0f : 0.0f);
+    cassette.update (1.0 / 30.0, motion / sp.secondsPerTurn, progress, juce::String (sp.name) + " ips");
 
     power.setToggleState (engine.isPowered(), juce::dontSendNotification);
     play.setToggleState (tape.isPlaying(), juce::dontSendNotification);
@@ -1132,7 +1160,8 @@ void Desk::relayout()
     if (width == 2 * cheekW)
         width += 600;   // everything is out: room for a short message
 
-    // As tall as the tallest docked section; the others sit at the bottom, so all the faders line up.
+    // As tall as the tallest docked section; all sections hang from the top, so a bank with minimised
+    // sections collapses upwards.
     int height = 0;
     for (int s = 0; s < numSections; ++s)
         if (docked[(size_t) s])
@@ -1152,7 +1181,7 @@ void Desk::resized()
         if (! docked[(size_t) s])
             continue;
         auto& c = getSection ((Section) s);
-        c.setBounds (x, getHeight() - c.getHeight(), c.getWidth(), c.getHeight());
+        c.setBounds (x, 0, c.getWidth(), c.getHeight());
         x += c.getWidth();
     }
 }

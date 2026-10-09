@@ -88,6 +88,8 @@ AudioSettingsComponent::AudioSettingsComponent (AudioEngine& e, std::function<vo
     std::vector<MappingPage::Row> outRows;
     outRows.push_back ({ "Main L", [this] { return engine.getMainOutput (0); }, [this] (int ch) { engine.setMainOutput (0, ch); } });
     outRows.push_back ({ "Main R", [this] { return engine.getMainOutput (1); }, [this] (int ch) { engine.setMainOutput (1, ch); } });
+    outRows.push_back ({ "Monitor L", [this] { return engine.getMonitorOutput (0); }, [this] (int ch) { engine.setMonitorOutput (0, ch); } });
+    outRows.push_back ({ "Monitor R", [this] { return engine.getMonitorOutput (1); }, [this] (int ch) { engine.setMonitorOutput (1, ch); } });
     for (int k = 0; k < Config::numAux; ++k)
         outRows.push_back ({ "Aux " + juce::String (k + 1),
                              [this, k] { return engine.getAuxOutput (k); },
@@ -97,7 +99,7 @@ AudioSettingsComponent::AudioSettingsComponent (AudioEngine& e, std::function<vo
             outRows.push_back ({ "Sub " + juce::String (k + 1) + (side == 0 ? " L" : " R"),
                                  [this, k, side] { return engine.getSubOutput (k, side); },
                                  [this, k, side] (int ch) { engine.setSubOutput (k, side, ch); } });
-    outputsPage = std::make_unique<MappingPage> ("Interface outputs for main, and optionally for each aux master and sub", std::move (outRows), 2);
+    outputsPage = std::make_unique<MappingPage> ("Interface outputs for main, and optionally for the monitor outs, each aux master and sub", std::move (outRows), 2);
     outputsPage->onChanged = [this] { changed(); };
 
     addAndMakeVisible (*outputsPage);

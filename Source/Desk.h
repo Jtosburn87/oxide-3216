@@ -96,8 +96,28 @@ private:
     bool rec = false;
 };
 
-/** Centre section: tape machine, transport and group EQs on the left; bus meters in the bridge;
-    main fader at the far right of the fader area. */
+/** Stacks its children top to bottom, each the full width (the app buttons in the centre section). */
+class ButtonColumn : public juce::Component
+{
+public:
+    static constexpr int buttonH = 30, gap = 6;
+    int heightFor (int numButtons) const { return numButtons * buttonH + juce::jmax (0, numButtons - 1) * gap; }
+
+    void resized() override
+    {
+        int y = 0;
+        for (auto* c : getChildren())
+        {
+            c->setBounds (0, y, getWidth(), buttonH);
+            y += buttonH + gap;
+        }
+    }
+    void childrenChanged() override { resized(); if (onChildrenChanged) onChildrenChanged(); }
+    std::function<void()> onChildrenChanged;   // the column's height depends on how many buttons it holds
+};
+
+/** Centre section: tape machine, transport and group EQs on the left; the app buttons and the monitor
+    level between the tape machine and the bus compressor; main fader at the far right of the fader area. */
 class CentreSection : public juce::Component
 {
 public:
@@ -106,6 +126,11 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
     void update();   // called by the desk timer
+
+    /** MainComponent puts its buttons (Session, Audio device, ...) in here. */
+    ButtonColumn appButtons;
+
+    void setCassetteAnimated (bool a) { cassette.setAnimated (a); }
 
 private:
     AudioEngine& engine;
@@ -135,7 +160,8 @@ private:
     juce::OwnedArray<juce::Label> busScribbles;
     int limitHold = 0;
 
-    juce::Rectangle<int> deckBox, armBox, levelBox, groupEqBox, meterBox;
+    Knob monitorLevel;
+    juce::Rectangle<int> deckBox, armBox, levelBox, groupEqBox, meterBox, appBox, monitorBox;
 
     /** Centre of meter slot i in the meter panel: subs, then auxes, then main (with room for the LIM lamp). */
     float meterSlotX (int slot) const { return (float) meterBox.getX() + 10.0f + ((float) slot + 0.5f) * (float) (meterBox.getWidth() - 50) / 13.0f; }
@@ -190,6 +216,12 @@ public:
     int getCollapsed (Section) const;
     void setCollapsed (Section, int mask);
     std::function<void()> onCollapseChanged;
+
+    /** Where the app's buttons go (in the centre section, so they travel with it). */
+    ButtonColumn& getAppButtons() { return centre.appButtons; }
+
+    /** Off: the cassette's reels stand still (Options > Animate the cassette), to save CPU. */
+    void setCassetteAnimated (bool a) { centre.setCassetteAnimated (a); }
 
     /** Lets every channel's EQ, gate and compressor be reordered (Options > Unlock chain order). */
     void setChainUnlocked (bool);

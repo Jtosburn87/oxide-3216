@@ -49,7 +49,6 @@ private:
     void placeGroup (const juce::String& title, juce::OwnedArray<Jack>&, int first, int count, int x, int y);
     void jackClicked (Kind, int index);
     void pullCables (Kind, int index);
-    bool accepts (const Jack& destination) const;
     bool isPlugged (Kind, int index) const;
     void changed();
     juce::Point<float> holeCentre (const Jack&) const;

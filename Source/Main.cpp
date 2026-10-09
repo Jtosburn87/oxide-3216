@@ -124,7 +124,7 @@ public:
             // The app icon: the cassette, centred on a transparent square.
             Cassette cassette;
             cassette.projectName() = "Console Tape";
-            cassette.update (0.0, false, 1.0f, 0.3f, "15 ips");
+            cassette.update (0.0, 0.0f, 0.3f, "15 ips");
             const int size = 512;
             const float scale = (float) size / (float) Cassette::width;
             const auto shot = cassette.createComponentSnapshot (cassette.getLocalBounds(), true, scale);
