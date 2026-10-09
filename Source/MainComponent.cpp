@@ -34,10 +34,6 @@ MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionControll
       patchBay (e, [this] { if (saveSettings) saveSettings(); })
 {
     audioButton.onClick = [this] { openAudioSettings(); };
-    vFitButton.setTooltip ("Zoom so the console's full height fits the window");
-    vFitButton.onClick = [this] { fitToWindow (true, false); };
-    hFitButton.setTooltip ("Zoom so the console's full width fits the window");
-    hFitButton.onClick = [this] { fitToWindow (false, true); };
     patchButton.setTooltip ("Open the patch bay");
     patchButton.onClick = [this] { patchBay.setVisible (true); patchBay.toFront (true); };
     patchBay.onClose = [this] { patchBay.setVisible (false); patchButton.grabKeyboardFocus(); };
@@ -87,7 +83,7 @@ MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionControll
         if (saveSettings) saveSettings();
     };
     // Docking or undocking a section refits the view; minimising a section keeps the zoom and the view.
-    desk.onSizeChanged = [this] (bool sectionMoved) { if (sectionMoved && viewport.getWidth() > 0) fitToWindow(); else applyZoom(); };
+    desk.onSizeChanged = [this] (bool sectionMoved) { if (sectionMoved) fitToWindow(); else applyZoom(); };
     sessions.onTitleChanged = [this] { if (auto* w = getTopLevelComponent()) w->setName (sessions.windowTitle()); };
     setWantsKeyboardFocus (true);
     // A plugin window must close before its plugin is deleted.
@@ -117,7 +113,7 @@ MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionControll
         addAndMakeVisible (c);
 
     // The app buttons sit on the console, in a column between the tape machine and the bus compressor.
-    for (auto* b : { &sessionButton, &audioButton, &patchButton, &pluginsButton, &rackButton, &sectionsButton, &vFitButton, &hFitButton })
+    for (auto* b : { &sessionButton, &audioButton, &patchButton, &pluginsButton, &rackButton, &sectionsButton })
         desk.getAppButtons().addAndMakeVisible (b);
     keepTouchDragsOnControls (desk);   // every control is built by now (sections keep the flag in their own windows)
 
@@ -174,20 +170,15 @@ void MainComponent::applyZoom()
     deskHolder.setSize (juce::roundToInt ((float) desk.getWidth() * z), juce::roundToInt ((float) desk.getHeight() * z));
 }
 
-void MainComponent::fitToWindow (bool height, bool width)
+void MainComponent::fitToWindow()
 {
-    const float zw = (float) viewport.getWidth() / (float) desk.getWidth();
-    const float zh = (float) viewport.getHeight() / (float) desk.getHeight();
-    const float bar = (float) viewport.getScrollBarThickness();
-
-    // Fitting one way only: when the other way overflows, its scroll bar takes some of the room.
-    float z = juce::jmin (zw, zh);
-    if (height && ! width)
-        z = zh * (float) desk.getWidth() > (float) viewport.getWidth() ? ((float) viewport.getHeight() - bar) / (float) desk.getHeight() : zh;
-    else if (width && ! height)
-        z = zw * (float) desk.getHeight() > (float) viewport.getHeight() ? ((float) viewport.getWidth() - bar) / (float) desk.getWidth() : zw;
-
-    zoomSlider.setValue (juce::jlimit (30.0, 200.0, std::floor (z * 100.0)), juce::sendNotificationSync);
+    if (viewport.getWidth() <= 0 || viewport.getHeight() <= 0)
+        return;
+    // The whole console, as big as it fits; below 30 % it stops shrinking and scrolls instead.
+    const float z = juce::jmin ((float) viewport.getWidth() / (float) desk.getWidth(),
+                                (float) viewport.getHeight() / (float) desk.getHeight());
+    zoomSlider.setValue (juce::jlimit (30.0, 200.0, std::floor (z * 100.0)), juce::dontSendNotification);
+    applyZoom();
 }
 
 void MainComponent::openAudioSettings()
@@ -302,11 +293,7 @@ void MainComponent::resized()
     viewport.setBounds (getLocalBounds().withTrimmedTop (topBarH));
     patchBay.setBounds (getLocalBounds());
 
-    if (! fittedOnce && viewport.getWidth() > 0)
-    {
-        fittedOnce = true;
-        fitToWindow();
-    }
+    fitToWindow();   // the console scales with the window
 }
 
 void MainComponent::forEachChain (const std::function<void (InsertChain&)>& fn)

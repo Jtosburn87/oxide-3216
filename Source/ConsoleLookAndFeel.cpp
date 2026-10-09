@@ -262,3 +262,15 @@ void ConsoleLookAndFeel::drawBusKnob (juce::Graphics& g, juce::Rectangle<float> 
         g.drawEllipse (bounds.reduced (0.5f), 1.6f);
     }
 }
+
+juce::Font ConsoleLookAndFeel::getPopupMenuFont()
+{
+    auto f = LookAndFeel_V4::getPopupMenuFont();
+    return f.withHeight (f.getHeight() * menuScale);
+}
+
+juce::PopupMenu::Options ConsoleLookAndFeel::getOptionsForComboBoxPopupMenu (juce::ComboBox& box, juce::Label& label)
+{
+    return LookAndFeel_V4::getOptionsForComboBoxPopupMenu (box, label)
+               .withStandardItemHeight (juce::roundToInt ((float) label.getHeight() * menuScale));
+}

@@ -42,5 +42,10 @@ public:
     int getSliderThumbRadius (juce::Slider&) override;   // half the fader cap height, so the cap stays inside the travel
     juce::Font getTextButtonFont (juce::TextButton&, int buttonHeight) override;
 
+    // Pop-up menus and drop-down lists 30 % bigger than JUCE's, so they are easier to read.
+    static constexpr float menuScale = 1.3f;
+    juce::Font getPopupMenuFont() override;
+    juce::PopupMenu::Options getOptionsForComboBoxPopupMenu (juce::ComboBox&, juce::Label&) override;
+
     static juce::Font uiFont (float height, bool bold = false);
 };

@@ -55,7 +55,7 @@ private:
     PluginWindows pluginWindows;
     PluginContext pluginContext;
 
-    juce::TextButton audioButton { "Audio device" }, vFitButton { "V Fit" }, hFitButton { "H Fit" }, patchButton { "Patch bay" }, pluginsButton { "Plugins" }, rackButton { "Rack" }, sessionButton { "Session" }, sectionsButton { "Options" };
+    juce::TextButton audioButton { "Audio device" }, patchButton { "Patch bay" }, pluginsButton { "Plugins" }, rackButton { "Rack" }, sessionButton { "Session" }, sectionsButton { "Options" };
     ViewSwitch viewSwitch;   // Record | Mix | Full
     void showView (int view);   // switches the desk, lights its button and remembers it
     juce::TextButton tapeMachineButton { "Tape Machine" };
@@ -70,7 +70,6 @@ private:
     juce::Viewport viewport;
     std::unique_ptr<TouchPanZoom> touch;   // one-finger pan, pinch to zoom
     PatchBayPanel patchBay;
-    bool fittedOnce = false;
 
     // Sections of the console that are out in windows of their own.
     std::array<std::unique_ptr<SectionWindow>, Desk::numSections> sectionWindows;
@@ -96,6 +95,6 @@ private:
     void openAudioSettings();
     void refreshDeviceText();
     void applyZoom();
-    /** Zoom so the console fits the window: its height, its width, or both. */
-    void fitToWindow (bool height = true, bool width = true);
+    /** Zoom so the whole console fits the window (window resized, view changed, section docked or undocked). */
+    void fitToWindow();
 };
