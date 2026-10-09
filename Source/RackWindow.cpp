@@ -419,13 +419,9 @@ RackWindow::RackWindow (AudioEngine& e, PluginContext& ctx, juce::PropertiesFile
         const int h = juce::jmin (content->view.getHeight(), area.getHeight() * 85 / 100);
         centreWithSize (w, h);
     }
-    context.windows.keepOnTop (*this);
 }
 
-RackWindow::~RackWindow()
-{
-    context.windows.stopKeepingOnTop (*this);
-}
+RackWindow::~RackWindow() = default;
 
 void RackWindow::show()
 {

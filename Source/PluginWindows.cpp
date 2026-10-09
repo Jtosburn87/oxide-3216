@@ -42,7 +42,7 @@ void PluginWindows::open (juce::AudioProcessor& p, const juce::String& title)
     }
     onTop = juce::Process::isForegroundProcess();
     windows.add (new Window (*this, p, title));
-    updateTimer();
+    startTimer (200);
 }
 
 void PluginWindows::close (juce::AudioProcessor* p)
@@ -50,37 +50,9 @@ void PluginWindows::close (juce::AudioProcessor* p)
     for (int i = windows.size(); --i >= 0;)
         if (&windows[i]->processor == p)
             windows.remove (i);
-    updateTimer();
-}
 
-void PluginWindows::keepOnTop (juce::Component& window)
-{
-    onTop = juce::Process::isForegroundProcess();
-    others.addIfNotAlreadyThere (&window);
-    window.setAlwaysOnTop (onTop);
-    updateTimer();
-}
-
-void PluginWindows::stopKeepingOnTop (juce::Component& window)
-{
-    others.removeFirstMatchingValue (&window);
-    updateTimer();
-}
-
-void PluginWindows::updateTimer()
-{
-    if (windows.isEmpty() && others.isEmpty())
+    if (windows.isEmpty())
         stopTimer();
-    else if (! isTimerRunning())
-        startTimer (200);
-}
-
-juce::Array<juce::Component*> PluginWindows::allWindows() const
-{
-    juce::Array<juce::Component*> all (others);
-    for (auto* w : windows)
-        all.add (w);
-    return all;
 }
 
 void PluginWindows::timerCallback()
@@ -93,7 +65,6 @@ void PluginWindows::timerCallback()
 void PluginWindows::setOnTop (bool shouldBeOnTop)
 {
     onTop = shouldBeOnTop;
-    const auto all = allWindows();
 
    #if JUCE_WINDOWS
     // Going behind another app: slot each window straight in under that app's window first. Windows
@@ -101,12 +72,12 @@ void PluginWindows::setOnTop (bool shouldBeOnTop)
     // no-op instead of briefly raising the plugin above everything (HWND_NOTOPMOST would).
     if (! onTop)
         if (auto* front = GetForegroundWindow())
-            for (auto* w : all)
+            for (auto* w : windows)
                 if (auto* peer = w->getPeer())
                     SetWindowPos ((HWND) peer->getNativeHandle(), front, 0, 0, 0, 0,
                                   SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
    #endif
 
-    for (auto* w : all)
+    for (auto* w : windows)
         w->setAlwaysOnTop (onTop);
 }

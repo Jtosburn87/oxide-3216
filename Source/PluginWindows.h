@@ -15,11 +15,7 @@ public:
 
     void open (juce::AudioProcessor&, const juce::String& title);
     void close (juce::AudioProcessor*);
-    void closeAll() { windows.clear(); updateTimer(); }
-
-    /** Another window (the rack) that follows the same rule: on top while ConsoleTape is active. */
-    void keepOnTop (juce::Component& window);
-    void stopKeepingOnTop (juce::Component& window);
+    void closeAll() { windows.clear(); stopTimer(); }
 
 private:
     class Window : public juce::DocumentWindow
@@ -35,10 +31,7 @@ private:
 
     void timerCallback() override;
     void setOnTop (bool onTop);
-    void updateTimer();
-    juce::Array<juce::Component*> allWindows() const;
 
     juce::OwnedArray<Window> windows;
-    juce::Array<juce::Component*> others;
     bool onTop = true;
 };
