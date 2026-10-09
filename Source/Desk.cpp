@@ -1153,7 +1153,7 @@ Desk::~Desk()
 void Desk::componentMovedOrResized (juce::Component&, bool, bool wasResized)
 {
     if (wasResized)
-        relayout();
+        relayout (false);   // a bank minimised or restored a section
 }
 
 void Desk::setChainUnlocked (bool unlocked)
@@ -1201,7 +1201,7 @@ void Desk::setDocked (Section s, bool shouldBeDocked)
     relayout();
 }
 
-void Desk::relayout()
+void Desk::relayout (bool sectionMoved)
 {
     int width = 2 * cheekW;
     for (int s = 0; s < numSections; ++s)
@@ -1220,7 +1220,7 @@ void Desk::relayout()
     setSize (width, height > 0 ? height : totalH);
     resized();
     if (onSizeChanged)
-        onSizeChanged();
+        onSizeChanged (sectionMoved);
 }
 
 void Desk::resized()

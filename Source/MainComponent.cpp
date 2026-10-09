@@ -59,7 +59,8 @@ MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionControll
         settings.setValue ("collapsed.return", desk.getCollapsed (Desk::returnSection));
         if (saveSettings) saveSettings();
     };
-    desk.onSizeChanged = [this] { if (viewport.getWidth() > 0) fitToWindow(); else applyZoom(); };
+    // Docking or undocking a section refits the view; minimising a section keeps the zoom and the view.
+    desk.onSizeChanged = [this] (bool sectionMoved) { if (sectionMoved && viewport.getWidth() > 0) fitToWindow(); else applyZoom(); };
     sessions.onTitleChanged = [this] { if (auto* w = getTopLevelComponent()) w->setName (sessions.windowTitle()); };
     setWantsKeyboardFocus (true);
     // A plugin window must close before its plugin is deleted.

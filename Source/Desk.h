@@ -233,8 +233,9 @@ public:
     /** Lets every channel's EQ, gate and compressor be reordered (Options > Unlock chain order). */
     void setChainUnlocked (bool);
 
-    /** The desk's size changed because a section left or came back. */
-    std::function<void()> onSizeChanged;
+    /** The desk's size changed. sectionMoved: a section left or came back (the view refits);
+        otherwise a bank minimised or restored a section (the zoom stays as it is). */
+    std::function<void (bool sectionMoved)> onSizeChanged;
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -248,7 +249,7 @@ private:
     CentreSection centre;
     std::array<bool, numSections> docked { true, true, true };
 
-    void relayout();
+    void relayout (bool sectionMoved = true);
     void timerCallback() override;
     void componentMovedOrResized (juce::Component&, bool wasMoved, bool wasResized) override;
 };
