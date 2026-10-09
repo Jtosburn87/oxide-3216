@@ -39,7 +39,8 @@ private:
     enum CommandIDs
     {
         playStop = 1, play, stop, record, rewind, fastForward, returnToZero,
-        newSession, openSession, saveSession, saveSessionAs, exportMix, importAudio
+        newSession, openSession, saveSession, saveSessionAs, exportMix, importAudio,
+        recordViewCmd, mixViewCmd, fullViewCmd, nextViewCmd
     };
     juce::ApplicationCommandManager commands;
     juce::Component::SafePointer<juce::DialogWindow> keysWindow;
@@ -54,6 +55,7 @@ private:
 
     juce::TextButton audioButton { "Audio device" }, vFitButton { "V Fit" }, hFitButton { "H Fit" }, patchButton { "Patch bay" }, pluginsButton { "Plugins" }, rackButton { "Rack" }, sessionButton { "Session" }, sectionsButton { "Options" };
     ViewSwitch viewSwitch;   // Record | Mix | Full
+    void showView (int view);   // switches the desk, lights its button and remembers it
     juce::TextButton tapeMachineButton { "Tape Machine" };
     std::unique_ptr<TapeMachineWindow> tapeWindow;   // made on first use, then only hidden
     /** The console's cassette moves (Options setting) unless the Tape machine window is showing it. */

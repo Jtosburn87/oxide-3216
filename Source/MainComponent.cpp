@@ -76,12 +76,7 @@ MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionControll
         applyCassetteAnimation();
     };
     addAndMakeVisible (tapeMachineButton);
-    viewSwitch.onChange = [this] (int v)
-    {
-        desk.setView ((Desk::View) v);
-        settings.setValue ("deskView", v);
-        if (saveSettings) saveSettings();
-    };
+    viewSwitch.onChange = [this] (int v) { showView (v); };
     desk.setCollapsed (Desk::inputSection, settings.getIntValue ("collapsed.input"));
     desk.setCollapsed (Desk::returnSection, settings.getIntValue ("collapsed.return"));
     desk.onCollapseChanged = [this]
@@ -376,7 +371,8 @@ bool MainComponent::keyPressed (const juce::KeyPress& k)
 void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
 {
     ids.addArray ({ playStop, play, stop, record, rewind, fastForward, returnToZero,
-                    newSession, openSession, saveSession, saveSessionAs, exportMix, importAudio });
+                    newSession, openSession, saveSession, saveSessionAs, exportMix, importAudio,
+                    recordViewCmd, mixViewCmd, fullViewCmd, nextViewCmd });
 }
 
 void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommandInfo& info)
@@ -406,6 +402,14 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
                             info.addDefaultKeypress ('e', cmd); break;
         case importAudio:   info.setInfo ("Import audio", "Imports an audio file onto one tape track (a stereo file onto two)", "Session", 0);
                             info.addDefaultKeypress ('i', cmd); break;
+        case recordViewCmd: info.setInfo ("Record view", "Shows input channels 1-16 and the centre section", "View", 0);
+                            info.addDefaultKeypress ('1', cmd); break;
+        case mixViewCmd:    info.setInfo ("Mix view", "Shows the centre section and the tape returns", "View", 0);
+                            info.addDefaultKeypress ('2', cmd); break;
+        case fullViewCmd:   info.setInfo ("Full view", "Shows both banks either side of the centre section", "View", 0);
+                            info.addDefaultKeypress ('3', cmd); break;
+        case nextViewCmd:   info.setInfo ("Next view", "Cycles Record, Mix, Full, then back to Record", "View", 0);
+                            info.addDefaultKeypress (juce::KeyPress::tabKey, cmd); break;
         default: break;
     }
 }
@@ -428,8 +432,20 @@ bool MainComponent::perform (const InvocationInfo& info)
         case saveSessionAs: sessions.saveAs(); return true;
         case exportMix:     sessions.exportMix(); return true;
         case importAudio:   ImportAudioDialog::show (engine, settings); return true;
+        case recordViewCmd: showView (Desk::recordView); return true;
+        case mixViewCmd:    showView (Desk::mixView); return true;
+        case fullViewCmd:   showView (Desk::fullView); return true;
+        case nextViewCmd:   showView ((desk.getView() + 1) % 3); return true;
         default:            return false;
     }
+}
+
+void MainComponent::showView (int v)
+{
+    desk.setView ((Desk::View) v);
+    viewSwitch.setView (v);
+    settings.setValue ("deskView", v);
+    if (saveSettings) saveSettings();
 }
 
 void MainComponent::openKeyMappings()
