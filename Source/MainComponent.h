@@ -41,7 +41,8 @@ private:
         playStop = 1, play, stop, record, rewind, fastForward, returnToZero,
         newSession, openSession, saveSession, saveSessionAs, exportMix, importAudio,
         recordViewCmd, mixViewCmd, fullViewCmd, nextViewCmd,
-        tapeMachineCmd, rackCmd, patchBayCmd, talkbackCmd
+        tapeMachineCmd, rackCmd, patchBayCmd, talkbackCmd, disarmAllCmd,
+        armTrack1 = 100   // armTrack1 + t arms / disarms tape track t + 1
     };
     juce::ApplicationCommandManager commands;
     juce::Component::SafePointer<juce::DialogWindow> keysWindow;

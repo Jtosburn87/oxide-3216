@@ -375,11 +375,21 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
                     newSession, openSession, saveSession, saveSessionAs, exportMix, importAudio,
                     recordViewCmd, mixViewCmd, fullViewCmd, nextViewCmd,
                     tapeMachineCmd, rackCmd, patchBayCmd, talkbackCmd });
+    for (int t = 0; t < TapeMachine::numTracks; ++t)
+        ids.add (armTrack1 + t);
+    ids.add (disarmAllCmd);
 }
 
 void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommandInfo& info)
 {
     const auto cmd = juce::ModifierKeys::commandModifier;
+    // Record arms have no keys until the user gives them some.
+    if (id >= armTrack1 && id < armTrack1 + TapeMachine::numTracks)
+    {
+        const juce::String n (id - armTrack1 + 1);
+        info.setInfo ("Arm track " + n, "Record arm on / off for tape track " + n, "Record arm", 0);
+        return;
+    }
     switch (id)
     {
         case playStop:      info.setInfo ("Play / stop", "Plays the tape, or stops it if it is playing", "Transport", 0);
@@ -420,6 +430,7 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
                             info.addDefaultKeypress ('p', cmd); break;
         case talkbackCmd:   info.setInfo ("Talkback Settings", "Opens the Talkback Settings window", "Windows", 0);
                             info.addDefaultKeypress ('k', cmd); break;
+        case disarmAllCmd:  info.setInfo ("Disarm all tracks", "Takes the record arm off every tape track", "Record arm", 0); break;
         default: break;
     }
 }
@@ -427,6 +438,11 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
 bool MainComponent::perform (const InvocationInfo& info)
 {
     auto& tape = engine.tape;
+    if (info.commandID >= armTrack1 && info.commandID < armTrack1 + TapeMachine::numTracks)
+    {
+        tape.arm[(size_t) (info.commandID - armTrack1)]->toggle();
+        return true;
+    }
     switch (info.commandID)
     {
         case playStop:      if (tape.isPlaying()) tape.stop(); else tape.play(); return true;
@@ -450,6 +466,8 @@ bool MainComponent::perform (const InvocationInfo& info)
         case rackCmd:       rackButton.onClick(); return true;
         case patchBayCmd:   patchButton.onClick(); return true;
         case talkbackCmd:   TalkbackSettings::show (engine); return true;
+        case disarmAllCmd:  for (auto* a : tape.arm) a->set (0.0f);
+                            return true;
         default:            return false;
     }
 }
