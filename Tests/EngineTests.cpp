@@ -819,6 +819,125 @@ namespace
         check (rmsDb() < -150.0f, "no hiss when the tape is stopped");
     }
 
+    /** A tape machine on its own (tape character off), 16 tracks of input and output. */
+    struct TapeRig
+    {
+        ParamSet params;
+        TapeMachine tape { params };
+        std::vector<std::vector<float>> in, out;
+        std::vector<const float*> inPtrs;
+        std::vector<float*> outPtrs;
+        double phase = 0.0;
+        static constexpr int block = 512;
+
+        TapeRig()
+            : in ((size_t) TapeMachine::numTracks, std::vector<float> ((size_t) block)),
+              out ((size_t) TapeMachine::numTracks, std::vector<float> ((size_t) block))
+        {
+            for (auto& v : in)  inPtrs.push_back (v.data());
+            for (auto& v : out) outPtrs.push_back (v.data());
+            tape.prepare (48000.0, 0);
+            tape.characterOn = false;
+        }
+
+        /** Runs blocks, feeding a sine into one track's input (or none); returns the frequency heard on
+            another track, from its rising zero crossings. */
+        double run (int blocks, int listenTrack, int inputTrack = -1, double inputHz = 0.0)
+        {
+            int crossings = 0;
+            float last = 0.0f;
+            for (int k = 0; k < blocks; ++k)
+            {
+                for (auto& v : in) std::fill (v.begin(), v.end(), 0.0f);
+                if (inputTrack >= 0)
+                    for (int i = 0; i < block; ++i, phase += juce::MathConstants<double>::twoPi * inputHz / 48000.0)
+                        in[(size_t) inputTrack][(size_t) i] = 0.5f * (float) std::sin (phase);
+                tape.service();
+                tape.process (inPtrs.data(), outPtrs.data(), block);
+                for (float x : out[(size_t) listenTrack])
+                {
+                    crossings += (last < 0.0f && x >= 0.0f) ? 1 : 0;
+                    last = x;
+                }
+            }
+            return crossings * 48000.0 / (blocks * block);
+        }
+    };
+
+    void testSpeedAndPitch()
+    {
+        std::puts ("Tape speed and pitch: played back at the speed it was recorded at, or not");
+        auto rig = std::make_unique<TapeRig>();
+        auto& tape = rig->tape;
+
+        // Track 1: 1 kHz, imported at 15 ips (a blank tape takes the speed of its first recording).
+        tape.speed->set (1.0f);
+        std::vector<float> sine (48000 * 8);
+        for (size_t i = 0; i < sine.size(); ++i)
+            sine[i] = 0.5f * (float) std::sin (juce::MathConstants<double>::twoPi * 1000.0 * (double) i / 48000.0);
+        tape.writeTrack (0, 0, sine.data(), (int) sine.size());
+        tape.setLength ((juce::int64) sine.size());
+        check (tape.getRecordedIps() == 15.0f, "a blank tape takes the speed of its first recording (15 ips)");
+
+        const auto heard = [&] (int speedIndex, float pitch)
+        {
+            tape.speed->set ((float) speedIndex);
+            tape.pitch->set (pitch);
+            tape.locate (0);
+            tape.play();
+            rig->run (100, 0);                             // the speed glides there (about a second)
+            const auto before = tape.getPosition();
+            const double hz = rig->run (40, 0);
+            const double moved = (double) (tape.getPosition() - before) / (40.0 * TapeRig::block);
+            float pk = 0.0f;
+            for (float x : rig->out[0]) pk = juce::jmax (pk, std::abs (x));
+            tape.stop();
+            std::printf ("      %s ips, pitch %+.0f %%: %.1f Hz, peak %.3f, tape moves %.3f samples per sample\n",
+                         TapeMachine::speeds[speedIndex].name, pitch, hz, pk, moved);
+            check (std::abs (pk - 0.5f) < 0.03f, "  level kept through the resampler (0.5)");
+            return std::pair { hz, moved };
+        };
+
+        auto [hz15, rate15] = heard (1, 0.0f);
+        check (std::abs (hz15 - 1000.0) < 15.0 && rate15 == 1.0, "at the recorded speed: 1 kHz, one tape sample per sample");
+        auto [hz30, rate30] = heard (2, 0.0f);
+        check (std::abs (hz30 - 2000.0) < 25.0 && std::abs (rate30 - 2.0) < 0.01, "15 ips tape at 30 ips: an octave up, twice as fast");
+        auto [hz75, rate75] = heard (0, 0.0f);
+        check (std::abs (hz75 - 500.0) < 12.0 && std::abs (rate75 - 0.5) < 0.01, "15 ips tape at 7.5 ips: an octave down, half as fast");
+        auto [hzUp, rateUp] = heard (1, 10.0f);
+        check (std::abs (hzUp - 1100.0) < 15.0 && std::abs (rateUp - 1.1) < 0.01, "pitch +10 %: 1.1 kHz");
+
+        // Overdub at 30 ips onto the 15 ips tape: in tune at 30, an octave down back at 15.
+        tape.speed->set (2.0f);
+        tape.pitch->set (0.0f);
+        tape.arm[1]->set (1.0f);
+        tape.locate (0);
+        tape.setRecordEnabled (true);
+        tape.play();
+        rig->run (300, 1, 1, 1000.0);   // 3.2 s of 1 kHz into track 2
+        tape.stop();
+        tape.setRecordEnabled (false);
+        tape.arm[1]->set (0.0f);
+        check (tape.getRecordedIps() == 15.0f, "the tape keeps its recorded speed through an overdub at another speed");
+
+        tape.locate (0);
+        tape.play();
+        rig->run (100, 1);
+        const double at30 = rig->run (40, 1);
+        tape.stop();
+        tape.speed->set (1.0f);
+        tape.locate (0);
+        tape.play();
+        rig->run (100, 1);
+        const double at15 = rig->run (40, 1);
+        tape.stop();
+        std::printf ("      overdub made at 30 ips: %.1f Hz at 30, %.1f Hz at 15\n", at30, at15);
+        check (std::abs (at30 - 1000.0) < 15.0 && std::abs (at15 - 500.0) < 10.0, "overdub at 30 ips: 1 kHz at 30, 500 Hz at 15");
+
+        tape.eraseAll();
+        check (tape.getRecordedIps() == 0.0f, "erasing the tape forgets its speed");
+    }
+
     void testTapeOutMeters()
     {
         std::puts ("Meter bridge: each track's tape out peak, read and reset");
@@ -1950,6 +2069,7 @@ int main (int argc, char** argv)
     testSends();
     testTapeCharacter();
     testTapeOutMeters();
+    testSpeedAndPitch();
     testPreampColour();
     testBusCompressor();
     testMasterSection();

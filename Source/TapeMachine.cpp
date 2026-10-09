@@ -4,6 +4,16 @@ namespace
 {
     constexpr double allocateAheadSeconds = 20.0;
     constexpr float saturationBias = 0.12f;   // asymmetry of the tape curve (from the prototype)
+    constexpr double rateGlideSeconds = 0.12; // speed changes settle in about a third of a second
+
+    /** 4-point, 3rd-order Hermite interpolation between x0 and x1 (t = 0..1). */
+    inline float hermite (float xm1, float x0, float x1, float x2, float t) noexcept
+    {
+        const float c1 = 0.5f * (x1 - xm1);
+        const float c2 = xm1 - 2.5f * x0 + 2.0f * x1 - 0.5f * x2;
+        const float c3 = 0.5f * (x2 - xm1) + 1.5f * (x0 - x1);
+        return ((c3 * t + c2) * t + c1) * t + x0;
+    }
 }
 
 TapeMachine::TapeMachine (ParamSet& params)
@@ -11,6 +21,7 @@ TapeMachine::TapeMachine (ParamSet& params)
 {
     recordLevel = &params.add ("tape.level", "Record level", -12.0f, 18.0f, 0.0f);
     speed = &params.addStepped ("tape.speed", "Tape speed", 3, 1);   // 15 ips
+    pitch = &params.add ("tape.pitch", "Pitch", -maxPitchPercent, maxPitchPercent, 0.0f);
     wowFlutter = &params.addToggle ("tape.wf", "Wow and flutter", true);
     for (int t = 0; t < numTracks; ++t)
     {
@@ -25,7 +36,26 @@ TapeMachine::TapeMachine (ParamSet& params)
             c.store (nullptr);
     }
 
+    // Vari-speed buffers, made once here (never on the audio thread).
+    for (auto& r : vs)
+        r.stream.assign ((size_t) maxFetch + 4, 0.0f);
+    fetchCount.assign ((size_t) Config::maxBlock, 0);
+    outFrac.assign ((size_t) Config::maxBlock, 0.0f);
+    fetchTime.assign ((size_t) maxFetch, 0.0f);
+    fetchPos.assign ((size_t) maxFetch, 0);
+    inScratch.assign ((size_t) Config::maxBlock + 4, 0.0f);
+    recScratch.assign ((size_t) maxFetch, 0.0f);
+    fadeScratch.assign ((size_t) maxFetch, 0.0f);
+
     startTimerHz (10);
+}
+
+double TapeMachine::getPlaybackRate() const noexcept
+{
+    const double nominal = ipsOf (juce::jlimit (0, 2, juce::roundToInt (speed->get())));
+    const double tag = recordedIps.load();
+    const double varispeed = 1.0 + juce::jlimit (-maxPitchPercent, maxPitchPercent, pitch->get()) * 0.01;
+    return nominal * varispeed / (tag > 0.0 ? tag : nominal);   // exactly 1 at the recorded speed, pitch centred
 }
 
 TapeMachine::~TapeMachine()
@@ -57,6 +87,9 @@ void TapeMachine::prepare (double sr, int roundTripLatency)
         f.lowPass.reset();
     }
     designedSpeed = -1;
+    rateNow = getPlaybackRate();
+    vsPrimed = false;
+    aaPlayCut = aaRecCut = 0.0f;
 }
 
 bool TapeMachine::isRecording (int track) const noexcept
@@ -87,7 +120,8 @@ void TapeMachine::locate (juce::int64 p)
     p = juce::jlimit ((juce::int64) 0, (juce::int64) maxChunks * chunkSize - 1, p);
     for (int t = 0; t < numTracks; ++t)
         if (arm[(size_t) t]->on())
-            ensureChunks (t, p - recordDelay() - chunkSize, p + (juce::int64) (allocateAheadSeconds * sampleRate));
+            ensureChunks (t, p - (juce::int64) ((recordDelay() + 8) * maxRate) - chunkSize,   // vari-speed records up to maxRate x the delay back
+                          p + (juce::int64) (allocateAheadSeconds * sampleRate * juce::jmax (1.0, getPlaybackRate())));
     windRequest.store (0);
     windReset.store (true);
     position.store (p);
@@ -105,6 +139,7 @@ void TapeMachine::eraseAll()
             if (auto* old = c.exchange (nullptr))
                 retired.push_back ({ old, stamp });
     length.store (0);
+    recordedIps.store (0.0f);   // a blank tape takes the speed of its next recording
     locate (0);
 }
 
@@ -125,7 +160,8 @@ void TapeMachine::service()
     const auto p = position.load();
     for (int t = 0; t < numTracks; ++t)
         if (arm[(size_t) t]->on())
-            ensureChunks (t, p - recordDelay() - chunkSize, p + (juce::int64) (allocateAheadSeconds * sampleRate));
+            ensureChunks (t, p - (juce::int64) ((recordDelay() + 8) * maxRate) - chunkSize,   // vari-speed records up to maxRate x the delay back
+                          p + (juce::int64) (allocateAheadSeconds * sampleRate * juce::jmax (1.0, getPlaybackRate())));
 
     // Free erased chunks once the audio thread has moved on (or is not running at all).
     const auto blocks = blocksProcessed.load();
@@ -261,6 +297,8 @@ void TapeMachine::loadTrack (int track, const float* data, juce::int64 n)
 
     if (n <= 0)
         return;
+    if (recordedIps.load() <= 0.0f)
+        recordedIps.store (ipsOf (juce::jlimit (0, 2, juce::roundToInt (speed->get()))));
     ensureChunks (track, 0, n - 1);
     for (juce::int64 done = 0; done < n;)
     {
@@ -278,7 +316,10 @@ void TapeMachine::process (const float* const* tapeIn, float* const* tapeOut, in
 
     const auto req = locateRequest.exchange (-1);
     if (req >= 0)
+    {
         pos = req;
+        vsPrimed = false;
+    }
     if (windReset.exchange (false))
     {
         windVel = 0.0;
@@ -340,25 +381,45 @@ void TapeMachine::process (const float* const* tapeIn, float* const* tapeOut, in
     // Everything the musician hears from tape is late by this much: recordings are written that much earlier.
     const int delay = latency.load() + (character ? oversamplerLatency + base : 0);
 
-    // Loop: split the block where the tape reaches the Out point and jump back to In.
+    // Speed and pitch. A blank tape takes the speed it is first recorded at. The rate glides to a new
+    // setting the way a capstan motor gets up to speed.
+    if (isPlay && rec && anyArmed && recordedIps.load() <= 0.0f)
+        recordedIps.store (ipsOf (speedIndex));
+    const double target = getPlaybackRate();
+    const double r0 = rateNow;
+    double r1 = r0 + (target - r0) * (1.0 - std::exp (-(double) n / (sampleRate * rateGlideSeconds)));
+    if (std::abs (r1 - target) < 1.0e-5)
+        r1 = target;
+    rateNow = r1 = juce::jlimit (1.0 / maxRate, maxRate, r1);
+
     const bool loop = loopOn.load() && hasRegion();
     const auto loopIn = inPoint.load(), loopOut = outPoint.load();
-    int done = 0;
-    while (done < n)
+    if (isPlay && ! (r0 == 1.0 && r1 == 1.0))
     {
-        int count = n - done;
-        if (isPlay && loop && pos < loopOut)
-            count = (int) juce::jmin ((juce::int64) count, loopOut - pos);
-
-        processSegment (tapeOut, done, count, isPlay, rec, character, sp, delay);
-
-        if (isPlay)
+        processVarispeed (tapeOut, n, rec, character, sp, delay, r0, r1);
+    }
+    else
+    {
+        // The tape at its recorded speed: one tape sample per output sample.
+        // Loop: split the block where the tape reaches the Out point and jump back to In.
+        vsPrimed = false;
+        int done = 0;
+        while (done < n)
         {
-            pos += count;
-            if (loop && pos == loopOut)
-                pos = loopIn;
+            int count = n - done;
+            if (isPlay && loop && pos < loopOut)
+                count = (int) juce::jmin ((juce::int64) count, loopOut - pos);
+
+            processSegment (tapeOut, done, count, isPlay, rec, character, sp, delay);
+
+            if (isPlay)
+            {
+                pos += count;
+                if (loop && pos == loopOut)
+                    pos = loopIn;
+            }
+            done += count;
         }
-        done += count;
     }
 
     if (isPlay)
@@ -462,20 +523,7 @@ void TapeMachine::processSegment (float* const* tapeOut, int offset, int count,
         }
 
         if (wobble)
-        {
-            // Modulated delay with linear interpolation; the line keeps running so it never clicks.
-            auto& line = wowLine[(size_t) t];
-            for (int i = 0; i < count; ++i)
-            {
-                const int w = (wowWrite + i) & (wowLineSize - 1);
-                line[(size_t) w] = play[i];
-                const float readPos = (float) (wowWrite + i) - wowDelay[(size_t) (offset + i)];
-                const int i0 = (int) std::floor (readPos);
-                const float frac = readPos - (float) i0;
-                const float a = line[(size_t) (i0 & (wowLineSize - 1))], b = line[(size_t) ((i0 + 1) & (wowLineSize - 1))];
-                play[i] = a + (b - a) * frac;
-            }
-        }
+            wobblePlayback (t, play, offset, count);
 
         if (! armed)
         {
@@ -497,38 +545,7 @@ void TapeMachine::processSegment (float* const* tapeOut, int offset, int count,
         }
 
         if (armed && isPlay && rec)
-        {
-            const auto w0 = pos - delay;
-            auto a = w0, b = w0 + count;
-            if (punch)
-            {
-                a = juce::jmax (a, punchIn);
-                b = juce::jmin (b, punchOut);
-            }
-            if (b > a && punch)
-            {
-                // Smooth punch: crossfade from the old take into the new one after the In point,
-                // and back to the old take before the Out point.
-                const int len = (int) (b - a);
-                float* mixed = fadeScratch.data();
-                readTrack (t, a, mixed, len);
-                const float* fresh = input + (a - w0);
-                for (int i = 0; i < len; ++i)
-                {
-                    const float g = punchGain (a + i, punchIn, punchOut);
-                    mixed[i] = fresh[i] * g + mixed[i] * (1.0f - g);
-                }
-                write (t, a, mixed, len);
-                trackRevision[(size_t) t].fetch_add (1, std::memory_order_relaxed);
-                recordedEnd = juce::jmax (recordedEnd, b);
-            }
-            else if (b > a)
-            {
-                write (t, a, input + (a - w0), (int) (b - a));
-                trackRevision[(size_t) t].fetch_add (1, std::memory_order_relaxed);
-                recordedEnd = juce::jmax (recordedEnd, b);
-            }
-        }
+            recordRun (t, pos - delay, input, count, punch, punchIn, punchOut, recordedEnd);
 
         if (character)
         {
@@ -540,6 +557,269 @@ void TapeMachine::processSegment (float* const* tapeOut, int offset, int count,
 
     if (wobble)
         wowWrite = (wowWrite + count) & (wowLineSize - 1);
+
+    if (recordedEnd > 0)
+    {
+        auto len = length.load();
+        while (recordedEnd > len && ! length.compare_exchange_weak (len, recordedEnd)) {}
+    }
+}
+
+void TapeMachine::wobblePlayback (int t, float* play, int offset, int count) noexcept
+{
+    // Modulated delay with linear interpolation; the line keeps running so it never clicks.
+    auto& line = wowLine[(size_t) t];
+    for (int i = 0; i < count; ++i)
+    {
+        const int w = (wowWrite + i) & (wowLineSize - 1);
+        line[(size_t) w] = play[i];
+        const float readPos = (float) (wowWrite + i) - wowDelay[(size_t) (offset + i)];
+        const int i0 = (int) std::floor (readPos);
+        const float frac = readPos - (float) i0;
+        const float a = line[(size_t) (i0 & (wowLineSize - 1))], b = line[(size_t) ((i0 + 1) & (wowLineSize - 1))];
+        play[i] = a + (b - a) * frac;
+    }
+}
+
+void TapeMachine::recordRun (int t, juce::int64 w0, const float* src, int count, bool punch,
+                             juce::int64 punchIn, juce::int64 punchOut, juce::int64& recordedEnd) noexcept
+{
+    auto a = w0, b = w0 + count;
+    if (punch)
+    {
+        a = juce::jmax (a, punchIn);
+        b = juce::jmin (b, punchOut);
+    }
+    if (b <= a)
+        return;
+
+    if (punch)
+    {
+        // Smooth punch: crossfade from the old take into the new one after the In point,
+        // and back to the old take before the Out point.
+        const int len = (int) (b - a);
+        float* mixed = fadeScratch.data();
+        readTrack (t, a, mixed, len);
+        const float* fresh = src + (a - w0);
+        for (int i = 0; i < len; ++i)
+        {
+            const float g = punchGain (a + i, punchIn, punchOut);
+            mixed[i] = fresh[i] * g + mixed[i] * (1.0f - g);
+        }
+        write (t, a, mixed, len);
+    }
+    else
+    {
+        write (t, a, src + (a - w0), (int) (b - a));
+    }
+    trackRevision[(size_t) t].fetch_add (1, std::memory_order_relaxed);
+    recordedEnd = juce::jmax (recordedEnd, b);
+}
+
+//==============================================================================
+void TapeMachine::designAntiAlias (double r0, double r1) noexcept
+{
+    // Playing faster squeezes the tape's top end above the output's Nyquist, so it is filtered off on the tape
+    // side first; recording at a slower rate than the tape's own does the same to the input.
+    const float playCut = (float) (0.45 * sampleRate / juce::jmax (1.0, juce::jmax (r0, r1)));
+    const float recCut = (float) (0.45 * sampleRate * juce::jmin (1.0, juce::jmin (r0, r1)));
+    const auto redesign = [this] (float cut, float& designed, Dsp::Biquad Resampler::* first, Dsp::Biquad Resampler::* second)
+    {
+        if (std::abs (cut - designed) <= designed * 0.005f)
+            return;
+        designed = cut;
+        Dsp::Biquad a, b;   // 4th-order Butterworth
+        a.setLowPass (sampleRate, cut, 0.5412);
+        b.setLowPass (sampleRate, cut, 1.3066);
+        for (auto& v : vs)
+        {
+            (v.*first).copyCoefficients (a);
+            (v.*second).copyCoefficients (b);
+        }
+    };
+    redesign (playCut, aaPlayCut, &Resampler::play1, &Resampler::play2);
+    redesign (recCut, aaRecCut, &Resampler::rec1, &Resampler::rec2);
+}
+
+void TapeMachine::primeVarispeed() noexcept
+{
+    // Start from the tape just behind the head, through the filter (warmed up on the 64 samples before),
+    // so going into vari-speed in the middle of a song does not click.
+    constexpr int warm = 64;
+    float* scratch = recScratch.data();
+    for (int t = 0; t < numTracks; ++t)
+    {
+        auto& v = vs[(size_t) t];
+        v.play1.reset();
+        v.play2.reset();
+        v.rec1.reset();
+        v.rec2.reset();
+        v.inHistory.fill (0.0f);
+        readTrack (t, pos - warm - 4, scratch, warm + 4);
+        for (int i = 0; i < warm + 4; ++i)
+            scratch[i] = v.play2.process (v.play1.process (scratch[i]));
+        std::copy (scratch + warm, scratch + warm + 4, v.stream.begin());
+    }
+    vsPhase = 0.0;
+    vsPrimed = true;
+}
+
+void TapeMachine::processVarispeed (float* const* tapeOut, int n, bool rec, bool character, const Speed& sp, int delay,
+                                    double r0, double r1) noexcept
+{
+    designAntiAlias (r0, r1);
+    if (! vsPrimed)
+        primeVarispeed();
+
+    // The tape passes r of its samples per output sample (r ramps across the block when the speed changes).
+    // Note when the head crosses each tape sample, and where the output samples fall between them.
+    int K = 0;
+    double f = vsPhase;
+    for (int i = 0; i < n; ++i)
+    {
+        const double r = r0 + (r1 - r0) * (double) (i + 1) / (double) n;
+        f += r;
+        int c = 0;
+        while (f >= 1.0 && K < maxFetch)
+        {
+            f -= 1.0;
+            fetchTime[(size_t) K++] = (float) ((double) i - f / r);   // in output samples, from the block start
+            ++c;
+        }
+        fetchCount[(size_t) i] = c;
+        outFrac[(size_t) i] = (float) juce::jmin (f, 0.999999);
+    }
+    vsPhase = juce::jmin (f, 0.999999);
+
+    // Which tape samples those are (the loop jumps from Out back to In).
+    const auto startPos = pos;
+    const bool loop = loopOn.load() && hasRegion();
+    const auto loopIn = inPoint.load(), loopOut = outPoint.load();
+    for (int k = 0; k < K; ++k)
+    {
+        fetchPos[(size_t) k] = pos;
+        ++pos;
+        if (loop && pos == loopOut)
+            pos = loopIn;
+    }
+    const auto runLength = [this, K] (int k)
+    {
+        int len = 1;
+        while (k + len < K && fetchPos[(size_t) (k + len)] == fetchPos[(size_t) (k + len - 1)] + 1)
+            ++len;
+        return len;
+    };
+
+    const auto punchIn = inPoint.load(), punchOut = outPoint.load();
+    const bool punch = punchOn.load() && punchOut > punchIn && rec;
+    const bool wobble = character && wowBase (sp) > 0;
+    const float hissGain = Dsp::dbToGain (sp.hissDb);
+    float* play = playScratch.data();
+    juce::int64 recordedEnd = -1;
+
+    // Output is heard two tape samples behind the newest one fetched (so all four interpolation points exist).
+    // A take is written back by the round trip (in tape samples at this rate) plus that lag, and the input is
+    // read two samples late for the same reason.
+    const auto recordShift = (juce::int64) std::llround (r0 * (double) (delay + 2)) + 2;
+
+    for (int t = 0; t < numTracks; ++t)
+    {
+        auto& v = vs[(size_t) t];
+        float* out = tapeOut[t];
+        const float* input = recordBuf[(size_t) t].data();
+        const bool armed = arm[(size_t) t]->on() && ! exporting.load (std::memory_order_relaxed);
+        const bool needPlay = ! armed || punch;
+        float* stream = v.stream.data();   // [0, 4): history; [4, 4 + K): this block's tape samples
+
+        if (needPlay)
+        {
+            for (int k = 0; k < K;)
+            {
+                const int len = runLength (k);
+                readTrack (t, fetchPos[(size_t) k], stream + 4 + k, len);
+                k += len;
+            }
+            for (int k = 0; k < K; ++k)
+                stream[4 + k] = v.play2.process (v.play1.process (stream[4 + k]));
+        }
+        else
+        {
+            std::fill (stream + 4, stream + 4 + K, 0.0f);
+        }
+
+        int newest = 3;
+        for (int i = 0; i < n; ++i)
+        {
+            newest += fetchCount[(size_t) i];
+            play[i] = hermite (stream[newest - 3], stream[newest - 2], stream[newest - 1], stream[newest], outFrac[(size_t) i]);
+        }
+
+        if (needPlay && character)
+        {
+            auto& noise = hiss[(size_t) t];
+            for (int i = 0; i < n; ++i)
+                play[i] += hissGain * noise.next();
+        }
+        if (wobble)
+            wobblePlayback (t, play, 0, n);
+
+        if (! armed)
+        {
+            std::memcpy (out, play, sizeof (float) * (size_t) n);
+        }
+        else if (punch)
+        {
+            // Auto-input, at the tape position being heard.
+            int j = 3;
+            for (int i = 0; i < n; ++i)
+            {
+                j += fetchCount[(size_t) i];
+                const int heard = j - 2;
+                const auto p = heard >= 4 ? fetchPos[(size_t) (heard - 4)] : startPos - (4 - heard);
+                const float g = punchGain (p, punchIn, punchOut);
+                out[i] = input[i] * g + play[i] * (1.0f - g);
+            }
+        }
+        else
+        {
+            std::memcpy (out, input, sizeof (float) * (size_t) n);
+        }
+
+        if (armed && rec)
+        {
+            float* in = inScratch.data();   // [0, 4): history; [4, 4 + n): this block's input
+            std::copy (v.inHistory.begin(), v.inHistory.end(), in);
+            for (int i = 0; i < n; ++i)
+                in[4 + i] = v.rec2.process (v.rec1.process (input[i]));
+            std::copy (in + n, in + n + 4, v.inHistory.begin());
+
+            float* vals = recScratch.data();
+            for (int k = 0; k < K; ++k)
+            {
+                const float x = fetchTime[(size_t) k] + 2.0f;   // the input two samples before the crossing
+                const int i0 = juce::jlimit (1, n + 1, (int) x);
+                vals[k] = hermite (in[i0 - 1], in[i0], in[i0 + 1], in[i0 + 2], juce::jlimit (0.0f, 1.0f, x - (float) i0));
+            }
+            for (int k = 0; k < K;)
+            {
+                const int len = runLength (k);
+                recordRun (t, fetchPos[(size_t) k] - recordShift, vals + k, len, punch, punchIn, punchOut, recordedEnd);
+                k += len;
+            }
+        }
+
+        std::copy (stream + K, stream + K + 4, stream);   // history for the next block
+
+        if (character)
+        {
+            auto& flt = filters[(size_t) t];
+            for (int i = 0; i < n; ++i)
+                out[i] = flt.lowPass.process (flt.shelf.process (flt.bump.process (out[i])));
+        }
+    }
+
+    if (wobble)
+        wowWrite = (wowWrite + n) & (wowLineSize - 1);
 
     if (recordedEnd > 0)
     {
@@ -560,6 +840,8 @@ void TapeMachine::writeTrack (int track, juce::int64 start, const float* data, i
 {
     if (n <= 0)
         return;
+    if (recordedIps.load() <= 0.0f)
+        recordedIps.store (ipsOf (juce::jlimit (0, 2, juce::roundToInt (speed->get()))));   // as if recorded at this speed
     ensureChunks (track, start, start + n - 1);
     write (track, start, data, n);
     trackRevision[(size_t) track].fetch_add (1);

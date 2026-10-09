@@ -129,6 +129,7 @@ Session::Result Session::save (AudioEngine& e, const juce::File& folder, TrackRe
     t->setProperty ("out", tape.getOutPoint());
     t->setProperty ("loop", tape.loopOn.load());
     t->setProperty ("punch", tape.punchOn.load());
+    t->setProperty ("recordedIps", tape.getRecordedIps());
 
     juce::Array<juce::var> files;
     for (int track = 0; track < Config::numTracks; ++track)
@@ -302,6 +303,11 @@ Session::Result Session::load (AudioEngine& e, PluginManager* plugins, const juc
         }
     }
 
+    // The speed the tape was recorded at. Sessions from before vari-speed were recorded at their speed setting,
+    // which loading the tracks has already set (the controls, speed included, load first).
+    if ((double) tapeInfo["recordedIps"] > 0.0)
+        e.tape.setRecordedIps ((float) (double) tapeInfo["recordedIps"]);
+
     e.tape.setLength (juce::jmax ((juce::int64) tapeInfo["length"], longest));
     e.tape.setInPoint ((juce::int64) tapeInfo["in"]);
     e.tape.setOutPoint ((juce::int64) tapeInfo["out"]);
@@ -357,7 +363,8 @@ Session::Result Session::exportMix (AudioEngine& e, const juce::File& file, juce
     tape.locate (start);
     tape.play();
 
-    const auto total = (end - start) + (juce::int64) (tailSeconds * sr);
+    // The tape runs at its playback rate (speed switch and pitch against the recorded speed).
+    const auto total = (juce::int64) std::ceil ((double) (end - start) / tape.getPlaybackRate()) + (juce::int64) (tailSeconds * sr);
     std::vector<float> left ((size_t) Config::maxBlock), right ((size_t) Config::maxBlock);
     bool cancelled = false;
     for (juce::int64 done = 0; done < total;)

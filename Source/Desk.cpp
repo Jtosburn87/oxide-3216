@@ -602,6 +602,7 @@ void TapeClock::paint (juce::Graphics& g)
 CentreSection::CentreSection (AudioEngine& e, PluginContext* plugins)
     : engine (e), tape (e.tape),
       recordLevel (*e.tape.recordLevel, "Level", juce::Colour (0xffd6392d)),
+      pitchKnob (*e.tape.pitch, "Pitch", juce::Colour (0xffd9d6cc)),
       wowButton (*e.tape.wowFlutter, "W&F"),
       mainFader (*e.mainFader),
       busPanel (e.busComp),
@@ -667,6 +668,9 @@ CentreSection::CentreSection (AudioEngine& e, PluginContext* plugins)
 
     recordLevel.setEndLabels ("-12", "+18");
     addAndMakeVisible (recordLevel);
+    pitchKnob.setEndLabels ("-", "+");
+    pitchKnob.setFormatter ([] (float pc) { return std::abs (pc) < 0.05f ? juce::String ("Pitch") : (pc > 0 ? "+" : "") + juce::String (pc, 1) + " %"; });
+    addAndMakeVisible (pitchKnob);
 
     for (int t = 0; t < TapeMachine::numTracks; ++t)
     {
@@ -821,7 +825,8 @@ void CentreSection::resized()
     levelBox = d.removeFromTop (70);
     {
         auto inner = levelBox.reduced (10, 0).withTrimmedTop (10);
-        recordLevel.setBounds (inner.removeFromRight (Knob::preferredWidth + 20).withSizeKeepingCentre (Knob::preferredWidth, Knob::preferredHeight));
+        recordLevel.setBounds (inner.removeFromRight (Knob::preferredWidth + 14).withSizeKeepingCentre (Knob::preferredWidth, Knob::preferredHeight));
+        pitchKnob.setBounds (inner.removeFromRight (Knob::preferredWidth + 14).withSizeKeepingCentre (Knob::preferredWidth, Knob::preferredHeight));
         auto speedRow = inner.withSizeKeepingCentre (inner.getWidth(), 26);
         const int w = (speedRow.getWidth() - 8) / 3;
         for (auto* b : speedButtons)
@@ -939,7 +944,10 @@ void CentreSection::paint (juce::Graphics& g)
         g.drawText (title, box.reduced (10).withHeight (16), juce::Justification::centredLeft, false);
     }
 
-    paintSection (g, "Tape speed (ips) and record level", levelBox, faderArea);
+    const float recordedIps = tape.getRecordedIps();
+    paintSection (g, "Tape speed (ips), pitch, record level"
+                     + (recordedIps > 0.0f ? "   |   recorded at " + juce::String (recordedIps, recordedIps < 10.0f ? 1 : 0) : juce::String()),
+                  levelBox, faderArea);
     paintSection (g, "Record arm", armBox, faderArea);
     const auto t = [this] (juce::int64 s) { const auto sr = tape.getSampleRate(); const auto tenths = (juce::int64) ((double) s / (sr > 0 ? sr : 48000.0) * 10.0); return juce::String::formatted ("%02d:%02d.%d", (int) (tenths / 600), (int) ((tenths / 10) % 60), (int) (tenths % 10)); };
     paintSection (g, "Locate   In " + t (tape.getInPoint()) + "   Out " + t (tape.getOutPoint()), locateBox, faderArea);
@@ -991,6 +999,13 @@ void CentreSection::update()
     {
         repaint();
         inserts.repaint();
+    }
+
+    // The speed the tape was recorded at, in the speed box's title (set by the first recording, cleared by Erase).
+    if (tape.getRecordedIps() != shownRecordedIps)
+    {
+        shownRecordedIps = tape.getRecordedIps();
+        repaint (levelBox);
     }
 
     const int holdBefore = limitHold;

@@ -51,10 +51,23 @@ public:
 
     Param* recordLevel;                       // dB into tape, -12..+18
     Param* speed;                             // 0, 1, 2 = 7.5, 15, 30 ips
+    Param* pitch;                             // vari-speed, percent: -12..+12 (0 = the speed switch exactly)
     std::array<Param*, numTracks> arm {};     // armed tracks monitor their input and record
     Param* wowFlutter;                        // W&F on/off
 
     const Speed& currentSpeed() const noexcept { return speeds[juce::jlimit (0, 2, juce::roundToInt (speed->get()))]; }
+    static float ipsOf (int speedIndex) noexcept { return speedIndex <= 0 ? 7.5f : speedIndex == 1 ? 15.0f : 30.0f; }
+
+    /** Speed and pitch, as on a real machine: the tape remembers the speed it was recorded at (set by the
+        first recording or import onto a blank tape, cleared by erasing it). Playing at another speed, or with
+        the pitch knob off centre, plays it faster or slower: rate = speed x (1 + pitch) / recorded speed.
+        Recording at a rate other than 1 lays the take onto the tape at the tape's own density, so an overdub
+        made at 30 ips on a tape recorded at 15 is in tune with it at 30 and an octave down at 15.
+        Positions (the counter, In/Out, length) count the tape itself, in samples at the recorded speed. */
+    float getRecordedIps() const noexcept { return recordedIps.load(); }   // 0 = blank tape
+    void setRecordedIps (float ips) noexcept { recordedIps.store (ips); }
+    double getPlaybackRate() const noexcept;                               // what the knobs ask for now
+    static constexpr float maxPitchPercent = 12.0f;
 
     // Called before audio starts (not from the audio callback).
     void prepare (double sampleRate, int roundTripLatencySamples);
@@ -151,6 +164,32 @@ private:
     std::array<std::atomic<std::uint32_t>, numTracks> trackRevision {};
     std::array<std::atomic<float>, numTracks> outPeak {};
 
+    // Vari-speed (rate != 1): the tape is read at fractional positions and recorded through a resampler.
+    static constexpr double maxRate = 4.6;   // 30 ips + 12 % on a tape recorded at 7.5
+    static constexpr int maxFetch = (int) (maxRate * Config::maxBlock) + 8;
+    std::atomic<float> recordedIps { 0.0f };
+    double rateNow = 1.0, vsPhase = 0.0;
+    bool vsPrimed = false;
+    float aaPlayCut = 0.0f, aaRecCut = 0.0f;
+    struct Resampler
+    {
+        std::vector<float> stream;      // 4 tape samples of history, then this block's fetched samples
+        std::array<float, 4> inHistory {};
+        Dsp::Biquad play1, play2, rec1, rec2;   // anti-alias low-passes (4th order each)
+    };
+    std::array<Resampler, numTracks> vs;
+    std::vector<int> fetchCount;               // per output sample
+    std::vector<float> outFrac, fetchTime;     // per output sample / per fetched tape sample
+    std::vector<juce::int64> fetchPos;         // tape position of each fetched sample
+    std::vector<float> inScratch, recScratch;
+    void processVarispeed (float* const* tapeOut, int n, bool rec, bool character, const Speed&, int delay,
+                           double r0, double r1) noexcept;
+    void primeVarispeed() noexcept;
+    void designAntiAlias (double r0, double r1) noexcept;
+    void wobblePlayback (int track, float* play, int offset, int count) noexcept;
+    void recordRun (int track, juce::int64 w0, const float* src, int count, bool punch,
+                    juce::int64 punchIn, juce::int64 punchOut, juce::int64& recordedEnd) noexcept;
+
     // Tape character state.
     Dsp::Smoothed levelGain;
     std::array<float, Config::maxBlock> gainScratch {};
@@ -167,7 +206,7 @@ private:
     double wowPhase = 0.0, flutterPhase1 = 0.0, flutterPhase2 = 0.0;
     std::array<float, Config::maxBlock> wowDelay {};
     std::array<float, Config::maxBlock> playScratch {};
-    std::array<float, Config::maxBlock> fadeScratch {};
+    std::vector<float> fadeScratch;   // maxFetch
     float punchGain (juce::int64 position, juce::int64 punchIn, juce::int64 punchOut) const noexcept;
     int wowBase (const Speed&) const noexcept;
     void processSegment (float* const* tapeOut, int offset, int count,

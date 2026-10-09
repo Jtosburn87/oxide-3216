@@ -157,7 +157,8 @@ private:
     TapeClock clock;
     juce::OwnedArray<RadioParamButton> speedButtons;
     juce::TextButton power { "Power" }, rew { "Rew" }, ff { "FF" }, stop { "Stop" }, play { "Play" }, rec { "Rec" }, erase { "Erase" };
-    Knob recordLevel;
+    Knob recordLevel, pitchKnob;
+    float shownRecordedIps = -1.0f;   // in the speed box's title
     juce::OwnedArray<ParamButton> armButtons;
     juce::TextButton setIn { "Set In" }, setOut { "Set Out" }, loopButton { "Loop" }, punchButton { "Punch" };
     ParamButton wowButton;
