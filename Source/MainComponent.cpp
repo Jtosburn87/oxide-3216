@@ -1,5 +1,6 @@
 #include "MainComponent.h"
 #include "AudioSettingsComponent.h"
+#include "TalkbackSettings.h"
 
 using namespace ConsoleColours;
 
@@ -372,7 +373,8 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
 {
     ids.addArray ({ playStop, play, stop, record, rewind, fastForward, returnToZero,
                     newSession, openSession, saveSession, saveSessionAs, exportMix, importAudio,
-                    recordViewCmd, mixViewCmd, fullViewCmd, nextViewCmd });
+                    recordViewCmd, mixViewCmd, fullViewCmd, nextViewCmd,
+                    tapeMachineCmd, rackCmd, patchBayCmd, talkbackCmd });
 }
 
 void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommandInfo& info)
@@ -410,6 +412,14 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
                             info.addDefaultKeypress ('3', cmd); break;
         case nextViewCmd:   info.setInfo ("Next view", "Cycles Record, Mix, Full, then back to Record", "View", 0);
                             info.addDefaultKeypress (juce::KeyPress::tabKey, cmd); break;
+        case tapeMachineCmd: info.setInfo ("Tape Machine", "Opens the Tape Machine window (transport, cassette and meters)", "Windows", 0);
+                            info.addDefaultKeypress ('t', cmd); break;
+        case rackCmd:       info.setInfo ("Rack", "Opens the effects rack", "Windows", 0);
+                            info.addDefaultKeypress ('r', cmd); break;
+        case patchBayCmd:   info.setInfo ("Patch bay", "Opens the patch bay", "Windows", 0);
+                            info.addDefaultKeypress ('p', cmd); break;
+        case talkbackCmd:   info.setInfo ("Talkback Settings", "Opens the Talkback Settings window", "Windows", 0);
+                            info.addDefaultKeypress ('k', cmd); break;
         default: break;
     }
 }
@@ -436,6 +446,10 @@ bool MainComponent::perform (const InvocationInfo& info)
         case mixViewCmd:    showView (Desk::mixView); return true;
         case fullViewCmd:   showView (Desk::fullView); return true;
         case nextViewCmd:   showView ((desk.getView() + 1) % 3); return true;
+        case tapeMachineCmd: tapeMachineButton.onClick(); return true;
+        case rackCmd:       rackButton.onClick(); return true;
+        case patchBayCmd:   patchButton.onClick(); return true;
+        case talkbackCmd:   TalkbackSettings::show (engine); return true;
         default:            return false;
     }
 }
