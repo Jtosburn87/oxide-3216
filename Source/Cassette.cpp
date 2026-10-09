@@ -108,6 +108,8 @@ void Cassette::update (double seconds, float hubTurnsPerSecond, float progress, 
 {
     if (! label.hasKeyboardFocus (true) && label.getText() != name.toString())
         label.setText (name.toString(), false);
+    if (frozen)
+        return;
 
     bool changed = false;
     progress = juce::jlimit (0.0f, 1.0f, progress);

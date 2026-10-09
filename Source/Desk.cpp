@@ -1005,20 +1005,7 @@ void CentreSection::update()
     for (int k = 0; k < Config::numAux; ++k)
         auxMeters[(size_t) k].setLevel (engine.takeAuxPeak (k));
 
-    bool recording = false;
-    for (int t = 0; t < TapeMachine::numTracks; ++t)
-        recording = recording || tape.isRecording (t);
-
-    const double sr = tape.getSampleRate();
-    clock.setTime (sr > 0 ? (double) tape.getPosition() / sr : 0.0, recording);
-
-    const auto& sp = tape.currentSpeed();
-    const auto len = tape.getLength();
-    const float progress = len > (juce::int64) sr ? (float) ((double) tape.getPosition() / (double) len) : 0.0f;
-    // Tape motion in play speeds: 1 playing, up to +-20 winding (negative = rewinding).
-    const float windSpeed = tape.getWindSpeed();
-    const float motion = windSpeed != 0.0f ? windSpeed : (tape.isPlaying() ? 1.0f : 0.0f);
-    cassette.update (1.0 / 30.0, motion / sp.secondsPerTurn, progress, juce::String (sp.name) + " ips");
+    updateTapeDisplay (tape, cassette, clock);
 
     power.setToggleState (engine.isPowered(), juce::dontSendNotification);
     play.setToggleState (tape.isPlaying(), juce::dontSendNotification);
@@ -1033,6 +1020,24 @@ void CentreSection::update()
         shownOut = tape.getOutPoint();
         repaint (locateBox.expanded (2, 8));
     }
+}
+
+void updateTapeDisplay (TapeMachine& tape, Cassette& cassette, TapeClock& clock)
+{
+    bool recording = false;
+    for (int t = 0; t < TapeMachine::numTracks; ++t)
+        recording = recording || tape.isRecording (t);
+
+    const double sr = tape.getSampleRate();
+    clock.setTime (sr > 0 ? (double) tape.getPosition() / sr : 0.0, recording);
+
+    const auto& sp = tape.currentSpeed();
+    const auto len = tape.getLength();
+    const float progress = len > (juce::int64) sr ? (float) ((double) tape.getPosition() / (double) len) : 0.0f;
+    // Tape motion in play speeds: 1 playing, up to +-20 winding (negative = rewinding).
+    const float windSpeed = tape.getWindSpeed();
+    const float motion = windSpeed != 0.0f ? windSpeed : (tape.isPlaying() ? 1.0f : 0.0f);
+    cassette.update (1.0 / 30.0, motion / sp.secondsPerTurn, progress, juce::String (sp.name) + " ips");
 }
 
 //==============================================================================

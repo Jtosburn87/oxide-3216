@@ -82,6 +82,7 @@ target_sources(ConsoleTape PRIVATE
     Source/InsertsUI.cpp
     Source/RackWindow.cpp
     Source/MeterBridge.cpp
+    Source/TapeMachineWindow.cpp
     Source/EraseDialog.cpp
     Source/AudioSettingsComponent.cpp
     Source/BusCompPanel.cpp

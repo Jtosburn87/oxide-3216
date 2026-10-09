@@ -26,6 +26,9 @@ public:
     /** Off: the reels stand still and the packs only move in coarse steps (saves CPU). */
     void setAnimated (bool);
 
+    /** Frozen: nothing moves at all until unfrozen (the Tape machine window is showing the tape instead). */
+    void setFrozen (bool f) { frozen = f; }
+
     void paint (juce::Graphics&) override;
     void paintOverChildren (juce::Graphics&) override;
     void resized() override;
@@ -35,7 +38,7 @@ private:
     juce::TextEditor label;
     std::array<float, 2> reelAngle { 0.0f, 0.7f }, blur { 0.0f, 0.0f };
     float packProgress = 0.0f;
-    bool animated = true;
+    bool animated = true, frozen = false;
     juce::String speed { "15 ips" };
 
     float packRadius (int reel) const;

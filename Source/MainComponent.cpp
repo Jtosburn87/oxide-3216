@@ -55,7 +55,7 @@ MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionControll
     sessionButton.onClick = [this] { showSessionMenu(); };
     sectionsButton.setTooltip ("Sections of the console in windows of their own; unlock the channel chain order");
     desk.setChainUnlocked (settings.getBoolValue ("chainUnlocked"));
-    desk.setCassetteAnimated (settings.getBoolValue ("cassetteAnimation", true));
+    applyCassetteAnimation();
     sectionsButton.onClick = [this] { showSectionsMenu(); };
     // Minimised strip sections are remembered between launches.
     // Record (inputs), Mix (returns) or Full (both) next to the centre section; Record on first launch.
@@ -64,14 +64,18 @@ MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionControll
     viewSwitch.setView (view);
     for (auto& b : viewSwitch.buttons)
         addAndMakeVisible (b);   // in the top bar
-    meterBridgeButton.setTooltip ("The tape machine's meters for all 16 tracks, with record function switches");
-    meterBridgeButton.onClick = [this]
+    tapeMachineButton.setTooltip ("The tape machine in a window of its own: transport, moving cassette, and meters for all 16 tracks");
+    tapeMachineButton.onClick = [this]
     {
-        if (meterBridge == nullptr)
-            meterBridge = std::make_unique<MeterBridgeWindow> (engine.tape, settings, [this] { if (saveSettings) saveSettings(); });
-        meterBridge->show();
+        if (tapeWindow == nullptr)
+        {
+            tapeWindow = std::make_unique<TapeMachineWindow> (engine, settings, [this] { if (saveSettings) saveSettings(); });
+            tapeWindow->onShownChanged = [this] (bool) { applyCassetteAnimation(); };
+        }
+        tapeWindow->show();
+        applyCassetteAnimation();
     };
-    addAndMakeVisible (meterBridgeButton);
+    addAndMakeVisible (tapeMachineButton);
     viewSwitch.onChange = [this] (int v)
     {
         desk.setView ((Desk::View) v);
@@ -155,7 +159,9 @@ MainComponent::~MainComponent()
     for (auto& w : sectionWindows)
         w = nullptr;
     rackWindow = nullptr;
-    meterBridge = nullptr;
+    if (tapeWindow != nullptr)
+        tapeWindow->onShownChanged = nullptr;
+    tapeWindow = nullptr;
     forEachChain ([] (InsertChain& c) { c.beforeDelete = nullptr; c.onChange = nullptr; });
     pluginWindows.closeAll();
     if (pluginListWindow != nullptr)
@@ -293,7 +299,7 @@ void MainComponent::resized()
     for (auto& b : viewSwitch.buttons)
         b.setBounds (bar.removeFromLeft (76));
     bar.removeFromLeft (16);
-    meterBridgeButton.setBounds (bar.removeFromLeft (120));
+    tapeMachineButton.setBounds (bar.removeFromLeft (120));
     bar.removeFromLeft (16);
     statusLabel.setBounds (bar);
 
@@ -495,10 +501,21 @@ void MainComponent::showSectionsMenu()
     m.addItem ("Animate the cassette (turn off to save CPU)", true, animated, [this, animated]
     {
         settings.setValue ("cassetteAnimation", ! animated);
-        desk.setCassetteAnimated (! animated);
+        applyCassetteAnimation();
         if (saveSettings) saveSettings();
     });
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (sectionsButton));
+}
+
+void MainComponent::applyCassetteAnimation()
+{
+    // While the Tape machine window is up, its cassette is the one that moves; the console's stands still.
+    const bool animated = settings.getBoolValue ("cassetteAnimation", true);
+    const bool windowShown = tapeWindow != nullptr && tapeWindow->isVisible();
+    desk.setCassetteAnimated (animated);
+    desk.setCassetteFrozen (windowShown);
+    if (tapeWindow != nullptr)
+        tapeWindow->setCassetteAnimated (animated);
 }
 
 void MainComponent::takeOut (Desk::Section s)

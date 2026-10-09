@@ -12,7 +12,6 @@ namespace
 
     const juce::Colour panel { 0xff151617 };
     const juce::Colour silk { 0xffdfe1e1 };      // white panel printing
-    const juce::Colour logoRed { 0xffe0563a };
     const juce::Colour ledRed { 0xffff3b2a }, ledAmber { 0xffffb22e }, ledGreen { 0xff42e35a };
 
     juce::String markText (float m) { return m > 0 ? "+" + juce::String ((int) m) : juce::String ((int) m); }
@@ -116,14 +115,11 @@ void MeterBridge::paint (juce::Graphics& g)
         g.fillRect (0.0f, y, (float) designW, 1.0f);
     }
 
-    // Header: the machine's name in red, what this is in white, the meter reference on the right.
+    // Header: what this is, and the meter reference on the right.
     auto header = all.reduced (margin, 0).withY (12).withHeight (headerH - 8);
-    g.setColour (logoRed);
-    g.setFont (ConsoleLookAndFeel::uiFont (22.0f, true));
-    g.drawText ("TAPE 16", header, juce::Justification::centredLeft, false);
     g.setColour (silk);
     g.setFont (ConsoleLookAndFeel::uiFont (13.0f, true));
-    g.drawText ("TAPE OUT", header.withTrimmedLeft (98), juce::Justification::centredLeft, false);
+    g.drawText ("TAPE OUT", header, juce::Justification::centredLeft, false);
     g.setColour (silk.withAlpha (0.6f));
     g.setFont (ConsoleLookAndFeel::uiFont (11.0f));
     g.drawText (juce::String::fromUTF8 ("0 = \xe2\x88\x92") + juce::String ((int) -referenceDbfs) + " dBFS", header, juce::Justification::centredRight, false);
@@ -217,36 +213,4 @@ void MeterBridge::paintColumn (juce::Graphics& g, int t) const
     g.setColour (juce::Colours::black.withAlpha (0.45f));
     for (int i = 0; i < 3; ++i)
         g.fillRect (cap.getX() + 2.0f, cap.getY() + 4.0f + (float) i * 3.5f, cap.getWidth() - 4.0f, 1.0f);
-}
-
-//==============================================================================
-MeterBridgeWindow::MeterBridgeWindow (TapeMachine& tape, juce::PropertiesFile& s, std::function<void()> save)
-    : juce::DocumentWindow ("Meter bridge", juce::Colour (0xff151617), juce::DocumentWindow::closeButton | juce::DocumentWindow::minimiseButton),
-      settings (s), saveSettings (std::move (save))
-{
-    setUsingNativeTitleBar (true);
-    setContentOwned (new MeterBridge (tape), true);
-    constrainer.setFixedAspectRatio ((double) MeterBridge::designW / MeterBridge::designH);
-    constrainer.setSizeLimits (MeterBridge::designW / 2, MeterBridge::designH / 2, MeterBridge::designW * 3, MeterBridge::designH * 3);
-    setConstrainer (&constrainer);
-    setResizable (true, true);
-
-    const auto state = settings.getValue ("meterBridgeWindow");
-    if (state.isEmpty() || ! restoreWindowStateFromString (state))
-        centreWithSize (getWidth(), getHeight());
-}
-
-void MeterBridgeWindow::show()
-{
-    setVisible (true);
-    setMinimised (false);
-    toFront (true);
-}
-
-void MeterBridgeWindow::closeButtonPressed()
-{
-    settings.setValue ("meterBridgeWindow", getWindowStateAsString());
-    if (saveSettings)
-        saveSettings();
-    setVisible (false);
 }

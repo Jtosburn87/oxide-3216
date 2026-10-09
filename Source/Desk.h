@@ -101,6 +101,10 @@ private:
     bool rec = false;
 };
 
+/** Moves a cassette and a tape counter on by one frame (30 a second) from the tape's state. Used by the
+    console's tape machine and by the Tape machine window. */
+void updateTapeDisplay (TapeMachine&, Cassette&, TapeClock&);
+
 /** Stacks its children top to bottom, each the full width (the app buttons in the centre section). */
 class ButtonColumn : public juce::Component
 {
@@ -148,6 +152,7 @@ public:
     ButtonColumn appButtons;
 
     void setCassetteAnimated (bool a) { cassette.setAnimated (a); }
+    void setCassetteFrozen (bool f) { cassette.setFrozen (f); }
 
 private:
     AudioEngine& engine;
@@ -259,6 +264,8 @@ public:
 
     /** Off: the cassette's reels stand still (Options > Animate the cassette), to save CPU. */
     void setCassetteAnimated (bool a) { centre.setCassetteAnimated (a); }
+    /** Frozen: the console's cassette holds still entirely (while the Tape machine window is up). */
+    void setCassetteFrozen (bool f) { centre.setCassetteFrozen (f); }
 
     /** Lets every channel's EQ, gate and compressor be reordered (Options > Unlock chain order). */
     void setChainUnlocked (bool);
