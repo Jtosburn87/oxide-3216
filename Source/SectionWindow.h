@@ -2,6 +2,7 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "Desk.h"
+#include "TouchPanZoom.h"
 
 /** Scrollable, zoomable view of a fixed-size component (the console, or one section of it). */
 class ZoomView : public juce::Component
@@ -20,11 +21,15 @@ public:
     /** Call when the content's own size has changed. */
     void contentSizeChanged();
 
+    /** A pinch asks for this zoom (the owner usually routes it through its zoom slider). */
+    std::function<void (float)> onZoomRequested;
+
     void resized() override;
 
 private:
     juce::Viewport viewport;
     juce::Component holder;   // sized to the zoomed content, so the viewport scrolls correctly
+    std::unique_ptr<TouchPanZoom> touch;
     juce::Component* content = nullptr;
     float zoom = 1.0f;
 };

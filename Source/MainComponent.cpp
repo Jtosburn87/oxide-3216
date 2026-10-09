@@ -97,6 +97,8 @@ MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionControll
     viewport.setViewedComponent (&deskHolder, false);
     viewport.setScrollBarsShown (true, true);
     addAndMakeVisible (viewport);
+    touch = std::make_unique<TouchPanZoom> (viewport, [this] { return (float) zoomSlider.getValue() / 100.0f; },
+                                            [this] (float z) { zoomSlider.setValue (z * 100.0f, juce::sendNotificationSync); });
     applyZoom();
 
     // Keyboard shortcuts: the defaults, then whatever the user changed.

@@ -56,6 +56,7 @@ private:
     Desk desk;
     juce::Component deskHolder;   // sized to the zoomed desk, so the viewport scrolls correctly
     juce::Viewport viewport;
+    std::unique_ptr<TouchPanZoom> touch;   // one-finger pan, pinch to zoom
     PatchBayPanel patchBay;
     bool fittedOnce = false;
 

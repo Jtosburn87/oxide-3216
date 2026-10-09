@@ -9,6 +9,8 @@ ZoomView::ZoomView()
     viewport.setViewedComponent (&holder, false);
     viewport.setScrollBarsShown (true, true);
     addAndMakeVisible (viewport);
+    touch = std::make_unique<TouchPanZoom> (viewport, [this] { return zoom; },
+                                            [this] (float z) { if (onZoomRequested) onZoomRequested (z); else setZoom (z); });
 }
 
 void ZoomView::setContent (juce::Component* c)
@@ -68,6 +70,7 @@ public:
         zoomSlider.setColour (juce::Slider::trackColourId, juce::Colour (0xff5d6467));
         zoomSlider.setColour (juce::Slider::backgroundColourId, juce::Colour (0xff26292b));
         zoomSlider.onValueChange = [this] { view.setZoom ((float) zoomSlider.getValue() / 100.0f); };
+        view.onZoomRequested = [this] (float z) { zoomSlider.setValue (z * 100.0f, juce::sendNotificationSync); };
 
         fitButton.setTooltip ("Zoom so the whole section fits the window");
         fitButton.onClick = [this] { fit(); };
