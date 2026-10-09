@@ -103,6 +103,7 @@ void ChannelStrip::prepare (double sr)
         deEsser->prepare (sr);
     comp.prepare (sr);
     trimGain.prepare (sr, Dsp::dbToGain (controls.trim->get()));
+    preamp.prepare (sr, controls.trim->get(), isColoured());
     faderGain.prepare (sr, targetFader());
 
     const auto t = targets();
@@ -123,6 +124,8 @@ void ChannelStrip::process (const float* in, float* direct, const BusPointers& b
 {
     const float trimT = Dsp::dbToGain (controls.trim->get());
     const float faderT = targetFader();
+    preamp.setTrim (controls.trim->get());
+    const bool coloured = isColoured();
 
     const float hpf = controls.hpf->get();
     const bool hpOn = hpf >= hpfOffBelow;
@@ -155,6 +158,7 @@ void ChannelStrip::process (const float* in, float* direct, const BusPointers& b
     {
         float x = in != nullptr ? in[i] : 0.0f;
         x *= trimGain.next (trimT);
+        x = preamp.process (x, coloured);
         inPk = juce::jmax (inPk, std::abs (x));
         if (hpOn)   x = hp.process (x);
         for (const int stage : order)

@@ -452,6 +452,11 @@ void MainComponent::showSectionsMenu()
         desk.setChainUnlocked (! unlocked);
         if (saveSettings) saveSettings();
     });
+    const bool coloured = engine.preampColour->on();
+    m.addItem ("Console colour (1073-style preamps)", true, coloured, [this, coloured]
+    {
+        engine.preampColour->set (coloured ? 0.0f : 1.0f);
+    });
     const bool animated = settings.getBoolValue ("cassetteAnimation", true);
     m.addItem ("Animate the cassette (turn off to save CPU)", true, animated, [this, animated]
     {

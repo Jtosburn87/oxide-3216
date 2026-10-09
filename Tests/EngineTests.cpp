@@ -67,6 +67,7 @@ namespace
         {
             for (auto* s : inputStrips)
                 s->controls.fader->set (80.0f);
+            preampColour->set (0.0f);   // clean preamps, so levels are exact (testPreampColour covers the colour)
         }
     };
 
@@ -816,6 +817,73 @@ namespace
         e.tape.stop();
         rmsDb();
         check (rmsDb() < -150.0f, "no hiss when the tape is stopped");
+    }
+
+    /** Harmonic levels (relative to the fundamental) of a sine through a Preamp. amp is in clipLevel units
+        (0.5 = +20 dBu). Measured over whole cycles after half a second of settling. */
+    struct PreampHarmonics { float h2, h3; };
+    PreampHarmonics preampHarmonics (float trimDb, double freq, float amp)
+    {
+        constexpr double sr = 48000.0, twoPi = juce::MathConstants<double>::twoPi;
+        Preamp p;
+        p.prepare (sr, trimDb, true);
+        const int warm = 24000, len = 24000;   // 0.5 s each: whole cycles at 1 kHz and 40 Hz
+        double re[4] {}, im[4] {};
+        for (int i = 0; i < warm + len; ++i)
+        {
+            const float y = p.process (amp * Preamp::clipLevel * (float) std::sin (twoPi * freq * i / sr), true);
+            if (i >= warm)
+                for (int h = 1; h <= 3; ++h)
+                {
+                    re[h] += y * std::cos (twoPi * h * freq * i / sr);
+                    im[h] += y * std::sin (twoPi * h * freq * i / sr);
+                }
+        }
+        const auto mag = [&] (int h) { return std::sqrt (re[h] * re[h] + im[h] * im[h]); };
+        return { (float) (mag (2) / mag (1)), (float) (mag (3) / mag (1)) };
+    }
+
+    void testPreampColour()
+    {
+        std::puts ("Console colour: 1073-style preamps");
+        const auto nominal = preampHarmonics (0.0f, 1000.0, 0.5f);
+        std::printf ("      +20 dBu, 1 kHz, trim 0: 2nd %.3f %%, 3rd %.3f %%\n", nominal.h2 * 100.0f, nominal.h3 * 100.0f);
+        check (nominal.h2 > 0.0008f && nominal.h2 < 0.0012f, "2nd harmonic about 0.1 % at +20 dBu");
+        check (nominal.h3 > 0.0004f && nominal.h3 < 0.0006f, "3rd harmonic about 0.05 % at +20 dBu (2nd dominant, class A)");
+
+        const auto quiet = preampHarmonics (0.0f, 1000.0, 0.05f);
+        check (quiet.h2 + quiet.h3 < 0.0002f, "nearly clean at normal levels (-18 dBFS)");
+
+        const auto low = preampHarmonics (0.0f, 40.0, 0.5f);
+        std::printf ("      +20 dBu, 40 Hz, trim 0: 2nd %.3f %%, 3rd %.3f %%\n", low.h2 * 100.0f, low.h3 * 100.0f);
+        check (low.h3 > 0.002f && low.h3 < 0.0045f, "transformers: about 0.3 % 3rd at 40 Hz");
+
+        const auto at20 = preampHarmonics (20.0f, 1000.0, 0.5f), at30 = preampHarmonics (30.0f, 1000.0, 0.5f);
+        const float real30 = std::pow (10.0f, 0.15f);   // what the lost feedback alone adds from +20 to +30 dB
+        std::printf ("      trim +30 vs +20 at the same level: 2nd x%.2f, 3rd x%.2f (feedback alone x%.2f)\n",
+                     at30.h2 / at20.h2, at30.h3 / at20.h3, real30);
+        check (near (Preamp::exaggeration (20.0f), 1.0f) && near (Preamp::exaggeration (30.0f), 1.4f), "exaggeration 1.4x only at the top");
+        check (near (at30.h2 / at20.h2 / real30, 1.4f, 0.03f) && near (at30.h3 / at20.h3 / real30, 1.4f, 0.03f),
+               "trim fully up: harmonics 1.4x a real 1073");
+
+        // Through the engine: on by default, rails hold, and the switch gives back the clean preamp.
+        check (AudioEngine().preampColour->on(), "console colour is on by default");
+        SineRig r;
+        r.e.preampColour->set (1.0f);
+        auto& trim = *r.e.inputStrips[0]->controls.trim;
+        trim.set (30.0f);   // 0.1 x 31.6 = +10 dBFS = +28 dBu: past the rails
+        r.measure (1000.0f, 0.1f);
+        r.e.inputStrips[0]->takeInputPeak();
+        r.run (1000.0f, 0.1f, 10);
+        const float driven = r.e.inputStrips[0]->takeInputPeak();
+        std::printf ("      +28 dBu into the preamp: peak %.2f (rails at %.2f)\n", driven, Preamp::clipLevel);
+        check (driven < Preamp::clipLevel && driven > 0.8f * Preamp::clipLevel, "driven past the rails: soft-clipped under the ceiling");
+
+        r.e.preampColour->set (0.0f);
+        r.run (1000.0f, 0.1f, 40);   // 20 ms crossfade
+        r.e.inputStrips[0]->takeInputPeak();
+        r.run (1000.0f, 0.1f, 10);
+        check (near (r.e.inputStrips[0]->takeInputPeak(), 0.1f * std::pow (10.0f, 1.5f), 1.0e-3f), "colour off: clean trim");
     }
 
     /** Steady-state output peak of a BusCompressor fed with the same sine on both sides. */
@@ -1866,6 +1934,7 @@ int main (int argc, char** argv)
     testFetCompressor();
     testSends();
     testTapeCharacter();
+    testPreampColour();
     testBusCompressor();
     testMasterSection();
     testPatchBay();

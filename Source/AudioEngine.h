@@ -149,6 +149,9 @@ public:
     Param* oscLevel = nullptr;   // dBFS, the sine's peak (the noises have the same RMS)
     std::atomic<bool> oscillatorMuted { false };   // export: the mix is rendered without it
 
+    /** Console colour: every input and return preamp voiced like a Neve 1073 (see Preamp). On by default. */
+    Param* preampColour = nullptr;
+
     /** Export: runs the console with no live inputs and writes main L/R (post limiter) to the given buffers.
         Only call while the device is not calling the engine (see MainComponent::exportMix). */
     void renderOffline (float* left, float* right, int numSamples);

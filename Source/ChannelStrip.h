@@ -5,11 +5,12 @@
 #include "Dsp.h"
 #include "Eq.h"
 #include "Dynamics.h"
+#include "Preamp.h"
 
 /** DSP for one mono console channel (input or tape return).
 
     Signal order (as in the prototype):
-        input -> trim -> high-pass -> EQ (LF, LMF, HMF, HF) -> gate -> compressor
+        input -> trim -> preamp colour -> high-pass -> EQ (LF, LMF, HMF, HF) -> gate -> compressor
               -> [pre-fader sends] -> fader -> mute -> direct out -> [post-fader sends] -> pan -> main / subs
                                                                                      -> solo bus (when soloed) */
 class ChannelStrip
@@ -50,6 +51,10 @@ public:
     std::array<const Param*, Config::numAux / 2> auxLink {};
     bool isAuxLinked (int pair) const noexcept { return auxLink[(size_t) pair] != nullptr && auxLink[(size_t) pair]->on(); }
 
+    /** The console colour switch (one for the whole desk), set by the engine; null = clean preamp. */
+    const Param* colour = nullptr;
+    bool isColoured() const noexcept { return colour != nullptr && colour->on(); }
+
     FourBandEq eq;
     Gate gate;
     std::unique_ptr<DeEsser> deEsser;   // return strips: the gate slot can be a de-esser instead
@@ -61,13 +66,14 @@ public:
     void process (const float* in, float* direct, const BusPointers& buses, int numSamples) noexcept;
 
     float takePeak() noexcept { return peak.exchange (0.0f); }             // output: post-fader
-    float takeInputPeak() noexcept { return inputPeak.exchange (0.0f); }   // input: after the trim
+    float takeInputPeak() noexcept { return inputPeak.exchange (0.0f); }   // input: after the trim and preamp
 
     /** Aux send gain law from the prototype: level^2 x 1.5 (about +3.5 dB at full). */
     static float auxGain (float level) noexcept { return level * level * 1.5f; }
 
 private:
     double sampleRate = 48000.0;
+    Preamp preamp;
     Dsp::Biquad hp;
     float hpFreqSet = -1.0f;
     Dsp::Smoothed trimGain, faderGain;

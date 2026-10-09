@@ -56,6 +56,10 @@ AudioEngine::AudioEngine()
     oscType = &params.addStepped ("osc.type", "Oscillator type", 3, Dsp::Oscillator::sine);
     oscFreq = &params.add ("osc.freq", "Oscillator frequency", 20.0f, 20000.0f, 1000.0f, Param::Scale::log);
     oscLevel = &params.add ("osc.level", "Oscillator level", -60.0f, 0.0f, -18.0f);
+    preampColour = &params.addToggle ("console.colour", "Console colour", true);
+    for (auto* strips : { &inputStrips, &returnStrips })
+        for (auto* s : *strips)
+            s->colour = preampColour;
 
     // Stereo links, made last so every strip control exists.
     const auto makeLinks = [this] (juce::OwnedArray<ChannelStrip>& strips, auto& links, const juce::String& bank)
