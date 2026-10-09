@@ -142,6 +142,7 @@ AudioEngine::~AudioEngine()
 {
     for (auto* l : auxLink)
         l->removeListener (this);
+    deviceManager.removeChangeListener (this);
     deviceManager.removeAudioCallback (this);
     deviceManager.closeAudioDevice();
 }
@@ -182,6 +183,7 @@ void AudioEngine::initialise (const juce::XmlElement* savedState)
             setInterfaceInput (Patch::interfaceOut + k, routing->getIntAttribute ("interfaceOut" + juce::String (k + 1), -1));
         setMainOutput (0, routing->getIntAttribute ("mainL", 0));
         setMainOutput (1, routing->getIntAttribute ("mainR", 1));
+        mainDevice = routing->getStringAttribute ("mainDevice");
         setMonitorOutput (0, routing->getIntAttribute ("monitorL", -1));
         setMonitorOutput (1, routing->getIntAttribute ("monitorR", -1));
         setRecordOffset (routing->getIntAttribute ("recordOffset", 0));
@@ -193,6 +195,35 @@ void AudioEngine::initialise (const juce::XmlElement* savedState)
     }
 
     deviceManager.addAudioCallback (this);
+    deviceManager.addChangeListener (this);
+    changeListenerCallback (&deviceManager);
+}
+
+void AudioEngine::changeListenerCallback (juce::ChangeBroadcaster*)
+{
+    auto* device = deviceManager.getCurrentAudioDevice();
+    if (device == nullptr || device->getName() == mainDevice)
+        return;
+
+    // A different interface (or none recorded yet): main goes to its outputs 1 and 2, switched on.
+    mainDevice = device->getName();
+    const int numOuts = device->getOutputChannelNames().size();
+    setMainOutput (0, 0);
+    setMainOutput (1, numOuts > 1 ? 1 : 0);
+
+    auto setup = deviceManager.getAudioDeviceSetup();
+    bool missing = false;
+    for (int ch = 0; ch < juce::jmin (2, numOuts); ++ch)
+        if (! setup.outputChannels[ch])
+        {
+            setup.outputChannels.setBit (ch);
+            missing = true;
+        }
+    if (missing)
+    {
+        setup.useDefaultOutputChannels = false;
+        deviceManager.setAudioDeviceSetup (setup, true);
+    }
 }
 
 std::unique_ptr<juce::XmlElement> AudioEngine::createStateXml() const
@@ -219,6 +250,7 @@ std::unique_ptr<juce::XmlElement> AudioEngine::createStateXml() const
             routing->setAttribute ("interfaceOut" + juce::String (k + 1), getInterfaceInput (Patch::interfaceOut + k));
     routing->setAttribute ("mainL", getMainOutput (0));
     routing->setAttribute ("mainR", getMainOutput (1));
+    routing->setAttribute ("mainDevice", mainDevice);
     routing->setAttribute ("monitorL", getMonitorOutput (0));
     routing->setAttribute ("monitorR", getMonitorOutput (1));
     routing->setAttribute ("recordOffset", getRecordOffset());

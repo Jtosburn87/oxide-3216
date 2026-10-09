@@ -24,7 +24,8 @@
     Real-time rules: the audio callback never allocates, locks or blocks. The UI changes
     Params (atomics) and calls TapeMachine transport methods (atomics). */
 class AudioEngine : public juce::AudioIODeviceCallback,
-                    private Param::Listener
+                    private Param::Listener,
+                    private juce::ChangeListener
 {
 public:
     static constexpr int numConsoleInputs  = 16;   // interface inputs that can be mapped
@@ -194,6 +195,11 @@ private:
     juce::AudioDeviceManager deviceManager;
     juce::OwnedArray<StripLink> stripLinks;
     void paramChanged (Param&) override;   // aux links: switch the odd aux's inserts to stereo only
+    void changeListenerCallback (juce::ChangeBroadcaster*) override;   // device changes: see mainDevice
+
+    /** The interface Main L/R were last mapped on. Opening a different one puts main back on its
+        outputs 1 and 2 (and switches those on). Message thread only. */
+    juce::String mainDevice;
 
     std::array<std::atomic<int>, Patch::numDestinations> interfaceSource;
     std::array<std::atomic<int>, 2> mainOutput, monitorOutput;
