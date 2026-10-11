@@ -20,7 +20,8 @@
 class MainComponent : public juce::Component,
                       public juce::ApplicationCommandTarget,
                       private juce::Timer,
-                      private juce::ChangeListener
+                      private juce::ChangeListener,
+                      private juce::FocusChangeListener
 {
 public:
     MainComponent (AudioEngine&, PluginManager&, SessionController&, juce::PropertiesFile& settings, std::function<void()> saveSettings);
@@ -53,6 +54,20 @@ private:
     juce::ApplicationCommandManager commands;
     juce::Component::SafePointer<juce::DialogWindow> keysWindow;
     void openKeyMappings();
+
+    /** A key with a command on it does that command and nothing else, whatever has the keyboard
+        (a knob nudging, a button, the console scrolling). It rides on the focused component, because
+        key listeners hear a key before the component itself does. Text fields, plug-in editors and
+        dialogs (the shortcut editor, menus) keep their own keys. */
+    struct AssignedKeysFirst : juce::KeyListener
+    {
+        explicit AssignedKeysFirst (MainComponent& m) : owner (m) {}
+        bool keyPressed (const juce::KeyPress&, juce::Component*) override;
+        MainComponent& owner;
+    };
+    AssignedKeysFirst assignedKeysFirst { *this };
+    juce::Component::SafePointer<juce::Component> assignedKeysHolder;
+    void globalFocusChanged (juce::Component*) override;
     AudioEngine& engine;
     std::function<void()> saveSettings;
     juce::PropertiesFile& settings;

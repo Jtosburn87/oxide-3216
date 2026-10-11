@@ -138,6 +138,7 @@ MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionControll
     if (auto xml = settings.getXmlValue ("keyMappings"))
         commands.getKeyMappings()->restoreFromXml (*xml);
     commands.getKeyMappings()->addChangeListener (this);
+    juce::Desktop::getInstance().addFocusChangeListener (this);
 
     engine.getDeviceManager().addChangeListener (this);
     refreshDeviceText();
@@ -151,6 +152,9 @@ MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionControll
 
 MainComponent::~MainComponent()
 {
+    juce::Desktop::getInstance().removeFocusChangeListener (this);
+    if (assignedKeysHolder != nullptr)
+        assignedKeysHolder->removeKeyListener (&assignedKeysFirst);
     commands.getKeyMappings()->removeChangeListener (this);
     if (keysWindow != nullptr)
         delete keysWindow.getComponent();
@@ -387,6 +391,30 @@ bool MainComponent::keyPressed (const juce::KeyPress& k)
     return commands.getKeyMappings()->keyPressed (k, this);
 }
 
+void MainComponent::globalFocusChanged (juce::Component* focused)
+{
+    if (assignedKeysHolder != nullptr)
+        assignedKeysHolder->removeKeyListener (&assignedKeysFirst);
+    assignedKeysHolder = nullptr;
+
+    if (focused == nullptr || focused == this
+        || dynamic_cast<juce::TextEditor*> (focused) != nullptr
+        || dynamic_cast<juce::AudioProcessorEditor*> (focused) != nullptr
+        || focused->findParentComponentOfClass<juce::AudioProcessorEditor>() != nullptr
+        || (keysWindow != nullptr && keysWindow->isParentOf (focused)))
+        return;
+
+    assignedKeysHolder = focused;
+    focused->addKeyListener (&assignedKeysFirst);
+}
+
+bool MainComponent::AssignedKeysFirst::keyPressed (const juce::KeyPress& k, juce::Component*)
+{
+    if (juce::Component::getCurrentlyModalComponent() != nullptr)
+        return false;
+    return owner.commands.getKeyMappings()->keyPressed (k, &owner);
+}
+
 void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
 {
     ids.addArray ({ playStop, play, stop, record, rewind, fastForward, returnToZero,
@@ -424,9 +452,9 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
                             info.addDefaultKeypress ('n', cmd); break;
         case openSession:   info.setInfo ("Open session", "Opens a saved session", "Session", 0);
                             info.addDefaultKeypress ('o', cmd); break;
-        case saveSession:   info.setInfo ("Save", "Saves the session", "Session", 0);
+        case saveSession:   info.setInfo ("Save now", "Writes everything to disk at once (the session also saves itself as you work)", "Session", 0);
                             info.addDefaultKeypress ('s', cmd); break;
-        case saveSessionAs: info.setInfo ("Save as", "Saves the session in a new folder", "Session", 0);
+        case saveSessionAs: info.setInfo ("Save as", "Copies the session to a new folder and carries on in the copy", "Session", 0);
                             info.addDefaultKeypress ('s', cmd | juce::ModifierKeys::shiftModifier); break;
         case exportMix:     info.setInfo ("Export mix", "Exports the whole session or In to Out as a WAV in the session's Bounced Audio folder", "Session", 0);
                             info.addDefaultKeypress ('e', cmd); break;

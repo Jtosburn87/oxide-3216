@@ -62,6 +62,11 @@ namespace
     }
 }
 
+namespace Session
+{
+    Result write (AudioEngine&, const juce::File& folder, TrackRevisions* written, bool tracks);
+}
+
 juce::File Session::bounceFolder (const juce::File& sessionFolder)
 {
     return sessionFolder.getChildFile (bounceFolderName);
@@ -74,6 +79,16 @@ juce::String Session::trackFileName (int track)
 
 //==============================================================================
 Session::Result Session::save (AudioEngine& e, const juce::File& folder, TrackRevisions* written)
+{
+    return write (e, folder, written, true);
+}
+
+Session::Result Session::saveSettings (AudioEngine& e, const juce::File& folder)
+{
+    return write (e, folder, nullptr, false);
+}
+
+Session::Result Session::write (AudioEngine& e, const juce::File& folder, TrackRevisions* written, bool tracks)
 {
     Result r;
     if (! folder.createDirectory())
@@ -135,6 +150,11 @@ Session::Result Session::save (AudioEngine& e, const juce::File& folder, TrackRe
     for (int track = 0; track < Config::numTracks; ++track)
     {
         const auto file = folder.getChildFile (trackFileName (track));
+        if (! tracks)   // TapeFiles keeps the track files up to date
+        {
+            files.add (tape.trackHasAudio (track) && length > 0 ? juce::var (file.getFileName()) : juce::var());
+            continue;
+        }
         if (! tape.trackHasAudio (track) || length <= 0)
         {
             file.deleteFile();

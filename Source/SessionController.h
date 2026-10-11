@@ -3,11 +3,17 @@
 #include <juce_gui_extra/juce_gui_extra.h>
 #include "AudioEngine.h"
 #include "Session.h"
+#include "TapeFiles.h"
 
 class PluginManager;
 
-/** The app's session handling: New / Open / Save / Save As / Export, unsaved-changes detection,
-    asking before discarding changes, auto-save every two minutes and recovery after a crash. */
+/** The app's session handling. A session is always a folder on disk and saves itself, like real tape:
+    the tape goes to the track files as it is recorded, imported or erased (TapeFiles), and the console
+    (session.json) a moment after it stops changing. There is no undo and nothing to discard.
+
+    New asks for a name and creates the folder. Save writes everything at once (it would be written
+    within seconds anyway). Save As copies the session to a new folder and carries on in the copy,
+    leaving the old one as it was. Export renders the mix. */
 class SessionController : private juce::Timer
 {
 public:
@@ -17,20 +23,14 @@ public:
     void newSession();
     void openSession();
     void openFolder (const juce::File& folder);
-    void save (std::function<void (bool)> done = {});
-    void saveAs (std::function<void (bool)> done = {});
+    void save();
+    void saveAs();
     void exportMix();
 
-    bool isDirty() const;
-
-    /** If there are unsaved changes, asks Save / Don't save / Cancel. proceed(true) means carry on. */
-    void confirmDiscard (std::function<void (bool)> proceed);
-
-    /** At start-up: offers to recover the auto-save if the last run did not close properly,
-        otherwise reopens the last session. */
+    /** At start-up: reopens the last session, or asks for a name for a new one. */
     void startUp();
 
-    /** Clean exit: no recovery offer next time. */
+    /** On quit: writes whatever is still pending. */
     void shutDown();
 
     juce::String windowTitle() const;
@@ -42,22 +42,22 @@ private:
     AudioEngine& engine;
     PluginManager& plugins;
     juce::PropertiesFile& settings;
+    TapeFiles tapeFiles;
 
-    juce::File folder;   // current session folder (empty = never saved)
-    Session::TrackRevisions written {}, autosaveWritten {};
-    std::uint64_t cleanPrint = 0, autosavedPrint = 0;
+    juce::File folder;   // current session folder (empty only until the first session is named or opened)
+    std::uint64_t savedPrint = 0, lastPrint = 0;
+    int changedTicks = 0;
+    bool settingsErrorShown = false;
     juce::String lastTitle;
-    int secondsSinceAutosave = 0;
     std::unique_ptr<juce::FileChooser> chooser;
 
-    juce::File appData() const { return settings.getFile().getParentDirectory(); }
-    juce::File autosaveFolder() const { return appData().getChildFile ("Autosave"); }
-    juce::File lockFile() const { return appData().getChildFile ("running.lock"); }
-
     std::uint64_t fingerprint() const;
-    void markClean();
-    void saveTo (const juce::File&, std::function<void (bool)> done);
-    void autosave();
+    bool saveSettingsNow (bool report);
+    bool writeAll (bool report);
+    void askForNew (bool firstRun);
+    void startNew (const juce::File& target, const juce::String& name);
+    void chooseSession (bool firstRun);
     void timerCallback() override;
-    static void showProblems (const juce::String& title, const Session::Result&);
+    static juce::String uniqueName (const juce::String& base);
+    static void showProblems (const juce::String& title, const Session::Result&, std::function<void()> then = {});
 };

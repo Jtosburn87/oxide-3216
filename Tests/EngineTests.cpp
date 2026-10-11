@@ -6,6 +6,7 @@
 #include "AudioEngine.h"
 #include "PluginManager.h"
 #include "Session.h"
+#include "TapeFiles.h"
 #include "AudioImport.h"
 #include <cstdio>
 #include <deque>
@@ -2013,6 +2014,89 @@ namespace
         folder.deleteRecursively();
     }
 
+    std::vector<float> readWav (const juce::File& file)
+    {
+        juce::AudioFormatManager fm;
+        fm.registerBasicFormats();
+        std::unique_ptr<juce::AudioFormatReader> reader (fm.createReaderFor (file));
+        if (reader == nullptr)
+            return {};
+        std::vector<float> data ((size_t) reader->lengthInSamples);
+        float* channels[] = { data.data() };
+        reader->read (channels, 1, 0, (int) data.size());
+        return data;
+    }
+
+    std::vector<float> readTape (TapeMachine& tape, int track, juce::int64 n)
+    {
+        std::vector<float> data ((size_t) n);
+        tape.readTrack (track, 0, data.data(), (int) n);
+        return data;
+    }
+
+    void testTapeFilesLoad (const juce::File& folder, const std::vector<float>& track4)   // own function: two engines overflow the stack
+    {
+        TestEngine b;
+        b.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }));
+        check (Session::load (b, nullptr, folder).ok, "session loaded");
+        check (readTape (b.tape, 3, 2500) == track4 && ! b.tape.trackHasAudio (1), "loaded tape matches the files the tape wrote");
+    }
+
+    void testTapeFiles()
+    {
+        std::puts ("Tape files: recording goes straight to the session's track WAVs");
+        const auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("Oxide3216TestTapeFiles");
+        folder.deleteRecursively();
+        const auto file2 = folder.getChildFile ("Track 02.wav"), file4 = folder.getChildFile ("Track 04.wav");
+
+        TestEngine a;
+        a.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }));
+        TapeFiles files (a.tape);
+        files.setFolder (folder);
+
+        std::vector<float> take (150000);
+        for (size_t i = 0; i < take.size(); ++i)
+            take[i] = 0.3f * (float) std::sin ((double) i * 0.0523);
+        a.tape.writeTrack (1, 0, take.data(), (int) take.size());
+        a.tape.setLength ((juce::int64) take.size());
+        check (files.flush().isEmpty() && file2.existsAsFile() && ! folder.getChildFile ("Track 01.wav").exists(), "a take makes its track file");
+        check (readWav (file2) == take, "the file holds the take bit for bit");
+
+        // A punch in the middle: only that part of the file is rewritten.
+        std::vector<float> punch (1000, 0.5f);
+        a.tape.writeTrack (1, 70000, punch.data(), (int) punch.size());
+        std::copy (punch.begin(), punch.end(), take.begin() + 70000);
+        check (files.flush().isEmpty() && readWav (file2) == take, "a punch-in lands in the file");
+
+        // Recording past the end grows the file; the gap is silence.
+        a.tape.writeTrack (1, 300000, punch.data(), (int) punch.size());
+        take.resize (301000, 0.0f);
+        std::copy (punch.begin(), punch.end(), take.begin() + 300000);
+        check (files.flush().isEmpty() && readWav (file2) == take, "recording past the end grows the file, silence between");
+
+        a.tape.eraseSection (1, 0, 10000);
+        check (files.flush().isEmpty() && readWav (file2) == readTape (a.tape, 1, 301000), "erasing a section erases it in the file");
+
+        a.tape.eraseTrack (1);
+        check (files.flush().isEmpty() && ! file2.exists(), "erasing a track deletes its file");
+
+        // A file written whole by Session::save (JUCE's own WAV layout) is patched too.
+        a.tape.writeTrack (3, 0, punch.data(), (int) punch.size());
+        a.tape.setLength (1000);
+        check (Session::save (a, folder).ok && file4.existsAsFile(), "full save");
+        a.tape.markFilesInStep();
+        files.setFolder (folder);
+        std::vector<float> more (2000, -0.25f);
+        a.tape.writeTrack (3, 500, more.data(), (int) more.size());
+        check (files.flush().isEmpty() && readWav (file4) == readTape (a.tape, 3, 2500), "an older track file takes changes too");
+
+        // session.json alone, then load: the files the tape wrote are the session's audio.
+        a.tape.setLength (2500);
+        check (Session::saveSettings (a, folder).ok, "settings saved");
+        testTapeFilesLoad (folder, readTape (a.tape, 3, 2500));
+        folder.deleteRecursively();
+    }
+
     void testSessions()
     {
         std::puts ("Sessions: save, load, export");
@@ -2432,6 +2516,7 @@ int main (int argc, char** argv)
     testPunchAndLoop();
     testWinding();
     testWowFlutter();
+    testTapeFiles();
     testSessions();
     testOldCompressorSession();
     testImport();

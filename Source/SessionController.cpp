@@ -3,7 +3,7 @@
 
 namespace
 {
-    constexpr int autosaveSeconds = 120;
+    constexpr int settleSeconds = 5;   // console moves are written at most this long after they start
 
     std::uint64_t mix (std::uint64_t h, std::uint64_t v) noexcept
     {
@@ -62,9 +62,9 @@ namespace
 
 //==============================================================================
 SessionController::SessionController (AudioEngine& e, PluginManager& p, juce::PropertiesFile& s)
-    : engine (e), plugins (p), settings (s)
+    : engine (e), plugins (p), settings (s), tapeFiles (e.tape)
 {
-    markClean();
+    savedPrint = lastPrint = fingerprint();
     startTimer (1000);
 }
 
@@ -84,12 +84,21 @@ juce::File SessionController::sessionsFolder()
     return f;
 }
 
+juce::String SessionController::uniqueName (const juce::String& base)
+{
+    auto name = juce::File::createLegalFileName (base);
+    for (int n = 2; sessionsFolder().getChildFile (name).exists(); ++n)
+        name = juce::File::createLegalFileName (base) + " " + juce::String (n);
+    return name;
+}
+
+/** Everything session.json holds (the audio itself is TapeFiles' business). */
 std::uint64_t SessionController::fingerprint() const
 {
     std::uint64_t h = engine.params.changeCount();
     auto& tape = engine.tape;
     for (int t = 0; t < Config::numTracks; ++t)
-        h = mix (h, tape.getTrackRevision (t));
+        h = mix (h, (std::uint64_t) (tape.trackHasAudio (t) ? 1 : 0));
     h = mix (h, (std::uint64_t) tape.getLength());
     h = mix (h, (std::uint64_t) tape.getInPoint());
     h = mix (h, (std::uint64_t) tape.getOutPoint());
@@ -117,12 +126,9 @@ std::uint64_t SessionController::fingerprint() const
     return h;
 }
 
-bool SessionController::isDirty() const   { return fingerprint() != cleanPrint; }
-void SessionController::markClean()       { cleanPrint = autosavedPrint = fingerprint(); }
-
 juce::String SessionController::windowTitle() const
 {
-    return "Oxide-3216 " JUCE_APPLICATION_VERSION_STRING "  -  " +engine.projectName.toString() + (isDirty() ? "  *" : "")
+    return "Oxide-3216 " JUCE_APPLICATION_VERSION_STRING "  -  " + engine.projectName.toString()
          + (folder != juce::File() ? "   (" + folder.getFullPathName() + ")" : juce::String());
 }
 
@@ -136,151 +142,237 @@ void SessionController::timerCallback()
             onTitleChanged();
     }
 
-    if (++secondsSinceAutosave >= autosaveSeconds)
-    {
-        secondsSinceAutosave = 0;
-        bool recording = false;
-        for (int t = 0; t < Config::numTracks; ++t)
-            recording = recording || engine.tape.isRecording (t);
-        if (! recording && fingerprint() != autosavedPrint)
-            autosave();
-    }
+    if (const auto error = tapeFiles.takeError(); error.isNotEmpty())
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Writing the tape", error);
+
+    if (folder == juce::File())
+        return;
+
+    // The console is written a second after it stops changing, and every few seconds during a long fader ride or take.
+    const auto print = fingerprint();
+    if (print == savedPrint)
+        changedTicks = 0;
+    else if (print == lastPrint || ++changedTicks >= settleSeconds)
+        saveSettingsNow (false);
+    lastPrint = print;
 }
 
-void SessionController::autosave()
+bool SessionController::saveSettingsNow (bool report)
 {
-    const auto dir = autosaveFolder();
-    if (Session::save (engine, dir, &autosaveWritten).ok)
+    if (folder == juce::File())
+        return true;
+    const auto r = Session::saveSettings (engine, folder);
+    if (r.ok)
     {
-        dir.getChildFile ("origin.txt").replaceWithText (folder.getFullPathName());
-        autosavedPrint = fingerprint();
+        savedPrint = fingerprint();
+        changedTicks = 0;
+        settingsErrorShown = false;
     }
+    else if (report || ! settingsErrorShown)   // a lasting problem (disk full) is reported once, not every second
+    {
+        settingsErrorShown = true;
+        showProblems ("Saving", r);
+    }
+    return r.ok;
 }
 
-void SessionController::showProblems (const juce::String& title, const Session::Result& r)
+bool SessionController::writeAll (bool report)
 {
-    if (! r.ok)
-        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, title, r.error);
-    else if (! r.warnings.isEmpty())
-        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, title, r.warnings.joinIntoString ("\n\n"));
+    if (folder == juce::File())
+        return true;
+    if (const auto error = tapeFiles.flush(); error.isNotEmpty())
+    {
+        if (report)
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Writing the tape", error);
+        return false;
+    }
+    return saveSettingsNow (report);
+}
+
+void SessionController::showProblems (const juce::String& title, const Session::Result& r, std::function<void()> then)
+{
+    const auto text = ! r.ok ? r.error : r.warnings.joinIntoString ("\n\n");
+    if (text.isEmpty())
+    {
+        if (then) then();
+        return;
+    }
+    auto options = juce::MessageBoxOptions()
+                       .withIconType (juce::MessageBoxIconType::WarningIcon)
+                       .withTitle (title)
+                       .withMessage (text)
+                       .withButton ("OK");
+    juce::AlertWindow::showAsync (options, [then] (int) { if (then) then(); });
 }
 
 //==============================================================================
-void SessionController::confirmDiscard (std::function<void (bool)> proceed)
-{
-    if (! isDirty())
-    {
-        proceed (true);
-        return;
-    }
-
-    auto options = juce::MessageBoxOptions()
-                       .withIconType (juce::MessageBoxIconType::QuestionIcon)
-                       .withTitle ("Unsaved changes")
-                       .withMessage ("Save the changes to \"" + engine.projectName.toString() + "\" first?")
-                       .withButton ("Save")
-                       .withButton ("Don't save")
-                       .withButton ("Cancel");
-
-    juce::AlertWindow::showAsync (options, [this, proceed] (int result)
-    {
-        if (result == 1)      save ([proceed] (bool ok) { proceed (ok); });   // Save
-        else if (result == 2) proceed (true);                                  // Don't save
-        else                  proceed (false);                                 // Cancel
-    });
-}
-
 void SessionController::newSession()
 {
-    confirmDiscard ([this] (bool ok)
+    askForNew (false);
+}
+
+void SessionController::askForNew (bool firstRun)
+{
+    auto* w = new juce::AlertWindow (firstRun ? "Welcome to Oxide-3216" : "New session",
+                                     "A session is a folder in\n" + sessionsFolder().getFullPathName()
+                                       + "\n\nEverything you record and every move on the console is saved in it as you go.",
+                                     juce::MessageBoxIconType::NoIcon);
+    w->addTextEditor ("name", uniqueName ("Untitled song"), "Name");
+    w->addButton ("Create", 1, juce::KeyPress (juce::KeyPress::returnKey));
+    if (firstRun)
+        w->addButton ("Open a session...", 2);
+    else
+        w->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+
+    w->enterModalState (true, juce::ModalCallbackFunction::create ([this, w, firstRun] (int button)
     {
-        if (! ok)
+        if (button == 2)
+            return chooseSession (true);
+        if (button != 1)
             return;
-        Session::reset (engine);
-        engine.resetPatchToDefault();   // a new session starts from the default patch, interface wiring included
+
+        const auto name = w->getTextEditorContents ("name").trim();
+        const auto target = sessionsFolder().getChildFile (juce::File::createLegalFileName (name));
+        if (name.isEmpty() || target.exists())
+        {
+            auto options = juce::MessageBoxOptions()
+                               .withIconType (juce::MessageBoxIconType::WarningIcon)
+                               .withTitle ("New session")
+                               .withMessage (name.isEmpty() ? juce::String ("The session needs a name.")
+                                                            : "There is already a session called \"" + target.getFileName() + "\". Choose another name.")
+                               .withButton ("OK");
+            juce::AlertWindow::showAsync (options, [this, firstRun] (int) { askForNew (firstRun); });
+            return;
+        }
+        startNew (target, name);
+    }), true);
+}
+
+void SessionController::startNew (const juce::File& target, const juce::String& name)
+{
+    engine.tape.stop();
+    writeAll (true);   // the old session keeps everything up to now
+    tapeFiles.setFolder ({});
+
+    Session::reset (engine);
+    engine.resetPatchToDefault();   // a new session starts from the default patch, interface wiring included
+    engine.projectName = name;
+    engine.tape.markFilesInStep();
+
+    if (! target.createDirectory())
+    {
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "New session",
+                                                "Could not create the folder " + target.getFullPathName());
         folder = juce::File();
-        written = {};
-        markClean();
-    });
+        return askForNew (true);
+    }
+    folder = target;
+    tapeFiles.setFolder (folder);
+    settings.setValue ("lastSession", folder.getFullPathName());
+    saveSettingsNow (true);
 }
 
 void SessionController::openSession()
 {
-    confirmDiscard ([this] (bool ok)
+    chooseSession (false);
+}
+
+void SessionController::chooseSession (bool firstRun)
+{
+    chooser = std::make_unique<juce::FileChooser> ("Open a session (choose its session.json)", sessionsFolder(), "session.json");
+    chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                          [this, firstRun] (const juce::FileChooser& fc)
     {
-        if (! ok)
-            return;
-        chooser = std::make_unique<juce::FileChooser> ("Open a session (choose its session.json)", sessionsFolder(), "session.json");
-        chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
-                              [this] (const juce::FileChooser& fc)
-        {
-            const auto file = fc.getResult();
-            if (file != juce::File())
-                openFolder (file.isDirectory() ? file : file.getParentDirectory());
-        });
+        const auto file = fc.getResult();
+        if (file != juce::File())
+            openFolder (file.isDirectory() ? file : file.getParentDirectory());
+        else if (firstRun)
+            askForNew (true);   // there has to be a session to record into
     });
 }
 
 void SessionController::openFolder (const juce::File& f)
 {
     engine.tape.stop();
-    written = {};
-    const auto r = Session::load (engine, &plugins, f, &written);
+    writeAll (true);   // the current session keeps everything up to now
+    tapeFiles.setFolder ({});
+
+    const auto r = Session::load (engine, &plugins, f);   // fails before touching the console if f is no session
+    engine.tape.markFilesInStep();   // the tape now matches the files it came from
     if (r.ok)
     {
         folder = f;
         settings.setValue ("lastSession", f.getFullPathName());
-        markClean();
     }
-    showProblems ("Opening " + f.getFileName(), r);
+    tapeFiles.setFolder (folder);
+    savedPrint = lastPrint = fingerprint();
+
+    showProblems ("Opening " + f.getFileName(), r, [this]
+    {
+        if (folder == juce::File())
+            askForNew (true);
+    });
 }
 
-void SessionController::save (std::function<void (bool)> done)
+void SessionController::save()
+{
+    writeAll (true);
+}
+
+void SessionController::saveAs()
 {
     if (folder == juce::File())
-        saveAs (std::move (done));
-    else
-        saveTo (folder, std::move (done));
-}
+        return askForNew (true);
 
-void SessionController::saveAs (std::function<void (bool)> done)
-{
-    // The project name on the cassette label is the default session name.
-    const auto suggested = sessionsFolder().getChildFile (juce::File::createLegalFileName (engine.projectName.toString()));
-    chooser = std::make_unique<juce::FileChooser> ("Save session as (a folder with this name is created)", suggested, "*");
+    const auto suggested = sessionsFolder().getChildFile (uniqueName (folder.getFileName() + " copy"));
+    chooser = std::make_unique<juce::FileChooser> ("Save a copy of the session as (a folder with this name is created; you carry on in the copy)",
+                                                   suggested, "*");
     chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles,
-                          [this, done] (const juce::FileChooser& fc)
+                          [this] (const juce::FileChooser& fc)
     {
         auto target = fc.getResult();
         if (target == juce::File())
-        {
-            if (done) done (false);
             return;
-        }
         if (target.getFileName() == Session::fileName)
             target = target.getParentDirectory();
         if (target.existsAsFile())
             target = target.withFileExtension ("");
+        if (target == folder)
+            return save();
 
-        // A different folder: every track must be written there.
-        if (target != folder)
-            written = {};
-        saveTo (target, done);
-    });
-}
+        const bool occupied = target.existsAsFile()
+                           || (target.isDirectory() && target.getNumberOfChildFiles (juce::File::findFilesAndDirectories) > 0);
+        if (occupied)
+        {
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Save as",
+                                                    target.getFullPathName() + " already exists. Choose a new name for the copy.");
+            return;
+        }
 
-void SessionController::saveTo (const juce::File& target, std::function<void (bool)> done)
-{
-    const auto r = Session::save (engine, target, &written);
-    if (r.ok)
-    {
+        engine.tape.stop();
+        if (! writeAll (true))
+            return;
+
+        // The copy: session.json and the track files. Bounced mixes stay with the original.
+        juce::StringArray names { Session::fileName };
+        for (int t = 0; t < Config::numTracks; ++t)
+            names.add (Session::trackFileName (t));
+        bool ok = target.createDirectory();
+        for (auto& n : names)
+            if (const auto src = folder.getChildFile (n); ok && src.existsAsFile())
+                ok = src.copyFileTo (target.getChildFile (n));
+        if (! ok)
+        {
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Save as",
+                                                    "Could not copy the session to " + target.getFullPathName()
+                                                      + ". You are still working in " + folder.getFullPathName() + ".");
+            return;
+        }
+
         folder = target;
-        settings.setValue ("lastSession", target.getFullPathName());
-        markClean();
-    }
-    showProblems ("Saving", r);
-    if (done)
-        done (r.ok);
+        tapeFiles.setFolder (folder);
+        settings.setValue ("lastSession", folder.getFullPathName());
+    });
 }
 
 void SessionController::exportMix()
@@ -351,39 +443,16 @@ void SessionController::exportMix()
 //==============================================================================
 void SessionController::startUp()
 {
-    const bool crashed = lockFile().existsAsFile();
-    lockFile().create();
-
-    const auto autosaved = autosaveFolder().getChildFile (Session::fileName);
-    if (crashed && autosaved.existsAsFile())
-    {
-        auto options = juce::MessageBoxOptions()
-                           .withIconType (juce::MessageBoxIconType::QuestionIcon)
-                           .withTitle ("Recover?")
-                           .withMessage ("Oxide-3216 did not close properly last time.\n\nRecover the auto-saved session from "
-                                         + autosaved.getLastModificationTime().toString (true, true, false) + "?")
-                           .withButton ("Recover")
-                           .withButton ("Start fresh");
-        juce::AlertWindow::showAsync (options, [this] (int result)
-        {
-            if (result != 1)
-                return;
-            const juce::File origin (autosaveFolder().getChildFile ("origin.txt").loadFileAsString().trim());
-            const auto r = Session::load (engine, &plugins, autosaveFolder());
-            folder = origin.isDirectory() ? origin : juce::File();
-            written = {};
-            cleanPrint = 0;   // recovered work counts as unsaved
-            showProblems ("Recovering", r);
-        });
-        return;
-    }
-
     const juce::File last (settings.getValue ("lastSession"));
     if (last.getChildFile (Session::fileName).existsAsFile())
         openFolder (last);
+    else
+        askForNew (true);
 }
 
 void SessionController::shutDown()
 {
-    lockFile().deleteFile();
+    stopTimer();
+    engine.tape.stop();
+    writeAll (false);
 }

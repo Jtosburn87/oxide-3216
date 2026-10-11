@@ -25,7 +25,10 @@ namespace Session
 
     static constexpr const char* fileName = "session.json";
 
+    /** Everything: session.json plus the track files. */
     Result save (AudioEngine&, const juce::File& folder, TrackRevisions* written = nullptr);
+    /** session.json only (the app's TapeFiles keeps the track files up to date as the tape changes). */
+    Result saveSettings (AudioEngine&, const juce::File& folder);
     Result load (AudioEngine&, PluginManager*, const juce::File& folder, TrackRevisions* written = nullptr);
 
     /** Back to an empty console: default controls, no cables, no plugins, blank tape. */

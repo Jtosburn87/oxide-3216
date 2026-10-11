@@ -1,6 +1,6 @@
 ﻿cmake_minimum_required(VERSION 3.22)
 
-project(Oxide3216 VERSION 0.1.2 LANGUAGES C CXX)
+project(Oxide3216 VERSION 0.1.3 LANGUAGES C CXX)
 
 # Beta builds: bump the version above with each set of changes. The label is what the app and the zip show.
 set(OXIDE_VERSION_LABEL "${PROJECT_VERSION}-beta")
@@ -40,6 +40,7 @@ add_library(Oxide3216Core STATIC
     Source/PluginManager.cpp
     Source/Session.cpp
     Source/StripLink.cpp
+    Source/TapeFiles.cpp
     Source/Params.cpp
     Source/TapeMachine.cpp)
 target_include_directories(Oxide3216Core PUBLIC Source "${ASIO_SDK_DIR}/common")

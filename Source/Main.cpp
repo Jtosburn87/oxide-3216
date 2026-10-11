@@ -93,11 +93,8 @@ public:
 
     void systemRequestedQuit() override
     {
-        // Ask before closing with unsaved changes.
-        if (sessions == nullptr)
-            quit();
-        else
-            sessions->confirmDiscard ([] (bool ok) { if (ok) JUCEApplication::quit(); });
+        // Nothing to ask: the session saves itself, and shutdown() writes whatever is still pending.
+        quit();
     }
     void anotherInstanceStarted (const juce::String&) override {}
 

@@ -117,6 +117,19 @@ public:
     /** Goes up whenever a track is recorded on, so sessions only rewrite tracks that changed. */
     std::uint32_t getTrackRevision (int track) const noexcept { return trackRevision[(size_t) track].load(); }
 
+    // Change tracking for the session's track files (TapeFiles), in chunks of chunkSize samples. Any thread.
+    /** The end of everything written on a track since it was last erased (or replaced) as a whole. */
+    juce::int64 getWrittenEnd (int track) const noexcept { return writtenEnd[(size_t) track].load (std::memory_order_acquire); }
+    /** True once for each chunk changed since the last call. */
+    bool takeChunkChanged (int track, int chunk) noexcept;
+    void markChunkChanged (int track, int chunk) noexcept;
+    /** True once after a track was erased (or replaced) as a whole: its file should go. */
+    bool takeTrackCleared (int track) noexcept { return trackCleared[(size_t) track].exchange (false); }
+    /** The tape now matches the files (just loaded, or a new session): forget pending changes. Message thread. */
+    void markFilesInStep() noexcept;
+    /** Hold this while reading the tape from a worker thread: erased chunks are only freed under it. */
+    juce::CriticalSection& getStorageLock() noexcept { return storageLock; }
+
     bool isPlaying() const noexcept         { return playing.load(); }
     bool isRecordEnabled() const noexcept   { return recordEnabled.load(); }
     bool isRecording (int track) const noexcept;
@@ -169,6 +182,11 @@ private:
     void wind (int numSamples) noexcept;
     std::atomic<juce::int64> inPoint { 0 }, outPoint { 0 };
     std::array<std::atomic<std::uint32_t>, numTracks> trackRevision {};
+    std::array<std::unique_ptr<std::atomic<bool>[]>, numTracks> chunkChanged;   // maxChunks each
+    std::array<std::atomic<bool>, numTracks> trackCleared {};
+    std::array<std::atomic<juce::int64>, numTracks> writtenEnd {};
+    juce::CriticalSection storageLock;
+    void clearTrackFile (int track) noexcept;
     std::array<std::atomic<float>, numTracks> outPeak {};
 
     // Vari-speed (rate != 1): the tape is read at fractional positions and recorded through a resampler.

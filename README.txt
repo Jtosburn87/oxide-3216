@@ -119,12 +119,16 @@ automatically across the whole console.
 
 SESSIONS AND EXPORT
 -------------------
-Session > Save writes a folder (by default in Documents\Oxide-3216 Sessions) with
-session.json (every control, cable, plugin and its settings, the project name) and one
-WAV per tape track. Session > Open: choose the session.json inside a session folder.
-The last session reopens at start-up. You are asked before closing with unsaved changes.
-An auto-save is kept every 2 minutes; if Oxide-3216 did not close properly, it offers to
-recover it next time.
+A session is a folder (in Documents\Oxide-3216 Sessions) with session.json (every control,
+cable, plugin and its settings, the project name) and one WAV per tape track. It saves
+itself, like real tape: recording, importing and erasing go into the track WAVs within half
+a second, and console moves into session.json a moment later. Recording over something
+replaces it for good. There is no undo.
+
+Session > New asks for a name and creates the folder. Session > Save now writes everything
+at once. Session > Save as copies the session to a new folder and carries on in the copy;
+the old folder stays as it was, safe from new recording. Session > Open: choose the
+session.json inside a session folder. The last session reopens at start-up.
 
 Session > Export mix renders the main bus (after the limiter) from the start of the tape to
 its end plus 3 seconds, to a 24-bit WAV.
@@ -133,7 +137,6 @@ its end plus 3 seconds, to a 24-bit WAV.
 WHERE THINGS ARE KEPT
 ---------------------
 %APPDATA%\Oxide-3216\Oxide-3216.settings   audio device, routing, plugin list
-%APPDATA%\Oxide-3216\Autosave\             the latest auto-save
 
 The app used to be called ConsoleTape. The first time Oxide-3216 starts it copies the old
 %APPDATA%\ConsoleTape settings. If Documents\ConsoleTape Sessions exists it keeps saving

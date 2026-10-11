@@ -35,6 +35,12 @@ TapeMachine::TapeMachine (ParamSet& params)
         for (auto& c : table)
             c.store (nullptr);
     }
+    for (auto& flags : chunkChanged)
+    {
+        flags = std::make_unique<std::atomic<bool>[]> (maxChunks);
+        for (size_t i = 0; i < maxChunks; ++i)
+            flags[i].store (false);
+    }
 
     // Vari-speed buffers, made once here (never on the audio thread).
     for (auto& r : vs)
@@ -138,6 +144,8 @@ void TapeMachine::eraseAll()
         for (auto& c : table)
             if (auto* old = c.exchange (nullptr))
                 retired.push_back ({ old, stamp });
+    for (int t = 0; t < numTracks; ++t)
+        clearTrackFile (t);
     length.store (0);
     recordedIps.store (0.0f);   // a blank tape takes the speed of its next recording
     locate (0);
@@ -171,6 +179,8 @@ void TapeMachine::eraseSection (int track, juce::int64 from, juce::int64 to)
         p += len;
     }
     trackRevision[(size_t) track].fetch_add (1);
+    for (auto c = from >> chunkBits; c <= (to - 1) >> chunkBits; ++c)
+        markChunkChanged (track, (int) c);
 }
 
 void TapeMachine::eraseTrack (int track)
@@ -182,6 +192,7 @@ void TapeMachine::eraseTrack (int track)
         if (auto* old = c.exchange (nullptr))
             retired.push_back ({ old, stamp });
     trackRevision[(size_t) track].fetch_add (1);
+    clearTrackFile (track);
 
     bool anyLeft = false;
     for (int t = 0; t < numTracks; ++t)
@@ -218,6 +229,7 @@ void TapeMachine::service()
     idleTicks = blocks == lastSeenBlocks ? idleTicks + 1 : 0;
     lastSeenBlocks = blocks;
 
+    const juce::ScopedLock sl (storageLock);   // TapeFiles may be reading a chunk on its thread
     for (auto it = retired.begin(); it != retired.end();)
     {
         if (blocks >= it->stamp + 2 || idleTicks >= 5)
@@ -261,6 +273,11 @@ void TapeMachine::write (int track, juce::int64 start, const float* src, int n) 
     if (start < 0)   // the first moments of a take belong before the start of the tape
         done = (int) juce::jmin ((juce::int64) n, -start);
 
+    // The end first, then the chunk flags, so TapeFiles never sees a changed chunk without its extent.
+    auto end = writtenEnd[(size_t) track].load (std::memory_order_relaxed);
+    const auto newEnd = juce::jmin (start + n, getCapacity());
+    while (newEnd > end && ! writtenEnd[(size_t) track].compare_exchange_weak (end, newEnd, std::memory_order_release)) {}
+
     while (done < n)
     {
         const juce::int64 p = start + done;
@@ -270,7 +287,10 @@ void TapeMachine::write (int track, juce::int64 start, const float* src, int n) 
         float* c = idx < (juce::int64) maxChunks ? table[(size_t) idx].load (std::memory_order_acquire) : nullptr;
 
         if (c != nullptr)
+        {
             std::memcpy (c + offset, src + done, sizeof (float) * (size_t) len);
+            chunkChanged[(size_t) track][(size_t) idx].store (true, std::memory_order_release);
+        }
         else
             dropped.fetch_add (len);   // allocation fell behind; should never happen in practice
         done += len;
@@ -344,16 +364,19 @@ void TapeMachine::loadTrack (int track, const float* data, juce::int64 n)
     for (auto& c : chunks[(size_t) track])
         if (auto* old = c.exchange (nullptr))
             retired.push_back ({ old, stamp });
+    clearTrackFile (track);
 
     if (n <= 0)
         return;
     if (recordedIps.load() <= 0.0f)
         recordedIps.store (ipsOf (juce::jlimit (0, 2, juce::roundToInt (speed->get()))));
     ensureChunks (track, 0, n - 1);
+    writtenEnd[(size_t) track].store (n);
     for (juce::int64 done = 0; done < n;)
     {
         const auto len = (int) juce::jmin ((juce::int64) chunkSize, n - done);
         std::memcpy (chunks[(size_t) track][(size_t) (done >> chunkBits)].load(), data + done, sizeof (float) * (size_t) len);
+        markChunkChanged (track, (int) (done >> chunkBits));
         done += len;
     }
     trackRevision[(size_t) track].fetch_add (1);
@@ -875,6 +898,34 @@ void TapeMachine::processVarispeed (float* const* tapeOut, int n, bool rec, bool
     {
         auto len = length.load();
         while (recordedEnd > len && ! length.compare_exchange_weak (len, recordedEnd)) {}
+    }
+}
+
+void TapeMachine::clearTrackFile (int track) noexcept
+{
+    writtenEnd[(size_t) track].store (0);
+    trackCleared[(size_t) track].store (true);
+}
+
+bool TapeMachine::takeChunkChanged (int track, int chunk) noexcept
+{
+    auto& flag = chunkChanged[(size_t) track][(size_t) chunk];
+    return flag.load (std::memory_order_relaxed) && flag.exchange (false, std::memory_order_acquire);
+}
+
+void TapeMachine::markChunkChanged (int track, int chunk) noexcept
+{
+    if (juce::isPositiveAndBelow (chunk, (int) maxChunks))
+        chunkChanged[(size_t) track][(size_t) chunk].store (true, std::memory_order_release);
+}
+
+void TapeMachine::markFilesInStep() noexcept
+{
+    for (int t = 0; t < numTracks; ++t)
+    {
+        trackCleared[(size_t) t].store (false);
+        for (size_t i = 0; i < maxChunks; ++i)
+            chunkChanged[(size_t) t][i].store (false);
     }
 }
 
