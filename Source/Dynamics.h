@@ -20,7 +20,9 @@ namespace GatePop
 }
 
 /** Channel gate (from the prototype): peak detector, 5 dB hysteresis, 50 ms hold,
-    attack 1.5 ms (0.1 ms with Fast Attack), release 120 ms. Threshold at minimum = off. */
+    attack 1.5 ms (0.1 ms with Fast Attack), release 120 ms by default. Threshold at minimum = off.
+    Side chain (channel window): the detector can listen through a high-pass, low-pass or band-pass
+    filter; the audio itself is not filtered. */
 class Gate
 {
 public:
@@ -29,6 +31,11 @@ public:
     Param* threshold;   // dBFS, -80..-10 (-80 = off)
     Param* range;       // dB, -60..0
     Param* fast;        // fast attack + pop
+    Param* release;     // seconds, 0.02..2
+    Param* scIn;        // side-chain filter in
+    Param* scType;      // 0 HPF, 1 LPF, 2 BPF
+    Param* scFreq;      // Hz
+    Param* scQ;
 
     void prepare (double sampleRate) noexcept;
     void beginBlock() noexcept;
@@ -56,6 +63,10 @@ private:
     // per-block values
     bool off = true, fastOn = false;
     float dec = 0, aAttack = 0, aRelease = 0, thrLin = 0, closeLin = 0, rangeLin = 0;
+
+    Dsp::Biquad scFilter;
+    bool scOn = false;
+    float scSetType = -1.0f, scSetFreq = -1.0f, scSetQ = -1.0f;   // what the filter is designed for
 };
 
 /** De-esser for the return strips, switched in place of the gate. The detector compares the level in the
@@ -100,22 +111,126 @@ private:
     std::atomic<float> reductionPeak { 0.0f };
 };
 
-/** 1176-style FET compressor (from the prototype), with a threshold knob instead of the 1176's input drive.
-    Peak detection, soft knee 4 dB, make-up gain, then asymmetric tanh saturation (so heavy make-up drives it). */
+/** "76": 1176-style FET compressor (from the prototype). Input drives the signal into a fixed -14 dBFS
+    threshold (3 dB a step); peak detection, soft knee 4 dB, then asymmetric tanh saturation and Output. */
 class FetCompressor
 {
 public:
     FetCompressor (ParamSet&, const juce::String& prefix);
 
-    Param* in;          // in/out, default out
-    Param* threshold;   // dBFS, -50..0
-    Param* makeup;      // dB, 0..+24
-    Param* attack;      // 1..7, 7 fastest (800 us .. 20 us); the knob reads Slow .. Fast
-    Param* release;     // 1..7, 7 fastest (1.1 s .. 50 ms)
+    Param* input;     // 0..10, 3 dB a step
+    Param* output;    // dB, -12..+12
+    Param* attack;    // 1..7, 7 fastest (800 us .. 20 us); the knob reads Slow .. Fast
+    Param* release;   // 1..7, 7 fastest (1.1 s .. 50 ms)
     Param* ratio;     // 0..3 = 4, 8, 12, 20
     Param* all;       // all buttons in
 
     static constexpr float ratios[4] = { 4.0f, 8.0f, 12.0f, 20.0f };
+
+    void prepare (double sampleRate) noexcept;
+    void beginBlock() noexcept;
+    float process (float x) noexcept;
+    float gr = 0.0f;   // current gain reduction, dB
+
+private:
+    double sr = 48000.0;
+    float env = 0.0f;
+    float driveGain = 1, outGain = 1, aAttack = 0, aRelease = 0, dec = 0, slope = 0, knee = 4, satScale = 0.9f;
+    static constexpr float satBias = 0.08f;
+    const float satOffset = std::tanh (satBias);
+};
+
+/** "60": dbx 160-style VCA compressor. RMS detection; attack gets faster the further the signal is over
+    (about 15 ms for 10 dB, 5 ms for 30 dB); release at a fixed 120 dB/s. Hard knee, or OverEasy (a wide
+    soft knee). Ratio up to infinity; clean VCA, Output after it. */
+class VcaCompressor
+{
+public:
+    VcaCompressor (ParamSet&, const juce::String& prefix);
+
+    Param* threshold;   // dBFS, -50..0
+    Param* ratio;       // 1..60 (60 shown as infinity)
+    Param* output;      // dB, -20..+20
+    Param* overEasy;    // soft knee
+
+    void prepare (double sampleRate) noexcept;
+    void beginBlock() noexcept;
+    float process (float x) noexcept;
+    float gr = 0.0f;
+
+private:
+    double sr = 48000.0;
+    float meanSquare = 0.0f;
+    float aRms = 0, releasePerSample = 0, thresholdDb = -20, slope = 0, knee = 0, outGain = 1;
+};
+
+/** "LA": LA-2A-style opto compressor. Peak Reduction sets how hard it works, Gain is the make-up.
+    Attack about 10 ms; release in two stages like the T4 cell (half back in about 60 ms, the rest over
+    about 1.5 s). Comp about 3:1 with a wide knee; Limit about 10:1, firmer. A little tube colour. */
+class OptoCompressor
+{
+public:
+    OptoCompressor (ParamSet&, const juce::String& prefix);
+
+    Param* peakReduction;   // 0..100
+    Param* gain;            // dB, 0..30
+    Param* limit;           // 0 = Comp, 1 = Limit (two-position switch)
+
+    void prepare (double sampleRate) noexcept;
+    void beginBlock() noexcept;
+    float process (float x) noexcept;
+    float gr = 0.0f;
+
+private:
+    double sr = 48000.0;
+    float env = 0.0f, fastGr = 0.0f, slowGr = 0.0f;
+    float dec = 0, aAttack = 0, aFast = 0, aSlow = 0, thresholdDb = 0, slope = 0, knee = 10, makeup = 1;
+    bool active = false;
+};
+
+/** "G": SSL G-series channel compressor style. Peak-sensing VCA, 3 ms attack (0.3 ms with Fast attack),
+    Release knob, ratio up to infinity, small knee. The output is compensated automatically as threshold and
+    ratio change (as on the console), so there is no make-up knob. */
+class SslCompressor
+{
+public:
+    SslCompressor (ParamSet&, const juce::String& prefix);
+
+    Param* threshold;   // dBFS, -40..0
+    Param* ratio;       // 1..60 (60 shown as infinity)
+    Param* release;     // seconds, 0.1..4
+    Param* fast;        // fast attack
+
+    void prepare (double sampleRate) noexcept;
+    void beginBlock() noexcept;
+    float process (float x) noexcept;
+    float gr = 0.0f;
+
+private:
+    double sr = 48000.0;
+    float env = 0.0f;
+    float dec = 0, aAttack = 0, aRelease = 0, thresholdDb = -20, slope = 0, makeup = 1;
+};
+
+/** The channel compressor: In, and a choice of four (the channel window's 60 / 76 / LA / G buttons).
+    Each type keeps its own settings; switching type starts the new one from rest. */
+class ChannelCompressor
+{
+public:
+    ChannelCompressor (ParamSet&, const juce::String& prefix);
+
+    enum Type { vca60, fet76, optoLA, sslG, numTypes };
+    static constexpr const char* typeLabels[numTypes] = { "60", "76", "LA", "G" };
+
+    Param* in;     // in/out, default out
+    Param* type;   // Type, default 60
+
+    FetCompressor fet;
+    VcaCompressor vca;
+    OptoCompressor opto;
+    SslCompressor ssl;
+
+    Type getType() const noexcept { return (Type) juce::jlimit (0, numTypes - 1, juce::roundToInt (type->get())); }
 
     void prepare (double sampleRate) noexcept;
     void beginBlock() noexcept;
@@ -127,15 +242,12 @@ public:
 
 private:
     double sr = 48000.0;
-    float env = 0.0f, gr = 0.0f, blockMaxGr = 0.0f;
+    Type current = vca60;
+    bool wasIn = false;
+    float blockMaxGr = 0.0f;
     std::atomic<float> grPeak { 0.0f };
 
-    // per-block values
-    float thresholdDb = -20, makeupGain = 1, aAttack = 0, aRelease = 0, dec = 0, slope = 0, knee = 4, satScale = 0.9f;
-    static constexpr float satBias = 0.08f;
-    const float satOffset = std::tanh (satBias);
-    bool wasIn = false;
-
+    void reset() noexcept;
     void finishBlock() noexcept;
     friend class ChannelStrip;
 };

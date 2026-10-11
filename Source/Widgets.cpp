@@ -7,14 +7,9 @@ using namespace ConsoleColours;
 //==============================================================================
 ParamSlider::ParamSlider (Param& p) : param (p)
 {
-    auto* pp = &param;
-    setNormalisableRange ({ (double) p.min, (double) p.max,
-                            [pp] (double, double, double n) { return (double) pp->fromNormalised ((float) n); },
-                            [pp] (double, double, double v) { return (double) pp->toNormalised ((float) v); } });
-    if (p.scale == Param::Scale::stepped)
-        setNormalisableRange ({ (double) p.min, (double) p.max, 1.0 });   // snap to switch positions
+    setRange (false);
     setValue (p.get(), juce::dontSendNotification);
-    setDoubleClickReturnValue (true, p.def);
+    setDoubleClickReturnValue (true, p.def, juce::ModifierKeys::ctrlModifier);   // double-click or Ctrl+click resets
     setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
     setTitle (p.name);
     setWantsKeyboardFocus (true);
@@ -26,6 +21,24 @@ ParamSlider::~ParamSlider()
     param.removeListener (this);
 }
 
+void ParamSlider::setRange (bool reversed)
+{
+    auto* pp = &param;
+    const double flip = reversed ? 1.0 : 0.0;   // reversed: position n shows the value at 1 - n
+    setNormalisableRange ({ (double) param.min, (double) param.max,
+                            [pp, flip] (double, double, double n) { return (double) pp->fromNormalised ((float) std::abs (flip - n)); },
+                            [pp, flip] (double, double, double v) { return std::abs (flip - (double) pp->toNormalised ((float) v)); } });
+    if (param.scale == Param::Scale::stepped)
+        setNormalisableRange ({ (double) param.min, (double) param.max, 1.0 });   // snap to switch positions
+}
+
+void ParamSlider::setReversed (bool reversed)
+{
+    setRange (reversed);
+    setValue (param.get(), juce::dontSendNotification);
+    repaint();
+}
+
 void ParamSlider::paramChanged (Param&)
 {
     setValue (param.get(), juce::dontSendNotification);
@@ -34,6 +47,14 @@ void ParamSlider::paramChanged (Param&)
 void ParamSlider::valueChanged()
 {
     param.set ((float) getValue());
+}
+
+void ParamSlider::mouseDoubleClick (const juce::MouseEvent& e)
+{
+    if (onDoubleClick != nullptr)
+        onDoubleClick();
+    else
+        juce::Slider::mouseDoubleClick (e);
 }
 
 void ParamSlider::stepBy (double delta)

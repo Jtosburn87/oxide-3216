@@ -4,7 +4,9 @@
 #include "Dsp.h"
 
 /** The console's 4-band sweepable EQ, used on every channel strip and as the group EQ on each sub.
-    HF and LF are shelves, HMF and LMF are bells (Q 1). Gain +/-15 dB. A band at 0 dB is bypassed. */
+    HF and LF are shelves, HMF and LMF are bells (Q 1). Gain +/-15 dB. A band at 0 dB is bypassed.
+    Channel strips also get extras (shown in the channel window): HF and LF can be bells (Q 1), and HMF
+    and LMF have a Q knob. The defaults sound as before. */
 class FourBandEq
 {
 public:
@@ -25,8 +27,9 @@ public:
         { "lf",  "LF",    30.0f,   450.0f,  100.0f, 0xff3a3d3f },   // black
     };
 
-    /** Creates prefix.eq.hf.gain, prefix.eq.hf.freq, ... */
-    FourBandEq (ParamSet& params, const juce::String& prefix, int numChannels)
+    /** Creates prefix.eq.hf.gain, prefix.eq.hf.freq, ...; with extras also prefix.eq.hf.bell,
+        prefix.eq.lf.bell, prefix.eq.hmf.q and prefix.eq.lmf.q. */
+    FourBandEq (ParamSet& params, const juce::String& prefix, int numChannels, bool extras = false)
         : channels (juce::jlimit (1, maxChannels, numChannels))
     {
         for (int b = 0; b < numBands; ++b)
@@ -36,17 +39,26 @@ public:
             gain[b] = &params.add (id + ".gain", juce::String (s.label) + " gain", -15.0f, 15.0f, 0.0f);
             freq[b] = &params.add (id + ".freq", juce::String (s.label) + " frequency", s.minHz, s.maxHz, s.defHz, Param::Scale::log);
         }
+        if (extras)
+        {
+            for (const int b : { HF, LF })
+                bell[b] = &params.addToggle (prefix + ".eq." + bands[b].id + ".bell", juce::String (bands[b].label) + " bell", false);
+            for (const int b : { HMF, LMF })
+                q[b] = &params.add (prefix + ".eq." + bands[b].id + ".q", juce::String (bands[b].label) + " Q", 0.4f, 4.0f, 1.0f, Param::Scale::log);
+        }
     }
 
     Param* gain[numBands] {};
     Param* freq[numBands] {};
+    Param* bell[numBands] {};     // extras, HF and LF only: a bell instead of a shelf
+    Param* q[numBands] {};        // extras, HMF and LMF only
 
     void prepare (double sr) noexcept
     {
         sampleRate = sr;
         for (int b = 0; b < numBands; ++b)
         {
-            setGain[b] = setFreq[b] = -1000.0f;
+            setGain[b] = setFreq[b] = setShape[b] = -1000.0f;
             for (auto& ch : filters)
                 ch[(size_t) b].reset();
         }
@@ -59,18 +71,23 @@ public:
         for (int b = 0; b < numBands; ++b)
         {
             const float g = gain[b]->get(), f = freq[b]->get();
+            // Shape: the HF/LF bell switch (1 = bell), or the band's Q.
+            const bool shelfBand = b == HF || b == LF;
+            const float shape = shelfBand ? (bell[b] != nullptr && bell[b]->on() ? 1.0f : 0.0f)
+                                          : (q[b] != nullptr ? q[b]->get() : 1.0f);
             const bool wasActive = active[b];
             active[b] = g != 0.0f;
             if (active[b] && ! wasActive)
                 for (int c = 0; c < channels; ++c)
                     filters[(size_t) c][(size_t) b].reset();   // no stale state from before the bypass
-            if (! active[b] || (g == setGain[b] && f == setFreq[b]))
+            if (! active[b] || (g == setGain[b] && f == setFreq[b] && shape == setShape[b]))
                 continue;
 
             Dsp::Biquad design;
-            if (b == HF)      design.setHighShelf (sampleRate, f, g);
-            else if (b == LF) design.setLowShelf (sampleRate, f, g);
-            else              design.setPeak (sampleRate, f, 1.0, g);
+            if (shelfBand && shape > 0.5f) design.setPeak (sampleRate, f, 1.0, g);
+            else if (b == HF)              design.setHighShelf (sampleRate, f, g);
+            else if (b == LF)              design.setLowShelf (sampleRate, f, g);
+            else                           design.setPeak (sampleRate, f, shape, g);
 
             for (int c = 0; c < channels; ++c)
             {
@@ -79,6 +96,7 @@ public:
             }
             setGain[b] = g;
             setFreq[b] = f;
+            setShape[b] = shape;
         }
     }
 
@@ -101,5 +119,5 @@ private:
     double sampleRate = 48000.0;
     std::array<std::array<Dsp::Biquad, numBands>, maxChannels> filters {};
     bool active[numBands] {};
-    float setGain[numBands] {}, setFreq[numBands] {};
+    float setGain[numBands] {}, setFreq[numBands] {}, setShape[numBands] {};
 };

@@ -41,8 +41,6 @@ MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionControll
     patchBay.onClose = [this] { patchBay.setVisible (false); patchButton.grabKeyboardFocus(); };
     addChildComponent (patchBay);
 
-    pluginsButton.setTooltip ("Scan for VST3 plugins and see the ones that failed");
-    pluginsButton.onClick = [this] { openPluginList(); };
     rackButton.setTooltip ("Every insert slot at once, as racks of outboard gear");
     rackButton.onClick = [this]
     {
@@ -52,7 +50,7 @@ MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionControll
     };
     sessionButton.setTooltip ("New, open, save, save as, export the mix");
     sessionButton.onClick = [this] { showSessionMenu(); };
-    sectionsButton.setTooltip ("Sections of the console in windows of their own; unlock the channel chain order");
+    sectionsButton.setTooltip ("Sections of the console in windows of their own, plugin scanning, keyboard shortcuts");
     desk.setChainUnlocked (settings.getBoolValue ("chainUnlocked"));
     applyCassetteAnimation();
     sectionsButton.onClick = [this] { showSectionsMenu(); };
@@ -86,6 +84,7 @@ MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionControll
     };
     // Docking or undocking a section refits the view; minimising a section keeps the zoom and the view.
     desk.onSizeChanged = [this] (bool sectionMoved) { if (sectionMoved) fitToWindow(); else applyZoom(); };
+    desk.onOpenStrip = [this] (Desk::Section bank, int strip) { openStripWindow (bank, strip); };
     sessions.onTitleChanged = [this] { if (auto* w = getTopLevelComponent()) w->setName (sessions.windowTitle()); };
     setWantsKeyboardFocus (true);
     // A plugin window must close before its plugin is deleted.
@@ -105,7 +104,11 @@ MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionControll
     zoomSlider.setColour (juce::Slider::thumbColourId, juce::Colour (0xff9aa0a3));
     zoomSlider.setColour (juce::Slider::trackColourId, juce::Colour (0xff5d6467));
     zoomSlider.setColour (juce::Slider::backgroundColourId, juce::Colour (0xff26292b));
-    zoomSlider.onValueChange = [this] { applyZoom(); };
+    zoomSlider.onValueChange = [this]
+    {
+        scaleX = scaleY = zoomSlider.getValue() / 100.0;   // a manual zoom keeps the console's proportions
+        applyZoom();
+    };
 
     statusLabel.setFont (ConsoleLookAndFeel::uiFont (14.0f));
     statusLabel.setColour (juce::Label::textColourId, bridgeText);
@@ -115,7 +118,7 @@ MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionControll
         addAndMakeVisible (c);
 
     // The app buttons sit on the console, in a column between the tape machine and the bus compressor.
-    for (auto* b : { &sessionButton, &audioButton, &patchButton, &pluginsButton, &rackButton, &sectionsButton })
+    for (auto* b : { &sessionButton, &audioButton, &patchButton, &rackButton, &sectionsButton })
         desk.getAppButtons().addAndMakeVisible (b);
     keepTouchDragsOnControls (desk);   // every control is built by now (sections keep the flag in their own windows)
 
@@ -167,19 +170,33 @@ MainComponent::~MainComponent()
 
 void MainComponent::applyZoom()
 {
-    const float z = (float) zoomSlider.getValue() / 100.0f;
-    desk.setTransform (juce::AffineTransform::scale (z));
-    deskHolder.setSize (juce::roundToInt ((float) desk.getWidth() * z), juce::roundToInt ((float) desk.getHeight() * z));
+    const int w = juce::roundToInt (desk.getWidth() * scaleX), h = juce::roundToInt (desk.getHeight() * scaleY);
+    // The centre section on its own sits in the middle of the window instead of in the top-left corner.
+    const bool centred = centreSectionAlone();
+    const int holderW = centred ? juce::jmax (w, viewport.getMaximumVisibleWidth()) : w;
+    const int holderH = centred ? juce::jmax (h, viewport.getMaximumVisibleHeight()) : h;
+    desk.setTransform (juce::AffineTransform::scale ((float) scaleX, (float) scaleY)
+                           .translated ((float) ((holderW - w) / 2), (float) ((holderH - h) / 2)));
+    deskHolder.setSize (holderW, holderH);
+}
+
+bool MainComponent::centreSectionAlone() const
+{
+    return ! desk.isOnDesk (Desk::inputSection) && ! desk.isOnDesk (Desk::returnSection);
 }
 
 void MainComponent::fitToWindow()
 {
-    if (viewport.getWidth() <= 0 || viewport.getHeight() <= 0)
+    if (viewport.getWidth() <= 0 || viewport.getHeight() <= 0 || desk.getWidth() <= 0 || desk.getHeight() <= 0)
         return;
-    // The whole console, as big as it fits; below 30 % it stops shrinking and scrolls instead.
-    const float z = juce::jmin ((float) viewport.getWidth() / (float) desk.getWidth(),
-                                (float) viewport.getHeight() / (float) desk.getHeight());
-    zoomSlider.setValue (juce::jlimit (30.0, 200.0, std::floor (z * 100.0)), juce::dontSendNotification);
+    // The whole console stretched to fill the window, across and down separately (no dead space);
+    // below 30 % a direction stops shrinking and scrolls instead. The centre section on its own keeps
+    // its proportions (stretched without strips beside it, it looks wrong).
+    scaleX = juce::jlimit (0.3, 2.0, viewport.getWidth() / (double) desk.getWidth());
+    scaleY = juce::jlimit (0.3, 2.0, viewport.getHeight() / (double) desk.getHeight());
+    if (centreSectionAlone())
+        scaleX = scaleY = juce::jmin (scaleX, scaleY);
+    zoomSlider.setValue (juce::jlimit (30.0, 200.0, std::floor (juce::jmin (scaleX, scaleY) * 100.0)), juce::dontSendNotification);
     applyZoom();
 }
 
@@ -506,9 +523,10 @@ void MainComponent::showSectionsMenu()
     for (int i = 0; i < Desk::numSections; ++i)
     {
         const auto s = (Desk::Section) i;
-        m.addItem (Desk::sectionName (s) + " in its own window", true, ! desk.isDocked (s), [this, s]
+        const bool out = sectionWindows[(size_t) i] != nullptr;
+        m.addItem (Desk::sectionName (s) + " in its own window", true, out, [this, s, out]
         {
-            if (desk.isDocked (s)) takeOut (s); else putBack (s);
+            if (out) putBack (s); else takeOut (s);
         });
     }
     m.addSeparator();
@@ -520,6 +538,7 @@ void MainComponent::showSectionsMenu()
     });
     m.addSeparator();
     const bool unlocked = settings.getBoolValue ("chainUnlocked");
+    m.addItem ("Plugins (scan for VST3 plugins)...", [this] { openPluginList(); });
     m.addItem ("Keyboard shortcuts...", [this] { openKeyMappings(); });
     m.addSeparator();
     m.addItem ("Unlock chain order (EQ, gate, compressor per channel)", true, unlocked, [this, unlocked]
@@ -527,11 +546,6 @@ void MainComponent::showSectionsMenu()
         settings.setValue ("chainUnlocked", ! unlocked);
         desk.setChainUnlocked (! unlocked);
         if (saveSettings) saveSettings();
-    });
-    const bool coloured = engine.preampColour->on();
-    m.addItem ("Console colour (1073-style preamps)", true, coloured, [this, coloured]
-    {
-        engine.preampColour->set (coloured ? 0.0f : 1.0f);
     });
     const bool animated = settings.getBoolValue ("cassetteAnimation", true);
     m.addItem ("Animate the cassette (turn off to save CPU)", true, animated, [this, animated]
@@ -563,10 +577,18 @@ void MainComponent::takeOut (Desk::Section s)
         return;
     }
 
-    desk.setDocked (s, false);
-    w = std::make_unique<SectionWindow> (s, desk.getSection (s),
-                                         [this, s] { putBack (s); },
-                                         [this] (const juce::KeyPress& k) { return keyPressed (k); });
+    // A strip bank's window gets a copy, so the console's Record / Mix / Full view stays as it is.
+    // The centre section can't be copied (it holds the app buttons), so it moves.
+    auto keys = [this] (const juce::KeyPress& k) { return keyPressed (k); };
+    if (s == Desk::centreSection)
+    {
+        desk.setDocked (s, false);
+        w = std::make_unique<SectionWindow> (s, desk.getSection (s), [this, s] { putBack (s); }, keys);
+    }
+    else
+    {
+        w = std::make_unique<SectionWindow> (s, desk.makeBankCopy (s), [this, s] { putBack (s); }, keys);
+    }
 
     // Back where it was last time, if that is still on a screen.
     const auto state = settings.getValue (sectionKey (s) + ".bounds");
@@ -588,12 +610,40 @@ void MainComponent::putBack (Desk::Section s)
         return;
 
     settings.setValue (sectionKey (s) + ".bounds", w->getWindowStateAsString());
-    desk.setDocked (s, true);   // the section leaves the window and returns to the console
+    desk.setDocked (s, true);   // the centre section leaves the window and returns to the console (a bank never left)
+    w->setVisible (false);
 
     // This may be running inside the window's own button or close-button callback, so delete it afterwards.
     juce::MessageManager::callAsync ([old = std::shared_ptr<SectionWindow> (w.release())] {});
     saveSections();
     grabKeyboardFocus();
+}
+
+void MainComponent::openStripWindow (Desk::Section bank, int strip)
+{
+    const int key = (int) bank * 100 + strip;
+    if (auto it = stripWindows.find (key); it != stripWindows.end())
+    {
+        it->second->setMinimised (false);
+        it->second->toFront (true);
+        return;
+    }
+
+    const bool inputs = bank == Desk::inputSection;
+    auto& strips = inputs ? engine.inputStrips : engine.returnStrips;
+    const auto title = juce::String ("Oxide-3216  -  ") + (inputs ? "Input " : "Return ") + juce::String (strip + 1);
+    stripWindows[key] = std::make_unique<ChannelStripWindow> (title, *strips[strip], desk.getBank (bank), strip,
+        [this, key]
+        {
+            // Called from the window's close button, so delete it afterwards.
+            if (auto it = stripWindows.find (key); it != stripWindows.end())
+            {
+                it->second->setVisible (false);
+                juce::MessageManager::callAsync ([old = std::shared_ptr<ChannelStripWindow> (it->second.release())] {});
+                stripWindows.erase (it);
+            }
+        },
+        [this] (const juce::KeyPress& k) { return keyPressed (k); });
 }
 
 void MainComponent::restoreSections()

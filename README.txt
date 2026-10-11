@@ -12,7 +12,7 @@ First time:
   1. Click "Audio device" and pick your interface's ASIO driver, sample rate and buffer size.
      Choose the main outputs there (aux and sub outputs are optional). Interface inputs are
      patched to the input channels in the patch bay ("Interface 1 to 1" does the usual setup).
-  2. Click "Plugins", then Options > "Scan for new or updated VST3 plug-ins" (the standard folder
+  2. Click "Options" > "Plugins", then Options > "Scan for new or updated VST3 plug-ins" (the standard folder
      is C:\Program Files\Common Files\VST3; add others in the scan dialog). Each plugin is scanned
      in its own process, so a bad plugin cannot crash the console. Failed ones are shown in red.
 
@@ -24,14 +24,17 @@ beside it (after the reference console): Mute, Main and S1-S4 assigns, the chann
 its LED. Pan sits at the foot of the knob area.
  Centre: tape machine,
 group EQs, bus compressor, inserts and aux returns, bus faders and the main fader.
-Zoom with the slider; "Fit" shows the whole console.
-The small "-" on the Equaliser, Gate, Compressor and Aux sends titles minimises that section on
+The console stretches to fill the window (the centre section on its own keeps its shape). The Zoom
+slider zooms in evenly, with scroll bars; resizing the window fits it again.
+The small "-" on the EQ, Gate, Comp and Aux sends titles minimises that section on
 the whole bank ("+" brings it back); the bank gets shorter and its faders stay in line.
-The IN/OUT button on the first strip's Input title switches that bank's meters between the input (after the trim) and
+The "In" button at the left of the EQ, Gate and Comp titles switches that section in or out.
+The "Meters In/Out" button at the top of the first strip's fader section switches that bank's meters between the input (after the trim) and
 the output (after the fader).
-"Options" moves the input bank, centre section or return bank into a window of its own (for a
-second monitor). Close that window, or press "Put back", to return it to the console. Windows
-that are out stay out, in the same place, the next time Oxide-3216 starts.
+"Options" opens the input bank or return bank in a window of its own as well (for a second
+monitor): a copy, so the console keeps its Record / Mix / Full view; both move together. The centre
+section moves into its window instead; close it, or press "Put back", to return it. Windows that
+are out stay out, in the same place, the next time Oxide-3216 starts.
 "Options" > "Unlock chain order" adds a small up arrow to the EQ, gate and compressor titles of
 every channel: it moves that section earlier in the channel's signal chain, and the strip shows
 the sections in the order the signal passes through them. The order is saved with the session.
@@ -40,11 +43,26 @@ sibilance, Reduce is the most it turns down (dB). Wide: everything above Freq (o
 it). Gentle: only the sibilant band comes down (off: the whole signal does). Byp bypasses it.
 
 Every strip: trim, high-pass filter, 4-band EQ, gate (Fast atk = fast attack with the pop),
-1176-style compressor, 8 aux sends (P = pre-fader), sub assigns S1-S4, main assign, pan,
+compressor, 8 aux sends (P = pre-fader), sub assigns S1-S4, main assign, pan,
 mute, solo, fader. Double-click a scribble strip to rename it.
 
-Knobs and faders: drag up/down, mouse wheel, double-click for the default; with the keyboard,
-arrows step, Page Up/Down step more, Home or Delete resets.
+THE CHANNEL WINDOW: double-click any knob on a channel strip to open that channel big, laid out
+like a channel-strip plugin (Input, Equaliser, Gate / Compressor, Aux sends, Output). Everything in
+it is the console's own control. It also has controls the strip doesn't:
+  EQ: LF and HF "Bell" (off = shelf), Q for LMF and HMF.
+  Gate: Release, and a side chain (In, HPF / LPF / BPF, Freq, Q) that filters what the gate
+  listens to, not the audio.
+  Compressor: the type buttons along the bottom, and the strip shows that type's controls too.
+    60  VCA, after the dbx 160: Threshold, Ratio (to infinity), Output, OverEasy (soft knee).
+    76  FET, after the 1176: Input (drives it), Output, Attack, Release, ratio 4/8/12/20, All.
+    LA  Opto, after the LA-2A: Peak Reduction, Gain, Comp / Limit.
+    G   After the SSL G-series channel compressor: Threshold, Ratio, Release, Fast attack;
+        the output is made up automatically.
+  A new channel starts on 60; sessions from before the types open on 76, as they were made.
+
+Knobs and faders: drag up/down, mouse wheel, Ctrl+click for the default (double-click too, except on
+channel strip knobs, where it opens the channel window); with the keyboard, arrows step, Page Up/Down
+step more, Home or Delete resets.
 
 Signal flow: input strip -> tape in (normalled) -> tape out -> return strip (normalled).
 Both banks go to main and/or the subs. Subs -> group EQ -> inserts -> sub fader -> main.
@@ -91,7 +109,8 @@ channel 1 from input 1, channel 2 from input 2, and so on. "Pull all cables" lea
 PLUGINS (VST3)
 --------------
 The FX buttons in the centre open the insert slots: 4 on each sub, each aux return and the
-master. Choose a plugin, Byp = bypass, Edit = its window, arrows = order.
+master. The list button beside a slot chooses a plugin; click its name to open its window.
+Byp = bypass, arrows = order. "Rack" shows every slot at once.
 Aux returns: put an effect on an aux's FX (e.g. a reverb at 100% wet) and set its Return level.
 A return is heard only when its chain has an active plugin. Plugin delay is compensated
 automatically across the whole console.

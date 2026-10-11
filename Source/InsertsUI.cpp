@@ -16,7 +16,7 @@ void InsertSlot::choose (InsertChain& chain, int slot, PluginContext& context, P
         menu.addSeparator();
     }
     if (effects.isEmpty())
-        menu.addItem (-2, "No plugins yet: click Plugins in the top bar and scan", false, false);
+        menu.addItem (-2, "No plugins yet: scan from Options > Plugins", false, false);
     else
         juce::KnownPluginList::addToMenu (menu, effects, juce::KnownPluginList::sortByManufacturer,
                                           chain.getDescription (slot).createIdentifierString());

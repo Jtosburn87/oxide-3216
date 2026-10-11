@@ -36,6 +36,8 @@ public:
         Param* auxLevel[Config::numAux];    // 0..1
         Param* auxPre[Config::numAux];      // pre-fader send
         Param* order;                       // processing order of EQ, gate and compressor (chainOrders)
+        Param* eqIn;                        // EQ in (out = bypassed)
+        Param* gateIn;                      // gate in (out = bypassed; not the de-esser, which has its own)
     } controls;
 
     /** The six orders the EQ, gate and compressor can run in (stage numbers below). Order 0 is the default. */
@@ -58,7 +60,7 @@ public:
     FourBandEq eq;
     Gate gate;
     std::unique_ptr<DeEsser> deEsser;   // return strips: the gate slot can be a de-esser instead
-    FetCompressor comp;
+    ChannelCompressor comp;
 
     void prepare (double sampleRate);
 
@@ -76,6 +78,7 @@ private:
     Preamp preamp;
     Dsp::Biquad hp;
     float hpFreqSet = -1.0f;
+    bool eqWasIn = true;
     Dsp::Smoothed trimGain, faderGain;
     std::atomic<float> peak { 0.0f }, inputPeak { 0.0f };
 

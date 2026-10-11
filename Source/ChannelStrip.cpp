@@ -13,13 +13,15 @@ namespace
 
 ChannelStrip::ChannelStrip (ParamSet& params, const juce::String& prefix, const juce::String& defaultName, bool withDeEsser, float defaultFader)
     : idPrefix (prefix), name (defaultName),
-      eq (params, prefix, 1), gate (params, prefix), comp (params, prefix)
+      eq (params, prefix, 1, true), gate (params, prefix), comp (params, prefix)
 {
     const auto id = [&] (const juce::String& s) { return prefix + "." + s; };
     controls.trim  = &params.add (id ("trim"), "Trim", -20.0f, 30.0f, 0.0f);
     controls.hpf   = &params.add (id ("hpf"), "HPF", 20.0f, 300.0f, 20.0f, Param::Scale::log);
     controls.pan   = &params.add (id ("pan"), "Pan", -1.0f, 1.0f, 0.0f);
     controls.order = &params.addStepped (id ("order"), "Chain order", (int) chainOrders.size(), 0);
+    controls.eqIn  = &params.addToggle (id ("eq.in"), "EQ in", true);
+    controls.gateIn = &params.addToggle (id ("gate.in"), "Gate in", true);
     if (withDeEsser)
         deEsser = std::make_unique<DeEsser> (params, prefix);
     controls.main  = &params.addToggle (id ("main"), "Main", true);
@@ -140,6 +142,11 @@ void ChannelStrip::process (const float* in, float* direct, const BusPointers& b
         hpFreqSet = -1.0f;
     }
 
+    // EQ and gate In switches: out = bypassed. The EQ comes back in with clear filters.
+    const bool eqIn = controls.eqIn->on(), gateIn = controls.gateIn->on();
+    if (eqIn && ! eqWasIn)
+        eq.prepare (sampleRate);
+    eqWasIn = eqIn;
     eq.update();
     // Return strips: the gate slot is either the gate or the de-esser.
     const bool deEssMode = deEsser != nullptr && deEsser->on->on();
@@ -148,8 +155,8 @@ void ChannelStrip::process (const float* in, float* direct, const BusPointers& b
         deEsser->beginBlock();
     gate.beginBlock();
     comp.beginBlock();
-    const bool eqOn = ! eq.isFlat();
-    const bool gateOn = ! deEssMode && (! gate.isOff() || ! gate.isIdle());
+    const bool eqOn = eqIn && ! eq.isFlat();
+    const bool gateOn = gateIn && ! deEssMode && (! gate.isOff() || ! gate.isIdle());
     const bool compOn = comp.isIn();
     const auto order = chain();
 

@@ -35,12 +35,16 @@ private:
 };
 
 /** A section of the console in a window of its own (e.g. on a second monitor), with its own zoom.
-    Closing the window, or "Put back", returns the section to the console. */
+    The centre section moves into the window: closing it, or "Put back", returns it to the console.
+    A strip bank's window holds a copy (the console keeps the bank): closing it just closes it. */
 class SectionWindow : public juce::DocumentWindow
 {
 public:
     SectionWindow (Desk::Section, juce::Component& section,
                    std::function<void()> putBack, std::function<bool (const juce::KeyPress&)> keys);
+    /** Owns the copy. */
+    SectionWindow (Desk::Section, std::unique_ptr<juce::Component> copy,
+                   std::function<void()> close, std::function<bool (const juce::KeyPress&)> keys);
 
     void closeButtonPressed() override { putBack(); }
     bool keyPressed (const juce::KeyPress& k) override { return keys != nullptr && keys (k); }

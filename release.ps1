@@ -11,6 +11,13 @@ $version += (Select-String -Path CMakeLists.txt -Pattern 'OXIDE_VERSION_LABEL "\
 $stage = "dist\Oxide-3216-$version"
 $zip = "dist\Oxide-3216-$version-win64.zip"
 
+# A copy running from the dist folder can't be replaced: leave dist alone rather than touch it.
+$stageExe = Join-Path $PSScriptRoot "$stage\Oxide-3216.exe"
+if (Get-Process Oxide-3216 -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $stageExe }) {
+    Write-Warning "Oxide-3216 is running from $stage - built and tested, but dist was NOT refreshed. Close it and run release.ps1 again."
+    exit 0
+}
+
 Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $stage | Out-Null
 Copy-Item "build\Oxide3216_artefacts\Release\Oxide-3216.exe" $stage

@@ -54,9 +54,18 @@ void ZoomView::resized()
 class SectionWindow::Content : public juce::Component
 {
 public:
-    Content (juce::Component& section, std::function<void()> putBack)
-        : frame (section)
+    Content (juce::Component& section, std::function<void()> putBack, std::unique_ptr<juce::Component> ownedCopy = {})
+        : copy (std::move (ownedCopy)), frame (section)
     {
+        if (copy != nullptr)
+        {
+            putBackButton.setButtonText ("Close");
+            putBackButton.setTooltip ("Close this window (the console keeps its own bank)");
+        }
+        else
+        {
+            putBackButton.setTooltip ("Put this section back into the console window");
+        }
         zoomLabel.setText ("Zoom", juce::dontSendNotification);
         zoomLabel.setFont (ConsoleLookAndFeel::uiFont (14.0f));
         zoomLabel.setColour (juce::Label::textColourId, bridgeText);
@@ -74,7 +83,6 @@ public:
 
         fitButton.setTooltip ("Zoom so the whole section fits the window");
         fitButton.onClick = [this] { fit(); };
-        putBackButton.setTooltip ("Put this section back into the console window");
         putBackButton.onClick = [putBack] { putBack(); };
 
         for (juce::Component* c : { (juce::Component*) &zoomLabel, (juce::Component*) &zoomSlider,
@@ -127,6 +135,7 @@ public:
 
 private:
     static constexpr int barH = 40;
+    std::unique_ptr<juce::Component> copy;   // a strip bank's copy; outlives the frame that shows it
     SectionFrame frame;
     ZoomView view;
     juce::Label zoomLabel;
@@ -143,6 +152,20 @@ SectionWindow::SectionWindow (Desk::Section s, juce::Component& sectionComponent
 {
     setUsingNativeTitleBar (true);
     setContentOwned (new Content (sectionComponent, putBack), true);
+    setResizable (true, false);
+    setResizeLimits (300, 300, 10000, 10000);
+    centreWithSize (getWidth(), getHeight());
+    setVisible (true);
+}
+
+SectionWindow::SectionWindow (Desk::Section s, std::unique_ptr<juce::Component> copy,
+                              std::function<void()> onClose, std::function<bool (const juce::KeyPress&)> keyHandler)
+    : juce::DocumentWindow ("Oxide-3216  -  " + Desk::sectionName (s), room, juce::DocumentWindow::allButtons),
+      section (s), putBack (std::move (onClose)), keys (std::move (keyHandler))
+{
+    setUsingNativeTitleBar (true);
+    auto& c = *copy;
+    setContentOwned (new Content (c, putBack, std::move (copy)), true);
     setResizable (true, false);
     setResizeLimits (300, 300, 10000, 10000);
     centreWithSize (getWidth(), getHeight());

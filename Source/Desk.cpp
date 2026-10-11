@@ -2,65 +2,14 @@
 #include "ConsoleLookAndFeel.h"
 #include "EraseDialog.h"
 #include "TalkbackSettings.h"
+#include "StripStyle.h"
 
 using namespace ConsoleColours;
 using namespace DeskLayout;
+using namespace StripStyle;
 
 namespace
 {
-    const juce::Colour muteRed  { 0xffd0473c };
-    const juce::Colour gateCap  { 0xff3d6b50 };
-    const juce::Colour compCap  { 0xffc9c6bb };
-    const juce::Colour auxCap   { 0xffd9d6cc };
-
-    juce::String formatHz (float f)
-    {
-        return f >= 1000.0f ? juce::String (f / 1000.0f, f >= 10000.0f ? 0 : 1) + "k" : juce::String (juce::roundToInt (f));
-    }
-
-    /** Range printed at the ends of a frequency knob's sweep: Hz for LF, kHz for the others. */
-    std::pair<juce::String, juce::String> freqEnds (const FourBandEq::BandSpec& s)
-    {
-        if (s.maxHz <= 1000.0f)
-            return { juce::String (juce::roundToInt (s.minHz)), juce::String (juce::roundToInt (s.maxHz)) };
-        const auto k = [] (float hz) { auto t = juce::String (hz / 1000.0f, 1); return t.endsWith (".0") ? t.dropLastCharacters (2) : t; };
-        return { k (s.minHz), k (s.maxHz) };
-    }
-
-    void paintSection (juce::Graphics& g, const juce::String& title, juce::Rectangle<int> box, juce::Colour background)
-    {
-        g.setColour (juce::Colour (0xff8e9598));
-        g.drawRoundedRectangle (box.toFloat().reduced (0.5f), 2.0f, 1.0f);
-
-        g.setFont (ConsoleLookAndFeel::uiFont (11.0f));
-        const int w = (int) std::ceil (juce::GlyphArrangement::getStringWidth (g.getCurrentFont(), title)) + 6;
-        const auto label = juce::Rectangle<int> (box.getX() + 6, box.getY() - 6, w, 12);
-        g.setColour (background);
-        g.fillRect (label);
-        g.setColour (legend);
-        g.drawText (title, label, juce::Justification::centred, false);
-    }
-
-    void setupScribble (juce::Label& l, const juce::String& text)
-    {
-        l.setText (text, juce::dontSendNotification);
-        l.setFont (ConsoleLookAndFeel::uiFont (13.0f, true));
-        l.setJustificationType (juce::Justification::centred);
-        l.setColour (juce::Label::backgroundColourId, paper);
-        l.setColour (juce::Label::textColourId, juce::Colour (0xff111111));
-        l.setColour (juce::Label::outlineColourId, juce::Colours::black.withAlpha (0.35f));
-        l.setColour (juce::TextEditor::backgroundColourId, juce::Colours::white);
-        l.setColour (juce::TextEditor::textColourId, juce::Colour (0xff111111));
-        l.setColour (juce::TextEditor::highlightColourId, amber.withAlpha (0.5f));
-        l.setColour (juce::TextEditor::focusedOutlineColourId, focus);
-    }
-
-    void redButton (juce::Button& b)
-    {
-        b.setColour (juce::TextButton::buttonOnColourId, muteRed);
-        b.setColour (juce::TextButton::textColourOnId, juce::Colours::white);
-    }
-
     // Channel strips have a taller fader section than the centre: the assign buttons and the meter sit in a
     // column beside the fader (as on the reference console), and the knob area no longer holds them.
     // A row at the top of it holds the bank's Meters In/Out button (on the first strip).
@@ -82,9 +31,6 @@ namespace
         g.setColour (juce::Colours::black);
         g.fillRect (r.getX(), knobs, r.getWidth(), 1);
     }
-
-    juce::Rectangle<int> knobAt (int x, int y)      { return { x, y, Knob::preferredWidth, Knob::preferredHeight }; }
-    juce::Rectangle<int> smallKnobAt (int x, int y) { return { x, y, Knob::smallWidth, Knob::smallHeight }; }
 }
 
 //==============================================================================
@@ -96,11 +42,9 @@ StripComponent::StripComponent (ChannelStrip& s)
       gateThr (*s.gate.threshold, "Thr", gateCap),
       gateRange (*s.gate.range, "Range", gateCap),
       gateFast (*s.gate.fast, "Fast atk"),
-      compThreshold (*s.comp.threshold, "Thresh", compCap),
-      compMakeup (*s.comp.makeup, "Makeup", compCap),
-      compAttack (*s.comp.attack, "Attack", compCap),
-      compRelease (*s.comp.release, "Release", compCap),
-      compAll (*s.comp.all, "All"),
+      eqIn (*s.controls.eqIn, "In"),
+      gateIn (*s.controls.gateIn, "In"),
+      compPanel (s.comp),
       compIn (*s.comp.in, "In"),
       mainButton (*s.controls.main, "Main"),
       mute (*s.controls.mute, "Mute"),
@@ -131,34 +75,26 @@ StripComponent::StripComponent (ChannelStrip& s)
     }
 
     gateThr.setEndLabels ("off", "-10");
-    gateRange.setEndLabels ("-60", "0");
+    gateRange.setReversed (true);   // turning right cuts deeper
+    gateRange.setEndLabels ("0", "-60");
     gateFast.setTooltip ("Fast attack: opens in 0.1 ms. A loud transient makes the gate pop.");
     gateFast.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffd9dbd8));
     gateFast.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff0b0b0b));
     add (gateThr);
     add (gateRange);
     add (gateFast);
+    eqIn.setTooltip ("EQ in (out = bypassed)");
+    gateIn.setTooltip ("Gate in (out = bypassed)");
+    add (eqIn);
+    add (gateIn);
     gateMeter.setTooltip ("Gate: how far it is turning the signal down (full = 60 dB)");
     add (gateMeter);
 
-    compThreshold.setEndLabels ("-50", "0");
-    compMakeup.setEndLabels ("0", "24");
-    compAttack.setEndLabels ("Slow", "Fast");
-    compRelease.setEndLabels ("Slow", "Fast");
-    for (auto* k : { &compThreshold, &compMakeup, &compAttack, &compRelease })
-        add (*k);
-    for (int i = 0; i < 4; ++i)
-    {
-        auto* b = ratioButtons.add (new RadioParamButton (*s.comp.ratio, i, juce::String (juce::roundToInt (FetCompressor::ratios[i]))));
-        b->setTooltip ("Ratio " + b->getButtonText() + ":1");
-        add (*b);
-    }
-    compAll.setTooltip ("All buttons in: about 60:1 with extra drive and distortion");
-    redButton (compAll);
+    // The compressor's controls follow its type (chosen in the channel window); its title shows which.
+    compPanel.onTypeChanged = [this] { resized(); repaint(); };
+    add (compPanel);
     compIn.setTooltip ("Compressor in");
-    add (compAll);
     add (compIn);
-    add (grMeter);
 
     for (int k = 0; k < Config::numAux; ++k)
     {
@@ -244,6 +180,15 @@ StripComponent::StripComponent (ChannelStrip& s)
         add (gateModeButton);
     }
 
+    // Double-clicking any knob opens the whole channel in a big window (Ctrl+click resets a knob).
+    std::vector<Knob*> knobs { &trim, &hpf, &pan, &gateThr, &gateRange, deFreq.get(), deReduction.get() };
+    compPanel.setKnobDoubleClick ([this] { if (onOpenStrip) onOpenStrip(); });
+    for (auto* k : eqKnobs)  knobs.push_back (k);
+    for (auto* k : auxKnobs) knobs.push_back (k);
+    for (auto* k : knobs)
+        if (k != nullptr)
+            k->setOnDoubleClick ([this] { if (onOpenStrip) onOpenStrip(); });
+
     fader.slider.setTitle (strip.name + " fader");
     setTitle (strip.name);
     setFocusContainerType (FocusContainerType::focusContainer);
@@ -256,6 +201,7 @@ namespace
     // height a minimised one keeps: just its title line.
     constexpr int expandedH[] = { 10 + 4 * 52 + 4, 10 + 50 + 4 + 18 + 4 + 8 + 6,10 + 2 * 52 + 2 + 17 + 4 + 16 + 6, 10 + 4 * 44 + 4 };
     constexpr int collapsedH = 8;
+    constexpr int inW = 20;   // In buttons on the EQ, gate and compressor title lines
 }
 
 void StripComponent::setChainUnlocked (bool unlocked)
@@ -330,6 +276,7 @@ void StripComponent::updateVisibility()
             c->setVisible (! folded && (i != 1 || isDeEss == shownDeEss));
         }
     }
+    gateIn.setVisible (! shownDeEss);   // the de-esser has its own Byp
 
     // A linked aux pair has one pre switch, the odd one.
     for (size_t j = 0; j < shownAuxLink.size(); ++j)
@@ -355,8 +302,7 @@ std::vector<juce::Component*> StripComponent::sectionComponents (int bit)
     }
     if (bit == compSection)
     {
-        list = { &compThreshold, &compMakeup, &compAttack, &compRelease, &compAll, &compIn, &grMeter };
-        for (auto* b : ratioButtons) list.push_back (b);
+        list = { &compPanel };
     }
     if (bit == auxSection)
     {
@@ -386,10 +332,22 @@ void StripComponent::resized()
     {
         const bool folded = (collapsed & (1 << i)) != 0;
         box = { bx, y, bw, folded ? collapsedH : expandedH[i] };
-        sections.push_back ({ title, box });
+        // EQ, gate and compressor: the In button at the left of the title line (it stays when minimised),
+        // the title after it.
+        const bool hasIn = i < 3;
+        sections.push_back ({ title, box, hasIn ? inW + 2 : 0 });
         foldButtons[(size_t) i].setBounds (bx + bw - 20, box.getY() - 7, 18, 14);
+        if (hasIn)
+        {
+            ParamButton* const inButtons[] = { &eqIn, &gateIn, &compIn };
+            inButtons[i]->setBounds (bx + 4, box.getY() - 7, inW, 14);
+        }
         if (i == 1 && deFreq != nullptr)
-            gateModeButton.setBounds (bx + 4, box.getY() - 7, 54, 14);
+        {
+            // Up to the move button (chain unlocked) or the minimise button.
+            const int end = bx + bw - (chainUnlocked ? 42 : 22);
+            gateModeButton.setBounds (bx + 6 + inW, box.getY() - 7, end - (bx + 6 + inW), 14);
+        }
         if (i < 3)
         {
             // Unlocked chain: a button to move this section one place earlier (not on the first one).
@@ -402,9 +360,10 @@ void StripComponent::resized()
         y = box.getBottom() + 14;
     };
 
-    // With the chain unlocked, two buttons share the title line: "Compressor" would not fit.
+    // Short titles: the In button and the minimise (and, unlocked, move) buttons share the title line.
     // On return strips, the gate slot's title is the gate/de-esser switch instead.
-    const char* const stageTitles[] = { "Equaliser", deFreq != nullptr ? "" : "Gate", chainUnlocked ? "Comp" : "Compressor" };
+    const auto compTitle = chainUnlocked ? juce::String ("Comp") : "Comp " + compPanel.typeLabel();   // e.g. "Comp 76"
+    const char* const stageTitles[] = { "EQ", deFreq != nullptr ? "" : "Gate", compTitle.toRawUTF8() };
     const std::function<void (juce::Rectangle<int>)> stageLayouts[] =
     {
         [&] (juce::Rectangle<int> b)
@@ -437,21 +396,7 @@ void StripComponent::resized()
         },
         [&] (juce::Rectangle<int> b)
         {
-            compThreshold.setBounds (knobAt (left, b.getY() + 10));
-            compMakeup.setBounds (knobAt (right, b.getY() + 10));
-            compAttack.setBounds (knobAt (left, b.getY() + 62));
-            compRelease.setBounds (knobAt (right, b.getY() + 62));
-
-            auto row = juce::Rectangle<int> (bx + 4, b.getY() + 116, bw - 8, 17);
-            const int w = row.getWidth() / 5;
-            for (auto* r : ratioButtons)
-                r->setBounds (row.removeFromLeft (w).reduced (1, 0));
-            compAll.setBounds (row.reduced (1, 0));
-
-            auto row2 = juce::Rectangle<int> (bx + 4, b.getY() + 137, bw - 8, 16);
-            compIn.setBounds (row2.removeFromLeft (30));
-            row2.removeFromLeft (4);
-            grMeter.setBounds (row2.withSizeKeepingCentre (row2.getWidth(), 8));
+            compPanel.setBounds (bx, b.getY(), bw, CompressorPanel::preferredHeight);
         }
     };
     for (const int stage : chain)
@@ -501,7 +446,7 @@ void StripComponent::paint (juce::Graphics& g)
     paintColumn (g, getLocalBounds(), stripFaderH);
 
     for (auto& s : sections)
-        paintSection (g, s.title, s.box, stripGrey);
+        paintSection (g, s.title, s.box, stripGrey, s.titleIndent);
 
     // The meter's scale, printed to its left, and what it shows (input or output) underneath.
     const auto m = meter.getBounds();
@@ -533,8 +478,10 @@ void StripComponent::setMeterInput (bool input)
     repaint (meter.getBounds().expanded (12, 12));
 }
 
-void StripComponent::update()
+void StripComponent::update (const StripComponent* source)
 {
+    compPanel.update();   // the compressor type may have changed (channel window, or a loaded session)
+
     // A loaded session may have renamed the strip.
     if (! scribble.isBeingEdited() && scribble.getText() != strip.name)
         scribble.setText (strip.name, juce::dontSendNotification);
@@ -561,15 +508,26 @@ void StripComponent::update()
         repaint();
     }
 
-    // Take both peaks every frame, so flipping never shows a stale one.
-    const float out = strip.takePeak(), in = strip.takeInputPeak();
-    meter.setLevel (meterInput ? in : out);
-    grMeter.setReduction (strip.comp.isIn() ? strip.comp.takeGainReduction() : 0.0f);
-    const float gateDb = strip.gate.takeReduction();   // taken every frame, so a switch never shows a stale one
-    if (shownDeEss)
-        deMeter.setReduction (strip.deEsser->isActive() ? strip.deEsser->takeReduction() : 0.0f);
+    // Readings are taken (and so reset) once a frame, by the console's bank; a copy shows the same ones.
+    if (source != nullptr)
+    {
+        readings = source->readings;
+    }
     else
-        gateMeter.setReduction (gateDb);
+    {
+        // Take both peaks every frame, so flipping never shows a stale one.
+        readings.out = strip.takePeak();
+        readings.in = strip.takeInputPeak();
+        readings.gr = strip.comp.isIn() ? strip.comp.takeGainReduction() : 0.0f;
+        readings.gate = strip.gate.takeReduction();   // taken every frame, so a switch never shows a stale one
+        readings.deEss = shownDeEss && strip.deEsser->isActive() ? strip.deEsser->takeReduction() : 0.0f;
+    }
+    meter.setLevel (meterInput ? readings.in : readings.out);
+    compPanel.setReduction (readings.gr);
+    if (shownDeEss)
+        deMeter.setReduction (readings.deEss);
+    else
+        gateMeter.setReduction (readings.gate);
 
     const auto pops = strip.gate.popCount.load();
     if (pops != lastPops)
@@ -1126,7 +1084,8 @@ void updateTapeDisplay (TapeMachine& tape, Cassette& cassette, TapeClock& clock)
 }
 
 //==============================================================================
-StripBank::StripBank (const juce::OwnedArray<ChannelStrip>& channelStrips, const std::vector<Param*>& links)
+StripBank::StripBank (const juce::OwnedArray<ChannelStrip>& bankStrips, const std::vector<Param*>& linkParams)
+    : channelStrips (bankStrips), links (linkParams)
 {
     for (auto* s : channelStrips)
     {
@@ -1136,21 +1095,14 @@ StripBank::StripBank (const juce::OwnedArray<ChannelStrip>& channelStrips, const
             setCollapsed (collapsed ^ bit);
             if (onCollapseChanged) onCollapseChanged();
         };
+        strip->onOpenStrip = [this, i = strips.size() - 1] { if (onOpenStrip) onOpenStrip (i); };
         addAndMakeVisible (strip);
     }
 
     meterButton.setTooltip ("Meters show each channel's output (after the fader). Click to show the input (after the trim) instead");
     meterButton.setColour (juce::TextButton::buttonOnColourId, amber);
     meterButton.setColour (juce::TextButton::textColourOnId, juce::Colours::black);
-    meterButton.onClick = [this]
-    {
-        meterInput = ! meterInput;
-        meterButton.setToggleState (meterInput, juce::dontSendNotification);
-        meterButton.setTooltip (meterInput ? "Meters show each channel's input (after the trim). Click to show the output (after the fader) instead"
-                                           : "Meters show each channel's output (after the fader). Click to show the input (after the trim) instead");
-        for (auto* s : strips)
-            s->setMeterInput (meterInput);
-    };
+    meterButton.onClick = [this] { setMeterInput (! meterInput); };
     addAndMakeVisible (meterButton);
 
     for (size_t k = 0; k < links.size(); ++k)
@@ -1166,10 +1118,41 @@ StripBank::StripBank (const juce::OwnedArray<ChannelStrip>& channelStrips, const
     setSize (strips.size() * stripW, totalH);
 }
 
+StripBank::~StripBank()
+{
+    if (original != nullptr)
+        original->copies.removeFirstMatchingValue (this);
+}
+
+std::unique_ptr<StripBank> StripBank::makeCopy()
+{
+    auto copy = std::make_unique<StripBank> (channelStrips, links);
+    copy->original = this;
+    copy->onOpenStrip = onOpenStrip;
+    copy->setCollapsed (collapsed);
+    copy->setChainUnlocked (chainUnlocked);
+    copy->setMeterInput (meterInput);
+    copies.add (copy.get());
+    return copy;
+}
+
+void StripBank::setMeterInput (bool input)
+{
+    meterInput = input;
+    meterButton.setToggleState (meterInput, juce::dontSendNotification);
+    meterButton.setTooltip (meterInput ? "Meters show each channel's input (after the trim). Click to show the output (after the fader) instead"
+                                       : "Meters show each channel's output (after the fader). Click to show the input (after the trim) instead");
+    for (auto* s : strips)
+        s->setMeterInput (meterInput);
+}
+
 void StripBank::setChainUnlocked (bool unlocked)
 {
+    chainUnlocked = unlocked;
     for (auto* s : strips)
         s->setChainUnlocked (unlocked);
+    for (auto* c : copies)
+        c->setChainUnlocked (unlocked);
 }
 
 void StripBank::setCollapsed (int mask)
@@ -1204,6 +1187,14 @@ void StripBank::update()
 {
     for (auto* s : strips)
         s->update();
+    for (auto* c : copies)
+        c->updateFrom (*this);
+}
+
+void StripBank::updateFrom (const StripBank& source)
+{
+    for (int i = 0; i < strips.size(); ++i)
+        strips[i]->update (source.strips[i]);
 }
 
 //==============================================================================
@@ -1252,6 +1243,8 @@ Desk::Desk (AudioEngine& e, PluginContext* plugins)
     {
         bank->addComponentListener (this);
         bank->onCollapseChanged = [this] { if (onCollapseChanged) onCollapseChanged(); };
+        const auto s = bank == &inputs ? inputSection : returnSection;
+        bank->onOpenStrip = [this, s] (int i) { if (onOpenStrip) onOpenStrip (s, i); };
     }
     relayout();
     startTimerHz (30);
@@ -1397,9 +1390,9 @@ void Desk::paint (juce::Graphics& g)
 
 void Desk::timerCallback()
 {
-    // Sections keep updating whether they are docked or in their own windows; a bank the view hides rests.
-    if (inputs.isShowing())  inputs.update();
-    if (returns.isShowing()) returns.update();
+    // A bank the view hides rests, unless a copy or a channel window shows its readings.
+    if (inputs.isShowing() || inputs.hasCopies() || inputs.readers > 0)    inputs.update();
+    if (returns.isShowing() || returns.hasCopies() || returns.readers > 0) returns.update();
     centre.update();
 }
 

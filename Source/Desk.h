@@ -6,6 +6,7 @@
 #include "Cassette.h"
 #include "BusCompPanel.h"
 #include "InsertsUI.h"
+#include "CompressorPanel.h"
 
 /** Fixed console geometry, in desk units (pixels at 100% zoom). */
 namespace DeskLayout
@@ -29,7 +30,16 @@ public:
 
     void paint (juce::Graphics&) override;
     void resized() override;
-    void update();   // meters and pop flash, from the desk timer
+    /** Meters and pop flash, from the desk timer. With a source (the same strip in another bank),
+        shows the meter readings that one took instead of taking its own. */
+    void update (const StripComponent* source = nullptr);
+
+    /** A knob was double-clicked: open this channel in a big window. */
+    std::function<void()> onOpenStrip;
+
+    /** Meter readings, taken once a frame by the console's bank (update). */
+    struct Readings { float out = 0.0f, in = 0.0f, gr = 0.0f, gate = 0.0f, deEss = 0.0f; };
+    const Readings& getReadings() const noexcept { return readings; }
 
     /** true: the bridge meter shows the input (after the trim); false: the output (post-fader). */
     void setMeterInput (bool);
@@ -54,11 +64,10 @@ private:
     juce::OwnedArray<Knob> eqKnobs;            // gain, freq per band
     Knob gateThr, gateRange;
     ParamButton gateFast;
+    ParamButton eqIn, gateIn;   // EQ in (on its title line), gate in (beside Fast atk)
     GrMeter gateMeter { 60.0f };   // how far the gate has closed
-    Knob compThreshold, compMakeup, compAttack, compRelease;
-    juce::OwnedArray<RadioParamButton> ratioButtons;
-    ParamButton compAll, compIn;
-    GrMeter grMeter;
+    CompressorPanel compPanel;   // the controls of the compressor type chosen
+    ParamButton compIn;
     juce::OwnedArray<Knob> auxKnobs;
     juce::OwnedArray<ParamButton> auxPre;
     ParamButton mainButton;
@@ -68,6 +77,7 @@ private:
     juce::Label scribble;
 
     std::uint32_t lastPops = 0;
+    Readings readings;   // the last ones taken (or copied from the source)
     bool meterInput = false;
     int collapsed = 0;
     std::array<juce::TextButton, 4> foldButtons;
@@ -87,7 +97,7 @@ private:
     void moveEarlier (int stage);
     std::vector<juce::Component*> sectionComponents (int bit);
 
-    struct Section { juce::String title; juce::Rectangle<int> box; };
+    struct Section { juce::String title; juce::Rectangle<int> box; int titleIndent = 0; };
     std::vector<Section> sections;
 };
 
@@ -229,9 +239,21 @@ class StripBank : public juce::Component
 {
 public:
     StripBank (const juce::OwnedArray<ChannelStrip>&, const std::vector<Param*>& links);
+    ~StripBank() override;
+
+    /** A second bank of the same strips, for a window of its own: the same controls, starting with this
+        bank's minimised sections and meter switch, and showing the meter readings this bank takes. */
+    std::unique_ptr<StripBank> makeCopy();
+    bool hasCopies() const noexcept { return ! copies.isEmpty(); }
+
+    /** A knob on strip i (0-based) was double-clicked (on this bank or a copy). */
+    std::function<void (int strip)> onOpenStrip;
+    const StripComponent& getStrip (int i) const { return *strips[i]; }
+    /** Channel windows showing this bank's meter readings: while any is open, the bank keeps updating. */
+    int readers = 0;
 
     void resized() override;
-    void update();
+    void update();   // also updates the copies
 
     /** Minimised sections (StripComponent::Collapsible bits). The bank's height follows. */
     int getCollapsed() const noexcept { return collapsed; }
@@ -245,6 +267,14 @@ private:
     juce::TextButton meterButton { "Meters In/Out" };   // lit = input; flips the whole bank's meters between input and output
     bool meterInput = false;
     int collapsed = 0;
+    bool chainUnlocked = false;
+    void setMeterInput (bool);
+
+    const juce::OwnedArray<ChannelStrip>& channelStrips;
+    const std::vector<Param*> links;
+    juce::Component::SafePointer<StripBank> original;   // a copy: the bank it copies
+    juce::Array<StripBank*> copies;
+    void updateFrom (const StripBank& source);
 };
 
 /** The console at a fixed size, made of three sections that can each be taken out into a window of
@@ -276,8 +306,17 @@ public:
         return docked[(size_t) s] && (view == fullView || s == centreSection || (s == inputSection) == (view == recordView));
     }
 
-    /** false: the section leaves the console (the caller shows it in a window); true: it comes back. */
+    /** false: the section leaves the console (the caller shows it in a window); true: it comes back.
+        Only the centre section moves; a strip bank stays on the console and its window gets a copy. */
     void setDocked (Section, bool);
+
+    /** A copy of the input or return bank, for a window of its own (see StripBank::makeCopy). */
+    std::unique_ptr<StripBank> makeBankCopy (Section s) { return (s == inputSection ? inputs : returns).makeCopy(); }
+
+    /** The console's input or return bank (channel windows read its meters). */
+    StripBank& getBank (Section s) { return s == inputSection ? inputs : returns; }
+    /** A knob on a channel strip was double-clicked: bank (input or return section) and strip index. */
+    std::function<void (Section, int strip)> onOpenStrip;
 
     /** Minimised sections of a strip bank (input or return section). */
     int getCollapsed (Section) const;

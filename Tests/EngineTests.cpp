@@ -193,11 +193,11 @@ namespace
         check (near (b.controls.pan->get(), 0.6f), "linking mirrors the pan");
 
         b.controls.fader->set (65.0f);
-        a.comp.ratio->set (2.0f);
+        a.comp.fet.ratio->set (2.0f);
         a.controls.mute->set (1.0f);
         a.controls.sub[1]->set (1.0f);
         b.controls.auxLevel[4]->set (0.4f);
-        check (a.controls.fader->get() == 65.0f && b.comp.ratio->get() == 2.0f && b.controls.mute->on() && b.controls.sub[1]->on()
+        check (a.controls.fader->get() == 65.0f && b.comp.fet.ratio->get() == 2.0f && b.controls.mute->on() && b.controls.sub[1]->on()
                    && a.controls.auxLevel[4]->get() == 0.4f, "either strip moves both (fader, compressor, mute, assigns, sends)");
 
         b.controls.pan->set (-0.25f);
@@ -593,6 +593,94 @@ namespace
         }
     }
 
+    void testEqExtras()
+    {
+        std::puts ("Channel window EQ extras: HF and LF bells, HMF Q");
+        SineRig r;
+        auto& eq = r.e.inputStrips[0]->eq;
+        const float flat8k = r.measure (8000.0f, 0.01f) / 0.01f;   // the path itself is not quite flat up there
+        eq.gain[FourBandEq::HF]->set (12.0f);   // 8 kHz
+        const float shelf = r.measure (20000.0f, 0.01f) / 0.01f;
+        eq.bell[FourBandEq::HF]->set (1.0f);
+        const float bellTop = r.measure (20000.0f, 0.01f) / 0.01f, bellCentre = r.measure (8000.0f, 0.01f) / 0.01f / flat8k;
+        std::printf ("      HF +12 dB at 20 kHz: shelf %.1f dB, bell %.1f dB; bell at 8 kHz %.1f dB\n", toDb (shelf), toDb (bellTop), toDb (bellCentre));
+        check (nearDb (bellCentre, 12.0f, 0.3f), "HF bell gives +12 dB at its frequency");
+        check (toDb (bellTop) < toDb (shelf) - 6.0f, "HF bell comes back down above its frequency (the shelf doesn't)");
+        eq.gain[FourBandEq::HF]->set (0.0f);
+
+        eq.gain[FourBandEq::LF]->set (12.0f);   // 100 Hz
+        const float lfShelf = r.measure (25.0f, 0.01f) / 0.01f;
+        eq.bell[FourBandEq::LF]->set (1.0f);
+        const float lfBellLow = r.measure (25.0f, 0.01f) / 0.01f, lfBellCentre = r.measure (100.0f, 0.01f) / 0.01f;
+        std::printf ("      LF +12 dB at 25 Hz: shelf %.1f dB, bell %.1f dB; bell at 100 Hz %.1f dB\n", toDb (lfShelf), toDb (lfBellLow), toDb (lfBellCentre));
+        check (nearDb (lfBellCentre, 12.0f, 0.3f), "LF bell gives +12 dB at its frequency");
+        check (toDb (lfBellLow) < toDb (lfShelf) - 6.0f, "LF bell comes back down below its frequency (the shelf doesn't)");
+        eq.gain[FourBandEq::LF]->set (0.0f);
+
+        eq.gain[FourBandEq::HMF]->set (15.0f);   // 3 kHz
+        const float wide = r.measure (1500.0f, 0.01f) / 0.01f;
+        eq.q[FourBandEq::HMF]->set (4.0f);
+        const float narrow = r.measure (1500.0f, 0.01f) / 0.01f, centre = r.measure (3000.0f, 0.01f) / 0.01f;
+        std::printf ("      HMF +15 dB an octave below: Q 1 %.1f dB, Q 4 %.1f dB\n", toDb (wide), toDb (narrow));
+        check (nearDb (centre, 15.0f, 0.3f), "HMF at Q 4 still +15 dB at its centre");
+        check (toDb (narrow) < toDb (wide) - 3.0f, "higher HMF Q is narrower");
+        check (r.e.groupEq[0]->q[FourBandEq::HMF] == nullptr && r.e.groupEq[0]->bell[FourBandEq::HF] == nullptr, "group EQs have no extras");
+    }
+
+    void testEqGateInSwitches()
+    {
+        std::puts ("EQ and gate In switches");
+        SineRig r;
+        auto& s = *r.e.inputStrips[0];
+        s.eq.gain[FourBandEq::HMF]->set (12.0f);   // 3 kHz
+        check (nearDb (r.measure (3000.0f, 0.01f) / 0.01f, 12.0f, 0.3f), "EQ in: +12 dB");
+        s.controls.eqIn->set (0.0f);
+        check (nearDb (r.measure (3000.0f, 0.01f) / 0.01f, 0.0f, 0.05f), "EQ out: flat");
+        s.controls.eqIn->set (1.0f);
+        check (nearDb (r.measure (3000.0f, 0.01f) / 0.01f, 12.0f, 0.3f), "EQ back in: +12 dB again");
+        s.eq.gain[FourBandEq::HMF]->set (0.0f);
+
+        s.gate.threshold->set (-30.0f);
+        s.gate.range->set (-40.0f);
+        check (nearDb (r.measure (1000.0f, 0.001f, 400) / 0.001f, -40.0f, 1.0f), "gate in: quiet signal cut 40 dB");
+        s.controls.gateIn->set (0.0f);
+        check (nearDb (r.measure (1000.0f, 0.001f) / 0.001f, 0.0f, 0.1f), "gate out: quiet signal passes");
+    }
+
+    void testGateRelease()
+    {
+        std::puts ("Gate release knob");
+        SineRig r;
+        auto& gate = r.e.inputStrips[0]->gate;
+        gate.threshold->set (-30.0f);
+        gate.range->set (-40.0f);
+        gate.release->set (2.0f);
+        r.run (1000.0f, 0.1f, 40);   // open
+        const float slow = r.measure (1000.0f, 0.001f, 60) / 0.001f;   // 0.3 s later
+        std::printf ("      0.3 s after closing with a 2 s release: %.1f dB\n", toDb (slow));
+        check (toDb (slow) > -6.0f, "a 2 s release is still mostly open after 0.3 s");
+    }
+
+    void testGateSideChain()
+    {
+        std::puts ("Gate side chain filter");
+        SineRig r;
+        auto& gate = r.e.inputStrips[0]->gate;
+        gate.threshold->set (-30.0f);
+        gate.range->set (-40.0f);
+        check (nearDb (r.measure (100.0f, 0.1f) / 0.1f, 0.0f, 0.1f), "100 Hz at -20 dBFS opens the gate");
+        gate.scFreq->set (2000.0f);
+        gate.scIn->set (1.0f);   // HPF at 2 kHz: the detector no longer hears 100 Hz
+        const float cut = r.measure (100.0f, 0.1f, 400) / 0.1f;
+        std::printf ("      100 Hz with the side-chain HPF at 2 kHz: %.1f dB\n", toDb (cut));
+        check (nearDb (cut, -40.0f, 1.0f), "side-chain HPF closes the gate on low content");
+        check (nearDb (r.measure (3000.0f, 0.1f, 40) / 0.1f, 0.0f, 0.1f), "content above the HPF still opens it, unfiltered");
+        gate.scType->set (1.0f);   // LPF at 500 Hz: the detector no longer hears 5 kHz
+        gate.scFreq->set (500.0f);
+        const float lpCut = r.measure (5000.0f, 0.1f, 400) / 0.1f;
+        check (nearDb (lpCut, -40.0f, 1.0f), "side-chain LPF at 500 Hz closes the gate on 5 kHz");
+    }
+
     void testGate()
     {
         std::puts ("Gate: threshold, range, fast attack pop");
@@ -717,41 +805,91 @@ namespace
         check (! d.isActive(), "bypass takes it out");
     }
 
+    /** A -20 dBFS 1 kHz sine through strip 1: settles, then the steady gain reduction (dB) and output level. */
+    static std::pair<float, float> steadyCompression (SineRig& r)
+    {
+        auto& comp = r.e.inputStrips[0]->comp;
+        r.run (1000.0f, 0.1f, 100);
+        comp.takeGainReduction();   // forget the way there
+        const float out = r.measure (1000.0f, 0.1f, 20);
+        return { comp.takeGainReduction(), out };
+    }
+
     void testFetCompressor()
     {
-        std::puts ("1176-style compressor");
+        std::puts ("76: 1176-style compressor (Input / Output)");
         SineRig r;
         auto& comp = r.e.inputStrips[0]->comp;
-        comp.threshold->set (-44.0f);
+        check (comp.getType() == ChannelCompressor::vca60, "a new strip's compressor is the 60");
+        comp.type->set ((float) ChannelCompressor::fet76);
+        comp.fet.input->set (8.0f);
         check (nearDb (r.measure (1000.0f, 0.1f) / 0.1f, 0.0f, 0.01f), "compressor out (default) is bypassed");
 
         comp.in->set (1.0f);
-        // -20 dBFS is 24 dB over the -44 threshold, ratio 4 -> 18 dB reduction -> about -38 dBFS; +24 make-up -> -14.
-        const float out = r.measure (1000.0f, 0.1f);
-        const float gr = comp.takeGainReduction();
-        std::printf ("      ratio 4: output %.1f dBFS, gain reduction %.1f dB\n", toDb (out), gr);
-        check (std::abs (toDb (out) - (-38.0f)) < 1.5f, "ratio 4 output level");
-        check (std::abs (gr - 18.0f) < 1.5f, "ratio 4 gain reduction");
-        comp.makeup->set (24.0f);
-        const float madeUp = r.measure (1000.0f, 0.1f);
-        std::printf ("      +24 dB make-up: %.1f dBFS\n", toDb (madeUp));
-        check (std::abs (toDb (madeUp) - (-14.0f)) < 1.5f, "make-up gain brings it back up");
-        comp.makeup->set (0.0f);
+        // Input 8 = +24 dB: -20 dBFS becomes +4, 18 dB over the fixed -14 threshold; ratio 4 -> 13.5 dB reduction,
+        // so the output is -20 + 24 - 13.5 = about -9.5 dBFS (a little less after the saturation).
+        const auto [gr, out] = steadyCompression (r);
+        std::printf ("      Input 8, ratio 4: output %.1f dBFS, gain reduction %.1f dB\n", toDb (out), gr);
+        check (std::abs (gr - 13.5f) < 1.5f, "Input 8 at ratio 4: about 13.5 dB reduction");
+        check (std::abs (toDb (out) - (-9.5f)) < 1.5f, "Input drives the level up as well as into compression");
 
-        comp.ratio->set (3.0f);   // 20:1
-        r.measure (1000.0f, 0.1f);
-        const float gr20 = comp.takeGainReduction();
-        comp.all->set (1.0f);
-        r.measure (1000.0f, 0.1f);
-        const float grAll = comp.takeGainReduction();
+        comp.fet.ratio->set (3.0f);   // 20:1
+        const float gr20 = steadyCompression (r).first;
+        comp.fet.all->set (1.0f);
+        const float grAll = steadyCompression (r).first;
         std::printf ("      ratio 20: %.1f dB, all buttons: %.1f dB\n", gr20, grAll);
         check (gr20 > gr + 3.0f && grAll > gr20, "higher ratios compress harder; all buttons hardest");
+        comp.fet.all->set (0.0f);
 
-        comp.makeup->set (6.0f);
-        const float louder = r.measure (1000.0f, 0.1f);
-        comp.makeup->set (0.0f);
         const float base = r.measure (1000.0f, 0.1f);
-        check (nearDb (louder / base, 6.0f, 0.2f), "make-up knob +6 dB");
+        comp.fet.output->set (6.0f);
+        const float louder = r.measure (1000.0f, 0.1f);
+        check (nearDb (louder / base, 6.0f, 0.2f), "Output knob +6 dB");
+    }
+
+    void testOtherCompressors()
+    {
+        std::puts ("60, LA and G compressors");
+        SineRig r;
+        auto& comp = r.e.inputStrips[0]->comp;
+        comp.in->set (1.0f);
+
+        // 60: threshold -40, ratio 4: -20 dBFS is 20 dB over -> 15 dB reduction, about -35 dBFS out.
+        comp.vca.threshold->set (-40.0f);
+        auto [gr60, out60] = steadyCompression (r);
+        std::printf ("      60 at 4:1: %.1f dB reduction, %.1f dBFS out\n", gr60, toDb (out60));
+        check (std::abs (gr60 - 15.0f) < 1.5f && std::abs (toDb (out60) - (-35.0f)) < 1.5f, "60: 4:1 above the threshold");
+        comp.vca.ratio->set (60.0f);
+        const float grInf = steadyCompression (r).first;
+        check (std::abs (grInf - 20.0f) < 1.5f, "60: ratio at the top is infinity:1 (nothing gets over the threshold)");
+        comp.vca.ratio->set (4.0f);
+        comp.vca.threshold->set (-20.0f);   // the sine sits right on the threshold
+        const float hard = steadyCompression (r).first;
+        comp.vca.overEasy->set (1.0f);
+        const float soft = steadyCompression (r).first;
+        std::printf ("      60 at the threshold: hard knee %.2f dB, OverEasy %.2f dB\n", hard, soft);
+        check (hard < 0.3f && soft > 0.6f, "60: OverEasy starts compressing below the threshold");
+
+        // LA: Peak Reduction 100 = -42 dBFS threshold; Comp about 3:1 -> about 14.7 dB at -20 dBFS, Limit harder.
+        comp.type->set ((float) ChannelCompressor::optoLA);
+        comp.opto.peakReduction->set (100.0f);
+        const float grComp = steadyCompression (r).first;
+        comp.opto.limit->set (1.0f);
+        const float grLimit = steadyCompression (r).first;
+        std::printf ("      LA: Comp %.1f dB, Limit %.1f dB\n", grComp, grLimit);
+        check (std::abs (grComp - 14.7f) < 2.0f, "LA Comp: about 3:1");
+        check (grLimit > grComp + 3.0f, "LA Limit compresses harder");
+        comp.opto.peakReduction->set (0.0f);
+        r.run (1000.0f, 0.1f, 1500);   // the opto's slow release takes seconds to let go completely
+        check (steadyCompression (r).first < 0.1f, "LA: Peak Reduction at 0 does nothing (once it has let go)");
+
+        // G: threshold -30, ratio 4: 10 dB over -> 7.5 dB reduction; auto make-up +11.25 dB -> about -16.3 dBFS.
+        comp.type->set ((float) ChannelCompressor::sslG);
+        comp.ssl.threshold->set (-30.0f);
+        const auto [grG, outG] = steadyCompression (r);
+        std::printf ("      G: %.1f dB reduction, %.1f dBFS out\n", grG, toDb (outG));
+        check (std::abs (grG - 7.5f) < 1.5f, "G: 4:1 above the threshold");
+        check (std::abs (toDb (outG) - (-16.25f)) < 1.5f, "G: automatic make-up gain");
     }
 
     void testSends()
@@ -1819,19 +1957,27 @@ namespace
 
     void testOldCompressorSession()
     {
-        std::puts ("Sessions: old compressor Input/Output knobs");
+        std::puts ("Sessions: older compressor settings");
         const auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("Oxide3216TestOldComp");
         folder.deleteRecursively();
         folder.createDirectory();
+        // ch1: before 0.1.0 (Input / Output); ch2: 0.1.0 (Threshold / Make-up); ch3: with a compressor type.
         folder.getChildFile (Session::fileName).replaceWithText (
-            R"({ "format": "Oxide-3216 session", "controls": { "ch1.comp.input": 4.0, "ch1.comp.output": -2.0, "ch2.comp.thr": -30.0 } })");
+            R"({ "format": "Oxide-3216 session", "controls": { "ch1.comp.input": 4.0, "ch1.comp.output": -2.0,)"
+            R"( "ch2.comp.thr": -30.0, "ch2.comp.makeup": 10.0, "ch3.comp.type": 3.0 } })");
 
         TestEngine e;
         e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }));
         check (Session::load (e, nullptr, folder).ok, "old session loaded");
         const auto& c1 = e.inputStrips[0]->comp;
-        check (c1.threshold->get() == -26.0f && c1.makeup->get() == 10.0f, "Input 4 / Output -2 -> threshold -26 dBFS, make-up +10 dB");
-        check (e.inputStrips[1]->comp.threshold->get() == -30.0f, "a new session's threshold is left alone");
+        const auto& c2 = e.inputStrips[1]->comp;
+        check (c1.getType() == ChannelCompressor::fet76 && c2.getType() == ChannelCompressor::fet76,
+               "sessions from before the compressor types keep the 76");
+        check (c1.fet.input->get() == 4.0f && c1.fet.output->get() == -2.0f, "Input 4 / Output -2 load as they were");
+        std::printf ("      threshold -30, make-up +10 -> Input %.2f, Output %.2f\n", c2.fet.input->get(), c2.fet.output->get());
+        check (near (c2.fet.input->get(), 16.0f / 3.0f, 1.0e-4f) && near (c2.fet.output->get(), -6.0f, 1.0e-4f),
+               "0.1.0 threshold -30 / make-up +10 -> Input 5.33 (16 dB) / Output -6 (the same sound)");
+        check (e.inputStrips[2]->comp.getType() == ChannelCompressor::sslG, "a session's compressor type is kept");
         folder.deleteRecursively();
     }
 
@@ -2059,7 +2205,8 @@ namespace
             s.controls.hpf->set (80.0f);
             s.gate.threshold->set (-50.0f);
             s.comp.in->set (1.0f);
-            s.comp.threshold->set (-29.0f);   // as hard as the old Input 5
+            s.comp.type->set ((float) ChannelCompressor::fet76);
+            s.comp.fet.input->set (5.0f);
             for (int k = 0; k < Config::numAux; ++k)
                 s.controls.auxLevel[k]->set (0.5f);
             s.controls.sub[0]->set (1.0f);
@@ -2230,8 +2377,13 @@ int main (int argc, char** argv)
     testUnarmedPlaybackAndArmedMonitoring();
     testEq();
     testGate();
+    testEqExtras();
+    testGateRelease();
+    testGateSideChain();
+    testEqGateInSwitches();
     testDeEsser();
     testFetCompressor();
+    testOtherCompressors();
     testSends();
     testTapeCharacter();
     testTapeOutMeters();

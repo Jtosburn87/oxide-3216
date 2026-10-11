@@ -206,22 +206,28 @@ Session::Result Session::load (AudioEngine& e, PluginManager* plugins, const juc
     reset (e);
     e.projectName = json["projectName"].toString();
 
+    // The console colour switch left the Options menu in 0.1.1: sessions saved with it off load with it on.
     if (auto* controls = json["controls"].getDynamicObject())
         for (auto& prop : controls->getProperties())
-            if (auto* p = e.params.find (prop.name.toString()))
+            if (auto* p = e.params.find (prop.name.toString()); p != nullptr && p != e.preampColour)
                 p->set ((float) (double) prop.value);
 
-    // Sessions from before 0.1.0: the compressor had Input (0..10, 3 dB a step into a fixed -14 dBFS threshold)
-    // and Output (dB) knobs. The same threshold and overall gain as Threshold and Make-up.
+    // Sessions from before the compressor types (0.1.1) were made with the 76: they keep it.
+    // 0.1.0 sessions gave the 76 Threshold and Make-up knobs instead of Input (0..10, 3 dB a step into a
+    // fixed -14 dBFS threshold) and Output: back to the same threshold and overall gain. (Older sessions
+    // have Input and Output already.)
     if (auto* controls = json["controls"].getDynamicObject())
         forEachStrip (e, [&] (ChannelStrip& s)
         {
-            const auto input = s.idPrefix + ".comp.input", output = s.idPrefix + ".comp.output";
-            if (! controls->hasProperty (input) || controls->hasProperty (s.comp.threshold->id))
+            if (! controls->hasProperty (s.comp.type->id))
+                s.comp.type->set ((float) ChannelCompressor::fet76);
+
+            const auto thr = s.idPrefix + ".comp.thr", makeup = s.idPrefix + ".comp.makeup";
+            if (! controls->hasProperty (thr) || controls->hasProperty (s.comp.fet.input->id))
                 return;
-            const float drive = 3.0f * (float) (double) controls->getProperty (input);
-            s.comp.threshold->set (-14.0f - drive);
-            s.comp.makeup->set (drive + (float) (double) controls->getProperty (output));
+            const float drive = juce::jlimit (0.0f, 30.0f, -14.0f - (float) (double) controls->getProperty (thr));
+            s.comp.fet.input->set (drive / 3.0f);
+            s.comp.fet.output->set ((float) (double) controls->getProperty (makeup) - drive);
         });
 
     if (auto* names = json["stripNames"].getDynamicObject())

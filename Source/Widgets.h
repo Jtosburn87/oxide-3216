@@ -14,10 +14,18 @@ public:
 
     Param& param;
 
+    /** Set: a double-click calls this instead of resetting to the default (Ctrl+click still resets). */
+    std::function<void()> onDoubleClick;
+
     bool keyPressed (const juce::KeyPress&) override;
+    void mouseDoubleClick (const juce::MouseEvent&) override;
+
+    /** Reversed: the control's value goes down as the knob turns right (e.g. Q, so right = wider). */
+    void setReversed (bool);
 
 private:
     void paramChanged (Param&) override;
+    void setRange (bool reversed);
     void valueChanged() override;
     void stepBy (double normalisedDelta);
 };
@@ -35,7 +43,11 @@ public:
     void setEndLabels (juce::String left, juce::String right) { endLeft = std::move (left); endRight = std::move (right); repaint(); }
     void setLegend (juce::String text) { legend = std::move (text); updateLegend(); }
     /** The value a double-click returns the knob to (normally the control's default). */
-    void setResetValue (float v) { slider.setDoubleClickReturnValue (true, v); }
+    void setResetValue (float v) { slider.setDoubleClickReturnValue (true, v, juce::ModifierKeys::ctrlModifier); }
+    /** Set: a double-click calls this instead of resetting (Ctrl+click still resets). */
+    void setOnDoubleClick (std::function<void()> f) { slider.onDoubleClick = std::move (f); }
+    /** The value goes down as the knob turns right (end labels are still left, right). */
+    void setReversed (bool r) { slider.setReversed (r); }
 
     void paint (juce::Graphics&) override;
     void resized() override;

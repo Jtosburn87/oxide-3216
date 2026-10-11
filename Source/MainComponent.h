@@ -13,6 +13,7 @@
 #include "SessionController.h"
 #include "ImportAudioDialog.h"
 #include "SectionWindow.h"
+#include "ChannelStripWindow.h"
 
 /** Top bar (name plate, zoom, status) above the zoomable desk. The app buttons live on the desk. */
 class MainComponent : public juce::Component,
@@ -55,7 +56,7 @@ private:
     PluginWindows pluginWindows;
     PluginContext pluginContext;
 
-    juce::TextButton audioButton { "Audio device" }, patchButton { "Patch bay" }, pluginsButton { "Plugins" }, rackButton { "Rack" }, sessionButton { "Session" }, sectionsButton { "Options" };
+    juce::TextButton audioButton { "Audio device" }, patchButton { "Patch bay" }, rackButton { "Rack" }, sessionButton { "Session" }, sectionsButton { "Options" };
     ViewSwitch viewSwitch;   // Record | Mix | Full
     void showView (int view);   // switches the desk, lights its button and remembers it
     juce::TextButton tapeMachineButton { "Tape Machine" };
@@ -74,6 +75,10 @@ private:
 
     // Sections of the console that are out in windows of their own.
     std::array<std::unique_ptr<SectionWindow>, Desk::numSections> sectionWindows;
+
+    // Channel windows (double-click a knob on a strip), keyed by bank * 100 + strip index.
+    std::map<int, std::unique_ptr<ChannelStripWindow>> stripWindows;
+    void openStripWindow (Desk::Section bank, int strip);
     void showSectionsMenu();
     void takeOut (Desk::Section);
     void putBack (Desk::Section);
@@ -95,7 +100,11 @@ private:
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
     void openAudioSettings();
     void refreshDeviceText();
+    /** The desk's scale across and down: the same from the Zoom slider, stretched apart by fitToWindow. */
+    double scaleX = 1.0, scaleY = 1.0;
     void applyZoom();
-    /** Zoom so the whole console fits the window (window resized, view changed, section docked or undocked). */
+    /** Both strip banks are off the console (in windows, or out of the current view). */
+    bool centreSectionAlone() const;
+    /** Stretch the console to fill the window (window resized, view changed, section docked or undocked). */
     void fitToWindow();
 };
