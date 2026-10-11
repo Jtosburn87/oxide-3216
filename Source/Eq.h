@@ -6,7 +6,8 @@
 /** The console's 4-band sweepable EQ, used on every channel strip and as the group EQ on each sub.
     HF and LF are shelves, HMF and LMF are bells (Q 1). Gain +/-15 dB. A band at 0 dB is bypassed.
     Channel strips also get extras (shown in the channel window): HF and LF can be bells (Q 1), and HMF
-    and LMF have a Q knob. The defaults sound as before. */
+    and LMF have a Q knob. The defaults sound as before. The group EQs have fixed bands: gain knobs only,
+    each band at its default frequency. */
 class FourBandEq
 {
 public:
@@ -28,8 +29,9 @@ public:
     };
 
     /** Creates prefix.eq.hf.gain, prefix.eq.hf.freq, ...; with extras also prefix.eq.hf.bell,
-        prefix.eq.lf.bell, prefix.eq.hmf.q and prefix.eq.lmf.q. */
-    FourBandEq (ParamSet& params, const juce::String& prefix, int numChannels, bool extras = false)
+        prefix.eq.lf.bell, prefix.eq.hmf.q and prefix.eq.lmf.q. With fixedBands there are no .freq
+        controls (freq[] stays null). */
+    FourBandEq (ParamSet& params, const juce::String& prefix, int numChannels, bool extras = false, bool fixedBands = false)
         : channels (juce::jlimit (1, maxChannels, numChannels))
     {
         for (int b = 0; b < numBands; ++b)
@@ -37,7 +39,8 @@ public:
             const auto& s = bands[b];
             const auto id = prefix + ".eq." + s.id;
             gain[b] = &params.add (id + ".gain", juce::String (s.label) + " gain", -15.0f, 15.0f, 0.0f);
-            freq[b] = &params.add (id + ".freq", juce::String (s.label) + " frequency", s.minHz, s.maxHz, s.defHz, Param::Scale::log);
+            if (! fixedBands)
+                freq[b] = &params.add (id + ".freq", juce::String (s.label) + " frequency", s.minHz, s.maxHz, s.defHz, Param::Scale::log);
         }
         if (extras)
         {
@@ -49,7 +52,7 @@ public:
     }
 
     Param* gain[numBands] {};
-    Param* freq[numBands] {};
+    Param* freq[numBands] {};     // null with fixed bands
     Param* bell[numBands] {};     // extras, HF and LF only: a bell instead of a shelf
     Param* q[numBands] {};        // extras, HMF and LMF only
 
@@ -70,7 +73,7 @@ public:
     {
         for (int b = 0; b < numBands; ++b)
         {
-            const float g = gain[b]->get(), f = freq[b]->get();
+            const float g = gain[b]->get(), f = freq[b] != nullptr ? freq[b]->get() : bands[b].defHz;
             // Shape: the HF/LF bell switch (1 = bell), or the band's Q.
             const bool shelfBand = b == HF || b == LF;
             const float shape = shelfBand ? (bell[b] != nullptr && bell[b]->on() ? 1.0f : 0.0f)

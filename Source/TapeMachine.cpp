@@ -52,6 +52,7 @@ TapeMachine::TapeMachine (ParamSet& params)
     inScratch.assign ((size_t) Config::maxBlock + 4, 0.0f);
     recScratch.assign ((size_t) maxFetch, 0.0f);
     fadeScratch.assign ((size_t) maxFetch, 0.0f);
+    memories.fill (-1);
 
     startTimerHz (10);
 }
@@ -106,6 +107,9 @@ bool TapeMachine::isRecording (int track) const noexcept
 //==============================================================================
 void TapeMachine::play()
 {
+    shuttleOn.store (false);
+    jogOn.store (false);
+    windTarget.store (-1);
     windRequest.store (0);
     windReset.store (true);
     playing.store (true);
@@ -114,11 +118,58 @@ void TapeMachine::play()
 void TapeMachine::stop()
 {
     playing.store (false);
+    shuttleOn.store (false);
+    jogOn.store (false);
+    windTarget.store (-1);
     windRequest.store (0);   // a wind brakes to a stop
 }
 
-void TapeMachine::rewind()      { playing.store (false); windRequest.store (-1); }
-void TapeMachine::fastForward() { playing.store (false); windRequest.store (1); }
+void TapeMachine::rewind()      { playing.store (false); shuttleOn.store (false); jogOn.store (false); windTarget.store (-1); windRequest.store (-1); }
+void TapeMachine::fastForward() { playing.store (false); shuttleOn.store (false); jogOn.store (false); windTarget.store (-1); windRequest.store (1); }
+
+void TapeMachine::setShuttle (float s)
+{
+    s = juce::jlimit (-shuttleMaxSpeed, shuttleMaxSpeed, s);
+    if (s == 0.0f && ! shuttleOn.load())
+        return;
+    playing.store (false);
+    jogOn.store (false);
+    windTarget.store (-1);
+    windRequest.store (0);
+    shuttleTarget.store (s);
+    shuttleOn.store (true);   // stays on at 0 (holding the tape still) until Play, Stop, a wind, a jog or a locate
+}
+
+void TapeMachine::jog (double samples)
+{
+    // A jog starts from wherever the tape is; further turns add to where it is heading.
+    const double capacity = (double) ((juce::int64) maxChunks * chunkSize - 1);
+    const double from = jogOn.load() ? jogTarget.load() : (double) position.load();
+    playing.store (false);
+    shuttleOn.store (false);
+    windTarget.store (-1);
+    windRequest.store (0);
+    jogTarget.store (juce::jlimit (0.0, capacity, from + samples));
+    if (! jogOn.exchange (true))
+        windReset.store (true);   // a running wind stops; the jog takes the tape from here
+}
+
+void TapeMachine::windTo (juce::int64 target)
+{
+    target = juce::jlimit ((juce::int64) 0, (juce::int64) maxChunks * chunkSize - 1, target);
+    playing.store (false);
+    shuttleOn.store (false);
+    jogOn.store (false);
+    const auto from = position.load();
+    if (target == from && ! isWinding())
+        return;
+    for (int t = 0; t < numTracks; ++t)   // armed tracks can record from there
+        if (arm[(size_t) t]->on())
+            ensureChunks (t, target - (juce::int64) ((recordDelay() + 8) * maxRate) - chunkSize,
+                          target + (juce::int64) (allocateAheadSeconds * sampleRate * juce::jmax (1.0, getPlaybackRate())));
+    windTarget.store (target);
+    windRequest.store (target < from ? -1 : 1);
+}
 void TapeMachine::setRecordEnabled (bool on) { recordEnabled.store (on); }
 
 void TapeMachine::locate (juce::int64 p)
@@ -128,6 +179,9 @@ void TapeMachine::locate (juce::int64 p)
         if (arm[(size_t) t]->on())
             ensureChunks (t, p - (juce::int64) ((recordDelay() + 8) * maxRate) - chunkSize,   // vari-speed records up to maxRate x the delay back
                           p + (juce::int64) (allocateAheadSeconds * sampleRate * juce::jmax (1.0, getPlaybackRate())));
+    shuttleOn.store (false);
+    jogOn.store (false);
+    windTarget.store (-1);
     windRequest.store (0);
     windReset.store (true);
     position.store (p);
@@ -392,6 +446,7 @@ void TapeMachine::process (const float* const* tapeIn, float* const* tapeOut, in
     {
         pos = req;
         vsPrimed = false;
+        moving = false;
     }
     if (windReset.exchange (false))
     {
@@ -497,14 +552,22 @@ void TapeMachine::process (const float* const* tapeIn, float* const* tapeOut, in
 
     if (isPlay)
     {
+        moving = false;
         const bool endOfTape = pos >= (juce::int64) maxChunks * chunkSize - Config::maxBlock;
         const bool looping = loop && pos < loopOut;
         if (endOfTape || (! rec && ! looping && pos >= length.load()))
             playing.store (false);
+        scrubGain = 0.0f;
     }
     else
     {
+        // Shuttle and jog can be heard (Scrub); Rew and F Fwd stay silent, with the tape off the heads.
+        const double from = moving ? windPos : (double) pos;
+        const bool manual = shuttleOn.load() || jogOn.load();
         wind (n);
+        const double to = moving ? windPos : (double) pos;
+        if (! exporting.load (std::memory_order_relaxed))
+            scrub (tapeOut, n, from, to, manual && scrubOn.load());
     }
 
     // Tape out meters (the meter bridge).
@@ -522,23 +585,65 @@ void TapeMachine::process (const float* const* tapeIn, float* const* tapeOut, in
 
 void TapeMachine::wind (int n) noexcept
 {
+    const bool shuttle = shuttleOn.load(), jogging = jogOn.load();
     const int dir = windRequest.load();
-    if (dir == 0 && windVel == 0.0)
+    if (! shuttle && ! jogging && dir == 0 && windVel == 0.0)
+    {
+        moving = false;
+        windSpeed.store (0.0f);
         return;
-    if (windVel == 0.0)
+    }
+    if (! moving)
         windPos = (double) pos;
+    moving = true;
+    const double dt = n / sampleRate;
+    const double lastSample = (double) ((juce::int64) maxChunks * chunkSize - 1);
+
+    if (shuttle)
+    {
+        // The shuttle ring: get to its speed quickly (full speed in half a second), stop at either end.
+        const double target = shuttleTarget.load(), accel = shuttleMaxSpeed / 0.5;
+        windVel = target > windVel ? juce::jmin (target, windVel + accel * dt) : juce::jmax (target, windVel - accel * dt);
+        const double end = juce::jmax ((double) length.load(), juce::jlimit (0.0, lastSample, windPos));
+        windPos = juce::jlimit (0.0, end, windPos + windVel * n);
+        if ((windPos <= 0.0 && windVel < 0.0) || (windPos >= end && windVel > 0.0))
+            windVel = 0.0;
+        pos = (juce::int64) windPos;
+        windSpeed.store ((float) windVel);
+        return;
+    }
+
+    if (jogging)
+    {
+        // The jog wheel: the tape follows its target smoothly (about 40 ms behind), at most 16x play speed.
+        const double target = jogTarget.load(), maxStep = 16.0 * n;
+        const double step = juce::jlimit (-maxStep, maxStep, (target - windPos) * (1.0 - std::exp (-dt / 0.04)));
+        windPos = std::abs (target - windPos) < 0.5 ? target : windPos + step;
+        windVel = 0.0;
+        pos = (juce::int64) windPos;
+        windSpeed.store ((float) (step / n));
+        return;
+    }
 
     // Speed up towards full winding speed, or brake (Stop, or a change of direction).
-    const double dt = n / sampleRate;
     const double accel = windMaxSpeed / windRampSeconds, brake = windMaxSpeed / windBrakeSeconds;
     if (dir != 0 && (windVel == 0.0 || (windVel > 0.0) == (dir > 0)))
         windVel = juce::jlimit (-windMaxSpeed, windMaxSpeed, windVel + dir * accel * dt);
     else
         windVel = windVel > 0.0 ? juce::jmax (0.0, windVel - brake * dt) : juce::jmin (0.0, windVel + brake * dt);
 
-    // Rewind ends at the start, fast forward at the end of the recording. Never faster than the speed that
-    // can still brake in time, so the tape arrives there gently.
-    const double end = windVel < 0.0 ? 0.0 : (double) length.load();
+    // Rewind ends at the start, fast forward at the end of the recording, an autolocate (windTo) at its target.
+    // Never faster than the speed that can still brake in time, so the tape arrives there gently.
+    const auto target = windTarget.load();
+    if (target >= 0 && dir != 0 && windVel != 0.0 && (windVel > 0.0) != (dir > 0))
+    {
+        // An autolocate the other way: brake first (above), then head for the target.
+        windPos = juce::jmax (0.0, windPos + windVel * n);
+        pos = (juce::int64) windPos;
+        windSpeed.store ((float) windVel);
+        return;
+    }
+    const double end = target >= 0 && dir != 0 ? (double) target : windVel < 0.0 ? 0.0 : (double) length.load();
     const double before = windPos;
     const bool alreadyThere = windVel < 0.0 ? before <= end : before >= end;
     if (! alreadyThere)
@@ -555,11 +660,58 @@ void TapeMachine::wind (int n) noexcept
             windPos = end;
         windVel = 0.0;
         auto expected = dir;
-        windRequest.compare_exchange_strong (expected, 0);   // unless a new request came in meanwhile
+        if (windRequest.compare_exchange_strong (expected, 0))   // unless a new request came in meanwhile
+        {
+            auto expectedTarget = target;
+            windTarget.compare_exchange_strong (expectedTarget, -1);
+        }
     }
 
     pos = (juce::int64) windPos;
     windSpeed.store ((float) windVel);
+}
+
+float TapeMachine::sampleAt (int track, juce::int64 p) const noexcept
+{
+    const auto idx = p >> chunkBits;
+    if (p < 0 || idx >= (juce::int64) maxChunks)
+        return 0.0f;
+    const float* c = chunks[(size_t) track][(size_t) idx].load (std::memory_order_acquire);
+    return c != nullptr ? c[p & (chunkSize - 1)] : 0.0f;
+}
+
+void TapeMachine::scrub (float* const* tapeOut, int n, double from, double to, bool audible) noexcept
+{
+    // The tape moves from `from` to `to` over this block: play what passes the heads (unarmed tracks; armed
+    // ones keep monitoring their input). The level fades in and out over 5 ms so starting and stopping never
+    // click, and two one-pole low-passes take the edge off when it runs faster than play speed.
+    if (! audible && scrubGain == 0.0f)
+        return;
+    const double step = (to - from) / n;
+    const double rate = std::abs (step);
+    const float a = rate > 1.0 ? (float) std::exp (-juce::MathConstants<double>::twoPi * 0.45 / rate) : 0.0f;
+    const float fade = (float) (1.0 / (0.005 * sampleRate));
+
+    for (int t = 0; t < numTracks; ++t)
+    {
+        if (arm[(size_t) t]->on())
+            continue;
+        auto& lp = scrubLowPass[(size_t) t];
+        float g = scrubGain;
+        for (int i = 0; i < n; ++i)
+        {
+            const double p = from + step * (i + 1);
+            const auto i0 = (juce::int64) std::floor (p);
+            const float frac = (float) (p - (double) i0);
+            const float x0 = sampleAt (t, i0);
+            const float x = x0 + frac * (sampleAt (t, i0 + 1) - x0);
+            lp[0] += (1.0f - a) * (x - lp[0]);
+            lp[1] += (1.0f - a) * (lp[0] - lp[1]);
+            g = audible ? juce::jmin (1.0f, g + fade) : juce::jmax (0.0f, g - fade);
+            tapeOut[t][i] += g * lp[1];
+        }
+    }
+    scrubGain = audible ? juce::jmin (1.0f, scrubGain + fade * (float) n) : juce::jmax (0.0f, scrubGain - fade * (float) n);
 }
 
 void TapeMachine::processSegment (float* const* tapeOut, int offset, int count,

@@ -65,6 +65,14 @@ Knobs and faders: drag up/down, mouse wheel, Ctrl+click for the default (double-
 channel strip knobs, where it opens the channel window); with the keyboard, arrows step, Page Up/Down
 step more, Home or Delete resets.
 
+Group EQ: four fixed bands over each sub fader (gain only): HF shelf 8 kHz, HMF 3 kHz, LMF 500 Hz,
+LF shelf 100 Hz.
+
+Talkback (Monitor / TB box): the XLR socket is the talkback mic in. Right-click it to choose the
+interface input your mic is on; that patches it into TB In on the patch bay. Hold Talk to talk,
+double-click it to latch. Setup chooses which auxes (1-8) it goes to and sets the TB limiter. The
+monitors dim while you talk.
+
 Signal flow: input strip -> tape in (normalled) -> tape out -> return strip (normalled).
 Both banks go to main and/or the subs. Subs -> group EQ -> inserts -> sub fader -> main.
 Main: bus compressor -> master inserts -> main fader -> limiter at -3 dBFS -> outputs.
@@ -89,9 +97,22 @@ Locate: "Set In" / "Set Out" mark a region at the current position.
 
 Click the cassette label to rename the project; it is the default session and export name.
 
+Jog / shuttle (right of the group EQ):
+  Shuttle ring - turn it to wind either way, faster the further it turns (1/2x to 32x); let go
+                 and it springs back and stops. Double-click it to stop.
+  Jog wheel    - one turn moves the tape one second; the mouse wheel over it jogs too.
+  Jog / Scrub  - Jog moves the tape silently; Scrub lets you hear it (unarmed tracks) while the
+                 wheel or ring moves it, to find a spot by ear.
+  In / Out     - Set In, Set Out, Loop, Punch (the same switches as under the tape machine);
+                 Go In / Go Out jump there.
+  Locate       - Store, then 1-6, keeps the tape position (saved with the session); 1-6 then wind
+                 the tape there. RTZ winds back to zero.
+
 Keyboard: Space play/stop, Home rewind, End fast forward, Ctrl+N new, Ctrl+O open, Ctrl+S save,
-Ctrl+Shift+S save as, Ctrl+E export. Options > "Keyboard shortcuts" changes any of these and adds
-keys for Play, Stop, Record and Return to zero.
+Ctrl+Shift+S save as, Ctrl+E export. Jog / shuttle: J Jog/Scrub, M Store, 1-6 memories, 0 RTZ,
+I / O Set In / Out, Shift+I / Shift+O Go In / Out, L Loop, P Punch, , and . jog a notch back /
+forward, [ and ] step the shuttle ring back / forward (it stays there until Stop).
+Options > "Keyboard shortcuts" changes any of these and adds keys for Play, Stop and Record.
 
 
 PATCH BAY
@@ -109,10 +130,11 @@ channel 1 from input 1, channel 2 from input 2, and so on. "Pull all cables" lea
 
 PLUGINS (VST3)
 --------------
-The FX buttons in the centre open the insert slots: 4 on each sub, each aux return and the
-master. The list button beside a slot chooses a plugin; click its name to open its window.
-Byp = bypass, arrows = order. "Rack" shows every slot at once.
-Aux returns: put an effect on an aux's FX (e.g. a reverb at 100% wet) and set its Return level.
+The inserts row in the centre shows the 4 insert slots of each sub, aux return and the master,
+over their faders (slot 1 at the top; amber = running, dim = bypassed). Click a slot to open its
+plugin (an empty one: the plugin menu); the list button left of it opens the plugin menu;
+right-click a plugin for Bypass, Replace and Remove. "Rack" shows every slot at once.
+Aux returns: put an effect in an aux's slots (e.g. a reverb at 100% wet) and set its Return level.
 A return is heard only when its chain has an active plugin. Plugin delay is compensated
 automatically across the whole console.
 

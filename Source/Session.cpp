@@ -145,6 +145,10 @@ Session::Result Session::write (AudioEngine& e, const juce::File& folder, TrackR
     t->setProperty ("loop", tape.loopOn.load());
     t->setProperty ("punch", tape.punchOn.load());
     t->setProperty ("recordedIps", tape.getRecordedIps());
+    juce::Array<juce::var> memories;
+    for (int m = 0; m < TapeMachine::numMemories; ++m)
+        memories.add (tape.getMemory (m));
+    t->setProperty ("memories", memories);
 
     juce::Array<juce::var> files;
     for (int track = 0; track < Config::numTracks; ++track)
@@ -208,6 +212,8 @@ void Session::reset (AudioEngine& e)
     e.tape.setOutPoint (0);
     e.tape.loopOn = false;
     e.tape.punchOn = false;
+    for (int m = 0; m < TapeMachine::numMemories; ++m)
+        e.tape.setMemory (m, -1);
     e.projectName = "Untitled song";
 }
 
@@ -226,10 +232,11 @@ Session::Result Session::load (AudioEngine& e, PluginManager* plugins, const juc
     reset (e);
     e.projectName = json["projectName"].toString();
 
-    // The console colour switch left the Options menu in 0.1.1: sessions saved with it off load with it on.
+    // The console colour switch left the Options menu in 0.1.1, and the talkback dim switch left Talkback
+    // Settings after 0.1.3: sessions saved with either off load with it on.
     if (auto* controls = json["controls"].getDynamicObject())
         for (auto& prop : controls->getProperties())
-            if (auto* p = e.params.find (prop.name.toString()); p != nullptr && p != e.preampColour)
+            if (auto* p = e.params.find (prop.name.toString()); p != nullptr && p != e.preampColour && p != e.tbDim)
                 p->set ((float) (double) prop.value);
 
     // Sessions from before the compressor types (0.1.1) were made with the 76: they keep it.
@@ -356,6 +363,9 @@ Session::Result Session::load (AudioEngine& e, PluginManager* plugins, const juc
     e.tape.setOutPoint ((juce::int64) tapeInfo["out"]);
     e.tape.loopOn = (bool) tapeInfo["loop"];
     e.tape.punchOn = (bool) tapeInfo["punch"];
+    if (auto* memories = tapeInfo["memories"].getArray())   // locate memories (sessions from 0.1.4 on)
+        for (int m = 0; m < juce::jmin (memories->size(), TapeMachine::numMemories); ++m)
+            e.tape.setMemory (m, (juce::int64) (*memories)[m]);
     e.tape.locate ((juce::int64) tapeInfo["position"]);
     return r;
 }

@@ -49,7 +49,10 @@ private:
         newSession, openSession, saveSession, saveSessionAs, exportMix, importAudio,
         recordViewCmd, mixViewCmd, fullViewCmd, nextViewCmd,
         tapeMachineCmd, rackCmd, patchBayCmd, talkbackCmd, disarmAllCmd, fullScreenCmd,
-        armTrack1 = 100   // armTrack1 + t arms / disarms tape track t + 1
+        jogScrubCmd, storeCmd, setInCmd, setOutCmd, loopCmd, goInCmd, goOutCmd, punchCmd,   // the Jog / shuttle box
+        jogBackCmd, jogForwardCmd, shuttleBackCmd, shuttleForwardCmd,
+        armTrack1 = 100,  // armTrack1 + t arms / disarms tape track t + 1
+        memory1 = 200     // memory1 + m: locate memory m + 1 (or stores there after Store)
     };
     juce::ApplicationCommandManager commands;
     juce::Component::SafePointer<juce::DialogWindow> keysWindow;

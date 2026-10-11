@@ -161,15 +161,15 @@ public:
 
     /** Talkback, as on a real console. On the patch bay: TB In (the talkback mic, usually from an interface input)
         is normalled to TB Limiter In, and the limiter's output to TB Send; whatever reaches TB Send goes, while
-        Talk is held or latched, to the chosen aux outputs (Aux 5-8) at the TB level. It joins after the aux
+        Talk is held or latched, to the chosen aux outputs (any of Aux 1-8) at the TB level. It joins after the aux
         returns, so it never reaches the main mix through an effect. With "through the limiter" off, or with
         something else patched into TB Limiter In, TB Send is normalled straight from TB In instead (the talkback
         goes dry). Patching TB Send breaks its normal. The limiter's in and out work anywhere else too. */
     std::atomic<bool> talkbackOn { false };
-    static constexpr int firstTalkbackAux = 4, numTalkbackAux = 4;   // Aux 5-8
+    static constexpr int firstTalkbackAux = 0, numTalkbackAux = 8;   // Aux 1-8
     Param* tbLevel = nullptr;                                         // dB, -60 (off) .. +10
-    std::array<Param*, numTalkbackAux> tbToAux {};                    // Aux 5..8
-    Param* tbDim = nullptr;                                           // dim the monitors 15 dB while talking
+    std::array<Param*, numTalkbackAux> tbToAux {};                    // Aux 1..8
+    Param* tbDim = nullptr;                                           // dim the monitors 15 dB while talking (always on: no switch since 0.1.3)
     Param* tbThroughLimiter = nullptr;
     Param* tbLimInput = nullptr;                                      // dB, 0..+30
     Param* tbLimBlend = nullptr;                                      // %, 0..100 (100 = all compressed)

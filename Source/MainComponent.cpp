@@ -424,6 +424,10 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
     for (int t = 0; t < TapeMachine::numTracks; ++t)
         ids.add (armTrack1 + t);
     ids.add (disarmAllCmd);
+    ids.addArray ({ jogScrubCmd, storeCmd, setInCmd, setOutCmd, loopCmd, goInCmd, goOutCmd, punchCmd,
+                    jogBackCmd, jogForwardCmd, shuttleBackCmd, shuttleForwardCmd });
+    for (int m = 0; m < TapeMachine::numMemories; ++m)
+        ids.add (memory1 + m);
 }
 
 void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommandInfo& info)
@@ -434,6 +438,14 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
     {
         const juce::String n (id - armTrack1 + 1);
         info.setInfo ("Arm track " + n, "Record arm on / off for tape track " + n, "Record arm", 0);
+        return;
+    }
+    // The Jog / shuttle box: the same as clicking its keys. Memories on 1-6.
+    if (id >= memory1 && id < memory1 + TapeMachine::numMemories)
+    {
+        const juce::String n (id - memory1 + 1);
+        info.setInfo ("Memory " + n, "Winds the tape to locate memory " + n + " (after Store: keeps the tape position there)", "Jog / shuttle", 0);
+        info.addDefaultKeypress ('1' + (id - memory1), 0);
         return;
     }
     switch (id)
@@ -447,7 +459,32 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
                             info.addDefaultKeypress (juce::KeyPress::homeKey, 0); break;
         case fastForward:   info.setInfo ("Fast forward", "Winds on to the end of the recording", "Transport", 0);
                             info.addDefaultKeypress (juce::KeyPress::endKey, 0); break;
-        case returnToZero:  info.setInfo ("Return to zero", "Jumps straight back to the start, without winding", "Transport", 0); break;
+        case returnToZero:  info.setInfo ("RTZ", "Return to zero: winds the tape back to the start (the RTZ key)", "Jog / shuttle", 0);
+                            info.addDefaultKeypress ('0', 0); break;
+        case jogScrubCmd:   info.setInfo ("Jog / Scrub", "Swaps the wheel between Jog (silent) and Scrub (you hear the tape)", "Jog / shuttle", 0);
+                            info.addDefaultKeypress ('j', 0); break;
+        case storeCmd:      info.setInfo ("Store", "Store, then a memory number, keeps the tape position there", "Jog / shuttle", 0);
+                            info.addDefaultKeypress ('m', 0); break;
+        case setInCmd:      info.setInfo ("Set In", "Sets the In point at the tape position", "Jog / shuttle", 0);
+                            info.addDefaultKeypress ('i', 0); break;
+        case setOutCmd:     info.setInfo ("Set Out", "Sets the Out point at the tape position", "Jog / shuttle", 0);
+                            info.addDefaultKeypress ('o', 0); break;
+        case loopCmd:       info.setInfo ("Loop", "Loop between In and Out on / off", "Jog / shuttle", 0);
+                            info.addDefaultKeypress ('l', 0); break;
+        case goInCmd:       info.setInfo ("Go In", "Locates to the In point", "Jog / shuttle", 0);
+                            info.addDefaultKeypress ('i', juce::ModifierKeys::shiftModifier); break;
+        case goOutCmd:      info.setInfo ("Go Out", "Locates to the Out point", "Jog / shuttle", 0);
+                            info.addDefaultKeypress ('o', juce::ModifierKeys::shiftModifier); break;
+        case punchCmd:      info.setInfo ("Punch", "Auto-punch between In and Out on / off", "Jog / shuttle", 0);
+                            info.addDefaultKeypress ('p', 0); break;
+        case jogBackCmd:    info.setInfo ("Jog back", "Turns the jog wheel back one notch (1/24 s of tape); hold to keep turning", "Jog / shuttle", 0);
+                            info.addDefaultKeypress (',', 0); break;
+        case jogForwardCmd: info.setInfo ("Jog forward", "Turns the jog wheel forward one notch (1/24 s of tape); hold to keep turning", "Jog / shuttle", 0);
+                            info.addDefaultKeypress ('.', 0); break;
+        case shuttleBackCmd: info.setInfo ("Shuttle back", "Turns the shuttle ring one step towards rewind (it stays there; Stop ends it)", "Jog / shuttle", 0);
+                            info.addDefaultKeypress ('[', 0); break;
+        case shuttleForwardCmd: info.setInfo ("Shuttle forward", "Turns the shuttle ring one step towards fast forward (it stays there; Stop ends it)", "Jog / shuttle", 0);
+                            info.addDefaultKeypress (']', 0); break;
         case newSession:    info.setInfo ("New session", "Starts a new, empty session", "Session", 0);
                             info.addDefaultKeypress ('n', cmd); break;
         case openSession:   info.setInfo ("Open session", "Opens a saved session", "Session", 0);
@@ -491,6 +528,12 @@ bool MainComponent::perform (const InvocationInfo& info)
         tape.arm[(size_t) (info.commandID - armTrack1)]->toggle();
         return true;
     }
+    auto& shuttle = desk.getShuttle();
+    if (info.commandID >= memory1 && info.commandID < memory1 + TapeMachine::numMemories)
+    {
+        shuttle.pressMemory (info.commandID - memory1);
+        return true;
+    }
     switch (info.commandID)
     {
         case playStop:      if (tape.isPlaying()) tape.stop(); else tape.play(); return true;
@@ -499,7 +542,19 @@ bool MainComponent::perform (const InvocationInfo& info)
         case record:        tape.setRecordEnabled (! tape.isRecordEnabled()); return true;
         case rewind:        tape.rewind(); return true;
         case fastForward:   tape.fastForward(); return true;
-        case returnToZero:  tape.stop(); tape.locate (0); return true;
+        case returnToZero:  shuttle.press (ShuttlePanel::Key::rtz); return true;
+        case jogScrubCmd:   shuttle.press (ShuttlePanel::Key::jogScrub); return true;
+        case storeCmd:      shuttle.press (ShuttlePanel::Key::store); return true;
+        case setInCmd:      shuttle.press (ShuttlePanel::Key::setIn); return true;
+        case setOutCmd:     shuttle.press (ShuttlePanel::Key::setOut); return true;
+        case loopCmd:       shuttle.press (ShuttlePanel::Key::loop); return true;
+        case goInCmd:       shuttle.press (ShuttlePanel::Key::goIn); return true;
+        case goOutCmd:      shuttle.press (ShuttlePanel::Key::goOut); return true;
+        case punchCmd:      shuttle.press (ShuttlePanel::Key::punch); return true;
+        case jogBackCmd:        shuttle.press (ShuttlePanel::Key::jogBack); return true;
+        case jogForwardCmd:     shuttle.press (ShuttlePanel::Key::jogForward); return true;
+        case shuttleBackCmd:    shuttle.press (ShuttlePanel::Key::shuttleBack); return true;
+        case shuttleForwardCmd: shuttle.press (ShuttlePanel::Key::shuttleForward); return true;
         case newSession:    sessions.newSession(); return true;
         case openSession:   sessions.openSession(); return true;
         case saveSession:   sessions.save(); return true;

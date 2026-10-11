@@ -1,6 +1,7 @@
 ﻿#include "Desk.h"
 #include "ConsoleLookAndFeel.h"
 #include "EraseDialog.h"
+#include "PatchBay.h"
 #include "TalkbackSettings.h"
 #include "StripStyle.h"
 
@@ -583,9 +584,11 @@ CentreSection::CentreSection (AudioEngine& e, PluginContext* plugins)
       mainFader (*e.mainFader),
       busPanel (e.busComp),
       inserts (e, plugins),
+      shuttle (e.tape),
       monitorLevel (*e.monitorLevel, "Level", juce::Colour (0xffd9d6cc)),
       tbLevel (*e.tbLevel, "TB", juce::Colour (0xffd6392d)),
-      talkButton (e.talkbackOn)
+      talkButton (e.talkbackOn),
+      context (plugins)
 {
     addAndMakeVisible (appButtons);
     appButtons.setTitle ("App buttons");
@@ -594,14 +597,17 @@ CentreSection::CentreSection (AudioEngine& e, PluginContext* plugins)
     monitorLevel.setEndLabels ("off", "+10");
     addAndMakeVisible (monitorLevel);
 
-    // Talkback: level, the Talk key, and its settings (destinations Aux 5-8 and the TB limiter).
+    // Talkback: level, the Talk key, and its settings (destinations Aux 1-8 and the TB limiter).
     tbLevel.setFormatter ([] (float db) { return db <= -59.5f ? juce::String ("TB off") : "TB " + juce::String (db > 0.05f ? "+" : "") + juce::String (db, 1); });
     tbLevel.setEndLabels ("off", "+10");
     addAndMakeVisible (tbLevel);
     addAndMakeVisible (talkButton);
-    tbSetup.setTooltip ("Talkback settings: which auxes it goes to (5-8), monitor dim, and the TB limiter");
+    tbSetup.setTooltip ("Talkback settings: which auxes it goes to (1-8) and the TB limiter");
     tbSetup.onClick = [this] { TalkbackSettings::show (engine); };
     addAndMakeVisible (tbSetup);
+    tbMic.setTitle ("Talkback mic in");
+    tbMic.onPopupMenu = [this] { showTbMicMenu(); };
+    addAndMakeVisible (tbMic);
 
     cassette.projectName().referTo (engine.projectName);
     addAndMakeVisible (cassette);
@@ -670,14 +676,13 @@ CentreSection::CentreSection (AudioEngine& e, PluginContext* plugins)
         {
             const auto& spec = FourBandEq::bands[b];
             const auto cap = juce::Colour (spec.capColour);
-            auto* g = groupEqKnobs.add (new Knob (*engine.groupEq[k]->gain[b], spec.label, cap));
-            auto* f = groupEqKnobs.add (new Knob (*engine.groupEq[k]->freq[b], "freq", cap));
+            // Fixed bands: one gain knob each, the frequency printed in the legend.
+            auto hz = formatHz (spec.defHz);
+            if (hz.endsWith (".0k"))
+                hz = hz.dropLastCharacters (3) + "k";
+            auto* g = groupEqKnobs.add (new Knob (*engine.groupEq[k]->gain[b], juce::String (spec.label) + " " + hz, cap));
             g->setEndLabels ("-", "+");
-            f->setFormatter ([] (float hz) { return formatHz (hz); });
-            const auto [lo, hi] = freqEnds (spec);
-            f->setEndLabels (lo, hi);
             addAndMakeVisible (g);
-            addAndMakeVisible (f);
         }
     }
 
@@ -691,6 +696,7 @@ CentreSection::CentreSection (AudioEngine& e, PluginContext* plugins)
 
     addAndMakeVisible (busPanel);
     addAndMakeVisible (inserts);
+    addAndMakeVisible (shuttle);
 
     for (int i = 0; i < Config::numSubs + Config::numAux; ++i)
     {
@@ -809,22 +815,19 @@ void CentreSection::resized()
     for (int t = 0; t < armButtons.size(); ++t)
         armButtons[t]->setBounds (grid.getX() + (t % cols) * cw + 1, grid.getY() + (t / cols) * 26, cw - 2, 22);
 
-    // Group EQ: full centre width under the tape machine and (stage 5) the bus compressor.
-    // One column per sub, four bands down, gain and frequency side by side.
-    groupEqBox = { 12, 576, centreW - 24, 24 + 4 * 52 + 4 };
-    const int colWidth = (groupEqBox.getWidth() - 8) / Config::numSubs;
+    // Group EQ, under the tape machine: one column of fixed-band gain knobs straight over each sub fader.
+    groupEqBox = { juce::roundToInt (subColumnX (0)) + 2, 576,
+                   juce::roundToInt (subColumnX (Config::numSubs)) - 2 - (juce::roundToInt (subColumnX (0)) + 2), 24 + 4 * 52 + 4 };
     for (int k = 0; k < Config::numSubs; ++k)
     {
-        const int x0 = groupEqBox.getX() + 4 + k * colWidth;
+        const int cx = juce::roundToInt (subColumnX (k) + colW * 0.5f);
         for (int b = 0; b < FourBandEq::numBands; ++b)
-        {
-            const int y0 = groupEqBox.getY() + 24 + b * 52;
-            const int idx = (k * FourBandEq::numBands + b) * 2;
-            const int cx = x0 + colWidth / 2;
-            groupEqKnobs[idx]->setBounds (knobAt (cx - Knob::preferredWidth - 4, y0));
-            groupEqKnobs[idx + 1]->setBounds (knobAt (cx + 4, y0));
-        }
+            groupEqKnobs[k * FourBandEq::numBands + b]->setBounds (knobAt (cx - Knob::preferredWidth / 2, groupEqBox.getY() + 24 + b * 52));
     }
+
+    // Jog / shuttle: the rest of that row, right of the group EQ.
+    shuttleBox = { groupEqBox.getRight() + 18, groupEqBox.getY(), centreW - 10 - (groupEqBox.getRight() + 18), groupEqBox.getHeight() };
+    shuttle.setBounds (shuttleBox.reduced (1));
 
     // Bus compressor faceplate, at the right edge.
     busPanel.setBounds (centreW - 12 - BusCompPanel::width, 12, BusCompPanel::width, BusCompPanel::height);
@@ -835,9 +838,13 @@ void CentreSection::resized()
     appBox = { panelX, 12, panelW, 28 + appButtons.heightFor (numButtons) + 10 };
     appButtons.setBounds (appBox.reduced (10).withTrimmedTop (18));
     // Monitor and talkback: the two levels side by side, Talk and Setup under them.
-    monitorBox = { panelX, appBox.getBottom() + 16, panelW, 28 + Knob::preferredHeight + 6 + 26 + 10 };
+    // The talkback mic's XLR sits over the TB column; its input is named to the left (see paint).
+    monitorBox = { panelX, appBox.getBottom() + 16, panelW, 28 + tbMicH + 4 + Knob::preferredHeight + 6 + 26 + 10 };
     {
         auto m = monitorBox.reduced (8, 0).withTrimmedTop (24);
+        auto micRow = m.removeFromTop (tbMicH);
+        tbMic.setBounds (micRow.removeFromRight (micRow.getWidth() / 2).withSizeKeepingCentre (tbMicH, tbMicH));
+        m.removeFromTop (4);
         auto knobs = m.removeFromTop (Knob::preferredHeight);
         monitorLevel.setBounds (knobs.removeFromLeft (knobs.getWidth() / 2).withSizeKeepingCentre (Knob::preferredWidth, Knob::preferredHeight));
         tbLevel.setBounds (knobs.withSizeKeepingCentre (Knob::preferredWidth, Knob::preferredHeight));
@@ -848,9 +855,10 @@ void CentreSection::resized()
         tbSetup.setBounds (buttons);
     }
 
-    // Inserts and aux returns, along the bottom of the knob area.
-    insertsBox = { 12, groupEqBox.getBottom() + 22, centreW - 24, knobH - 12 - (groupEqBox.getBottom() + 22) };
-    inserts.setBounds (insertsBox.reduced (4, 8));
+    // Inserts and aux returns, along the bottom of the knob area: each cell over its fader.
+    insertsBox = { groupEqBox.getX(), groupEqBox.getBottom() + 22, centreW - 10 - groupEqBox.getX(), knobH - 12 - (groupEqBox.getBottom() + 22) };
+    inserts.setBounds ((int) gridX, insertsBox.getY() + 8, centreW - 8 - (int) gridX, insertsBox.getHeight() - 16);
+    inserts.setColumnWidth (colW);
 
     // Main fader, far right of the fader area.
     const int f = knobH;
@@ -921,6 +929,19 @@ void CentreSection::paint (juce::Graphics& g)
         g.drawText (title, box.reduced (10).withHeight (16), juce::Justification::centredLeft, false);
     }
 
+    // Legend left of the talkback mic's XLR: what it is and which interface input feeds TB In.
+    {
+        auto legendArea = monitorBox.reduced (8, 0).withTrimmedTop (24).removeFromTop (tbMicH);
+        legendArea = legendArea.removeFromLeft (legendArea.getWidth() / 2).withSizeKeepingCentre (legendArea.getWidth() / 2, 28);
+        g.setColour (juce::Colour (0xffaeb3b5));
+        g.setFont (ConsoleLookAndFeel::uiFont (11.0f, true));
+        g.drawFittedText ("TB MIC", legendArea.removeFromTop (14), juce::Justification::centred, 1, 0.7f);
+        const auto mic = tbMicInputName();
+        g.setColour (mic.isNotEmpty() ? bridgeText : bridgeText.withAlpha (0.45f));
+        g.setFont (ConsoleLookAndFeel::uiFont (10.0f));
+        g.drawFittedText (mic.isNotEmpty() ? mic : juce::String ("none"), legendArea, juce::Justification::centred, 1, 0.8f);
+    }
+
     const float recordedIps = tape.getRecordedIps();
     paintSection (g, "Tape speed (ips), pitch, record level"
                      + (recordedIps > 0.0f ? "   |   recorded at " + juce::String (recordedIps, recordedIps < 10.0f ? 1 : 0) : juce::String()),
@@ -931,18 +952,18 @@ void CentreSection::paint (juce::Graphics& g)
 
     // Group EQ.
     paintSection (g, "Group EQ", groupEqBox, stripGrey);
+    paintSection (g, "Jog / shuttle", shuttleBox, stripGrey);
     paintSection (g, "Inserts (VST3) and aux returns", insertsBox, stripGrey);
     g.setFont (ConsoleLookAndFeel::uiFont (11.0f, true));
-    const int colWidth = (groupEqBox.getWidth() - 8) / Config::numSubs;
     for (int k = 0; k < Config::numSubs; ++k)
     {
-        const int x0 = groupEqBox.getX() + 4 + k * colWidth;
+        const int x0 = juce::roundToInt (subColumnX (k)), x1 = juce::roundToInt (subColumnX (k + 1));
         g.setColour (legend);
-        g.drawFittedText (engine.subNames[(size_t) k], juce::Rectangle<int> (x0 + 2, groupEqBox.getY() + 7, colWidth - 4, 12), juce::Justification::centred, 1, 0.7f);
+        g.drawFittedText (engine.subNames[(size_t) k], juce::Rectangle<int> (x0 + 3, groupEqBox.getY() + 7, x1 - x0 - 6, 12), juce::Justification::centred, 1, 0.7f);
         if (k > 0)
         {
             g.setColour (juce::Colour (0xff8e9598).withAlpha (0.5f));
-            g.fillRect (x0 - 1, groupEqBox.getY() + 8, 1, groupEqBox.getHeight() - 14);
+            g.fillRect (x0, groupEqBox.getY() + 8, 1, groupEqBox.getHeight() - 14);
         }
     }
 
@@ -1018,6 +1039,54 @@ void CentreSection::update()
         shownOut = tape.getOutPoint();
         repaint (locateBox.expanded (2, 8));
     }
+
+    // The talkback mic's input can change in the patch bay too.
+    if (const auto mic = tbMicInputName(); mic != shownTbMic)
+    {
+        shownTbMic = mic;
+        tbMic.setTooltip ("Talkback mic in" + (mic.isNotEmpty() ? ": " + mic + " of the interface" : juce::String (": not patched"))
+                          + ". Right-click to choose the interface input (patches it into TB In).");
+        repaint (monitorBox);
+    }
+}
+
+juce::String CentreSection::tbMicInputName() const
+{
+    const int dev = engine.getInterfaceInput (AudioEngine::Patch::talkbackIn);
+    return dev >= 0 ? "Input " + juce::String (dev + 1) : juce::String();
+}
+
+void CentreSection::showTbMicMenu()
+{
+    // The interface's inputs (as many as the patch bay shows); the one chosen is wired into TB In.
+    const int current = engine.getInterfaceInput (AudioEngine::Patch::talkbackIn);
+    auto* device = engine.getDeviceManager().getCurrentAudioDevice();
+    const auto names = device != nullptr ? device->getInputChannelNames() : juce::StringArray();
+
+    juce::PopupMenu menu;
+    menu.addSectionHeader ("Talkback mic (TB In)");
+    if (names.isEmpty())
+        menu.addItem (-1, "No audio interface open", false, false);
+    for (int i = 0; i < juce::jmin (names.size(), PatchBayField::maxInterfaceJacks); ++i)
+    {
+        auto text = "Input " + juce::String (i + 1);
+        if (names[i].isNotEmpty() && names[i] != juce::String (i + 1))
+            text << " (" << names[i] << ")";
+        menu.addItem (i + 1, text, true, current == i);
+    }
+    menu.addSeparator();
+    menu.addItem (1000, "None", current >= 0, false);
+
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (tbMic),
+                        [safe = juce::Component::SafePointer<CentreSection> (this)] (int result)
+    {
+        if (safe == nullptr || result <= 0)
+            return;
+        safe->engine.setInterfaceInput (AudioEngine::Patch::talkbackIn, result == 1000 ? -1 : result - 1);
+        if (safe->context != nullptr && safe->context->changed)
+            safe->context->changed();
+        safe->update();
+    });
 }
 
 TalkButton::TalkButton (std::atomic<bool>& t) : juce::TextButton ("Talk"), talking (t)

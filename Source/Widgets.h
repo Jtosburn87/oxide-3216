@@ -169,3 +169,15 @@ private:
 
     void paintIcon (juce::Graphics&, juce::Rectangle<float>, juce::Colour) const;
 };
+
+/** A female XLR socket as on a console's front panel: metal shell, latch tab on top, three contact holes.
+    Right-click calls onPopupMenu. */
+class XlrSocket : public juce::Component,
+                  public juce::SettableTooltipClient
+{
+public:
+    void paint (juce::Graphics&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+
+    std::function<void()> onPopupMenu;
+};

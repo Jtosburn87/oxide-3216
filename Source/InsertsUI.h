@@ -70,26 +70,51 @@ private:
     void refresh();
 };
 
-/** Row of cells in the centre section: an FX button for each sub, aux return and the master,
-    and a return pan knob for each aux. A Link button between each aux pair makes it one stereo aux,
-    whose two cells merge into one (one stereo FX chain, one return balance). */
+/** Row of cells in the centre section, one over each sub, aux and the main fader: the bus's four insert
+    slots as small rack boxes (plugin list button left of each), and a return pan knob under them on each aux.
+    A Link button between each aux pair makes it one stereo aux, whose two cells merge into one (one stereo
+    FX chain, one return balance). */
 class InsertsSection : public juce::Component,
                        private juce::Timer
 {
 public:
     InsertsSection (AudioEngine&, PluginContext*);
 
+    /** Width of one bus fader column, so each cell sits over its fader (the master cell takes the rest).
+        0: cells share the width evenly. */
+    void setColumnWidth (float w) { columnW = w; resized(); repaint(); }
+
     void paint (juce::Graphics&) override;
     void resized() override;
 
 private:
+    /** One insert slot: the plugin's name, lit while it runs. Click opens the plugin (empty: the plugin menu),
+        right-click gives Bypass / Replace / Remove. */
+    class SlotBox : public juce::Component,
+                    public juce::SettableTooltipClient
+    {
+    public:
+        SlotBox (InsertsSection&, size_t cell, int slot);
+        void paint (juce::Graphics&) override;
+        void mouseUp (const juce::MouseEvent&) override;
+        void refresh();
+
+    private:
+        InsertsSection& owner;
+        const size_t cell;
+        const int slot;
+        juce::String shownName;
+        int shownState = -1;   // 0 empty, 1 running, 2 bypassed, 3 refused
+    };
+
     struct Cell
     {
         InsertChain* chain;
         Param* returnPan;
         Param* mainAssign;
         juce::String title;
-        std::unique_ptr<juce::TextButton> fx;
+        std::array<std::unique_ptr<SlotBox>, InsertChain::numSlots> slots;
+        std::array<std::unique_ptr<PluginListButton>, InsertChain::numSlots> lists;
         std::unique_ptr<Knob> knob;
     };
 
@@ -98,10 +123,12 @@ private:
     std::vector<Cell> cells;
     std::array<juce::TextButton, AudioEngine::numAuxPairs> linkButtons;
     std::array<bool, AudioEngine::numAuxPairs> shownLink {};
+    float columnW = 0.0f;
 
+    int columnX (int index) const;
     juce::Rectangle<int> cellBounds (size_t index) const;
     void toggleLink (int pair);
+    void slotChanged();
 
     void timerCallback() override;
-    void openChain (Cell&);
 };

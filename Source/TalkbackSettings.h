@@ -5,8 +5,8 @@
 #include "Widgets.h"
 #include "BusCompPanel.h"
 
-/** The Talkback Settings window (Setup, next to Talk on the console): where the talkback goes (Aux 5-8),
-    dimming the monitors while talking, and the TB limiter - after the SSL 4000 E's listen mic compressor -
+/** The Talkback Settings window (Setup, next to Talk on the console): where the talkback goes (any of Aux 1-8)
+    and the TB limiter - after the SSL 4000 E's listen mic compressor -
     with its Input, Blend and Makeup knobs and a gain reduction meter. */
 class TalkbackSettings : public juce::Component,
                          private juce::Timer
@@ -23,7 +23,7 @@ public:
 private:
     AudioEngine& engine;
     juce::OwnedArray<ParamButton> auxButtons;
-    ParamButton dimButton, limiterButton;
+    ParamButton limiterButton;
     Knob inputKnob, blendKnob, makeupKnob;
     GrNeedleMeter grMeter;
     juce::Label note;

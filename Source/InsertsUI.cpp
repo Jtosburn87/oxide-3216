@@ -88,10 +88,12 @@ void PluginListButton::setSlot (int slot)
 void PluginListButton::paintButton (juce::Graphics& g, bool isMouseOver, bool isButtonDown)
 {
     getLookAndFeel().drawButtonBackground (g, *this, findColour (buttonColourId), isMouseOver, isButtonDown);
-    const auto r = getLocalBounds().toFloat().withSizeKeepingCentre (12.0f, 10.0f);
+    // Three lines, smaller on the console's tiny slot buttons.
+    const float w = juce::jmin (12.0f, (float) getWidth() - 5.0f), step = getHeight() < 20 ? 3.0f : 4.0f;
+    const auto r = getLocalBounds().toFloat().withSizeKeepingCentre (w, step * 2.0f + 2.0f);
     g.setColour (findColour (textColourOffId).withMultipliedAlpha (isEnabled() ? 1.0f : 0.5f));
     for (int i = 0; i < 3; ++i)
-        g.fillRoundedRectangle (r.getX(), r.getY() + (float) i * 4.0f, r.getWidth(), 2.0f, 1.0f);
+        g.fillRoundedRectangle (r.getX(), r.getY() + (float) i * step, r.getWidth(), step < 4.0f ? 1.5f : 2.0f, step < 4.0f ? 0.75f : 1.0f);
 }
 
 //==============================================================================
@@ -204,18 +206,29 @@ InsertsSection::InsertsSection (AudioEngine& e, PluginContext* ctx) : engine (e)
         cells.push_back ({ engine.auxInserts[k], engine.auxReturnPan[(size_t) k], engine.auxMain[(size_t) k], "A" + juce::String (k + 1), nullptr, nullptr });
     cells.push_back ({ &engine.masterInserts, nullptr, nullptr, "Master", nullptr, nullptr });
 
-    for (auto& c : cells)
+    for (size_t i = 0; i < cells.size(); ++i)
     {
-        c.fx = std::make_unique<juce::TextButton> ("FX");
-        c.fx->setTooltip (c.chain->name + " inserts");
-        c.fx->setTitle (c.chain->name + " inserts");
-        c.fx->setEnabled (context != nullptr);
-        c.fx->onClick = [this, &c] { openChain (c); };
-        addAndMakeVisible (*c.fx);
+        auto& c = cells[i];
+        for (int s = 0; s < InsertChain::numSlots; ++s)
+        {
+            c.slots[(size_t) s] = std::make_unique<SlotBox> (*this, i, s);
+            addAndMakeVisible (*c.slots[(size_t) s]);
+
+            auto& list = c.lists[(size_t) s];
+            list = std::make_unique<PluginListButton> (s);
+            list->setEnabled (context != nullptr);
+            list->onClick = [this, i, s]
+            {
+                auto& cell = cells[i];
+                InsertSlot::choose (*cell.chain, s, *context, cell.mainAssign, *cell.lists[(size_t) s]);
+            };
+            addAndMakeVisible (*list);
+        }
 
         if (c.returnPan != nullptr)
         {
             c.knob = std::make_unique<Knob> (*c.returnPan, "Pan", juce::Colour (0xffd9d6cc));
+            c.knob->setDialSize (26);
             c.knob->setEndLabels ("L", "R");
             addAndMakeVisible (*c.knob);
         }
@@ -233,7 +246,7 @@ InsertsSection::InsertsSection (AudioEngine& e, PluginContext* ctx) : engine (e)
         b.onClick = [this, j] { toggleLink (j); };
         addAndMakeVisible (b);
     }
-    startTimerHz (4);
+    startTimerHz (10);
 }
 
 void InsertsSection::toggleLink (int pair)
@@ -248,12 +261,11 @@ void InsertsSection::toggleLink (int pair)
                                                 "left out until the pair is unlinked:\n\n" + notStereo.joinIntoString ("\n"));
 }
 
-void InsertsSection::openChain (Cell& c)
+void InsertsSection::slotChanged()
 {
-    if (context == nullptr)
-        return;
-    auto editor = std::make_unique<InsertChainEditor> (*c.chain, *context, c.returnPan, c.mainAssign);
-    juce::CallOutBox::launchAsynchronously (std::move (editor), c.fx->getScreenBounds(), nullptr);
+    timerCallback();
+    if (context != nullptr && context->changed)
+        context->changed();
 }
 
 void InsertsSection::timerCallback()
@@ -273,58 +285,68 @@ void InsertsSection::timerCallback()
     }
 
     for (auto& c : cells)
-    {
-        const int n = c.chain->numLoaded();
-        const auto text = n == 0 ? juce::String ("FX") : "FX " + juce::String (n);
-        if (c.fx->getButtonText() != text)
-            c.fx->setButtonText (text);
-        c.fx->setToggleState (n > 0, juce::dontSendNotification);   // lit while any plugin is inserted, bypassed or not
-    }
+        for (auto& s : c.slots)
+            s->refresh();
+}
+
+int InsertsSection::columnX (int i) const
+{
+    const int n = (int) cells.size();
+    if (i >= n)
+        return getWidth();
+    return columnW > 0.0f ? juce::roundToInt ((float) i * columnW) : i * getWidth() / n;
 }
 
 juce::Rectangle<int> InsertsSection::cellBounds (size_t i) const
 {
     // A linked aux pair: the odd cell spans both, the even one has none.
-    const int cellW = getWidth() / (int) cells.size();
-    auto cell = juce::Rectangle<int> ((int) i * cellW, 0, cellW, getHeight());
+    const int x0 = columnX ((int) i);
+    auto cell = juce::Rectangle<int> (x0, 0, columnX ((int) i + 1) - x0, getHeight());
     const int k = (int) i - Config::numSubs;
     if (juce::isPositiveAndBelow (k, Config::numAux) && shownLink[(size_t) (k / 2)])
-        return k % 2 == 0 ? cell.withWidth (2 * cellW) : juce::Rectangle<int>();
+        return k % 2 == 0 ? cell.withRight (columnX ((int) i + 2)) : juce::Rectangle<int>();
     return cell;
 }
 
 void InsertsSection::resized()
 {
-    const int cellW = getWidth() / (int) cells.size();
     for (size_t i = 0; i < cells.size(); ++i)
     {
         auto& c = cells[i];
-        auto cell = cellBounds (i).reduced (3, 0);
-        c.fx->setVisible (! cell.isEmpty());
+        auto cell = cellBounds (i).reduced (4, 0);
+        for (int s = 0; s < InsertChain::numSlots; ++s)
+        {
+            c.slots[(size_t) s]->setVisible (! cell.isEmpty());
+            c.lists[(size_t) s]->setVisible (! cell.isEmpty());
+        }
         if (c.knob != nullptr)
             c.knob->setVisible (! cell.isEmpty());
         if (cell.isEmpty())
             continue;
 
-        cell.removeFromTop (16);   // title
-        if (c.returnPan != nullptr)
-            cell.removeFromTop (18);   // link buttons
-        c.fx->setBounds (cell.removeFromBottom (22).reduced (2, 0));
+        cell.removeFromTop (16 + 18);   // title, then the aux Link buttons (kept on every cell so the slots line up)
+        for (int s = 0; s < InsertChain::numSlots; ++s)
+        {
+            auto row = cell.removeFromTop (15);
+            c.lists[(size_t) s]->setBounds (row.removeFromLeft (13));
+            row.removeFromLeft (2);
+            c.slots[(size_t) s]->setBounds (row);
+            cell.removeFromTop (2);
+        }
         if (c.knob != nullptr)
-            c.knob->setBounds (cell.withSizeKeepingCentre (Knob::preferredWidth, Knob::preferredHeight));
+            c.knob->setBounds (cell.withSizeKeepingCentre (Knob::smallWidth, Knob::smallHeight));
     }
 
     // Each Link button straddles the line between its pair.
     for (int j = 0; j < AudioEngine::numAuxPairs; ++j)
     {
-        const int x = (Config::numSubs + 2 * j + 1) * cellW;
+        const int x = columnX (Config::numSubs + 2 * j + 1);
         linkButtons[(size_t) j].setBounds (x - 22, 17, 44, 16);
     }
 }
 
 void InsertsSection::paint (juce::Graphics& g)
 {
-    const int cellW = getWidth() / (int) cells.size();
     g.setFont (ConsoleLookAndFeel::uiFont (11.0f, true));
     for (size_t i = 0; i < cells.size(); ++i)
     {
@@ -344,7 +366,86 @@ void InsertsSection::paint (juce::Graphics& g)
         if (i == (size_t) Config::numSubs || i == cells.size() - 1)
         {
             g.setColour (juce::Colour (0xff8e9598).withAlpha (0.6f));
-            g.fillRect ((int) i * cellW, 2, 1, getHeight() - 4);
+            g.fillRect (columnX ((int) i), 2, 1, getHeight() - 4);
         }
     }
+}
+
+//==============================================================================
+InsertsSection::SlotBox::SlotBox (InsertsSection& o, size_t c, int s) : owner (o), cell (c), slot (s)
+{
+    setTitle (o.cells[c].chain->name + " slot " + juce::String (s + 1));
+    refresh();
+}
+
+void InsertsSection::SlotBox::refresh()
+{
+    auto& chain = *owner.cells[cell].chain;
+    const bool loaded = chain.getProcessor (slot) != nullptr;
+    const int state = ! loaded ? 0 : chain.isStereoRefused (slot) ? 3 : chain.isBypassed (slot) ? 2 : 1;
+    const auto name = loaded ? chain.getDescription (slot).name : juce::String();
+    if (state == shownState && name == shownName)
+        return;
+    shownState = state;
+    shownName = name;
+    const auto where = "slot " + juce::String (slot + 1);
+    setTooltip (state == 0 ? "Empty " + where + ": click to choose a plugin"
+              : state == 3 ? name + " (" + where + ") has no stereo in/out, so it is left out while the aux pair is linked"
+                           : name + " (" + where + (state == 2 ? ", bypassed" : "") + "): click to open, right-click for bypass / replace / remove");
+    repaint();
+}
+
+void InsertsSection::SlotBox::paint (juce::Graphics& g)
+{
+    const auto r = getLocalBounds().toFloat();
+    juce::Colour fill (0xff0b0c0d), rim (0xff2a2d2f), text (0xff5d6467);
+    if (shownState == 1)      { fill = amber;                   rim = juce::Colour (0xff8a6a24); text = juce::Colour (0xff1a1406); }
+    else if (shownState == 2) { fill = juce::Colour (0xff4a3e22); rim = juce::Colour (0xff5e4d29); text = juce::Colour (0xffb39a62); }
+    else if (shownState == 3) { fill = juce::Colour (0xff3a1512); rim = juce::Colour (0xff6b2a24); text = juce::Colour (0xffd0877f); }
+    g.setColour (fill);
+    g.fillRoundedRectangle (r, 2.0f);
+    g.setColour (rim);
+    g.drawRoundedRectangle (r.reduced (0.5f), 2.0f, 1.0f);
+
+    g.setColour (text);
+    auto font = ConsoleLookAndFeel::uiFont (9.5f, shownState == 1);
+    if (shownState == 2)
+        font = font.italicised();
+    g.setFont (font);
+    const auto textArea = getLocalBounds().reduced (3, 0);
+    g.drawText (shownState == 0 ? juce::String (juce::CharPointer_UTF8 ("\xe2\x80\x93")) : shownName, textArea,
+                shownState == 0 ? juce::Justification::centred : juce::Justification::centredLeft, true);
+    if (shownState == 3)
+        g.fillRect ((float) textArea.getX(), r.getCentreY(), (float) textArea.getWidth(), 1.0f);
+}
+
+void InsertsSection::SlotBox::mouseUp (const juce::MouseEvent& e)
+{
+    if (owner.context == nullptr || ! getLocalBounds().contains (e.getPosition()))
+        return;
+    auto& c = owner.cells[cell];
+    auto& chain = *c.chain;
+    auto& ctx = *owner.context;
+
+    if (! e.mods.isPopupMenu() || chain.getProcessor (slot) == nullptr)
+    {
+        InsertSlot::click (chain, slot, ctx, c.mainAssign, *this);
+        return;
+    }
+
+    juce::PopupMenu menu;
+    menu.addItem (1, "Bypass", true, chain.isBypassed (slot));
+    menu.addItem (2, "Replace...");
+    menu.addItem (3, "Remove");
+    juce::Component::SafePointer<SlotBox> safe (this);
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [safe, &chain, &ctx, s = slot] (int result)
+    {
+        if (safe == nullptr || result == 0)
+            return;
+        auto& section = safe->owner;
+        if (result == 1)      chain.setBypassed (s, ! chain.isBypassed (s));
+        else if (result == 3) chain.clearSlot (s);
+        else                  InsertSlot::choose (chain, s, ctx, section.cells[safe->cell].mainAssign, *safe);
+        section.slotChanged();
+    });
 }

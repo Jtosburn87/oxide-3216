@@ -1130,7 +1130,7 @@ namespace
 
     void testTalkback()
     {
-        std::puts ("Talkback: Talkback In -> TB limiter -> Aux 5-8 outputs");
+        std::puts ("Talkback: Talkback In -> TB limiter -> Aux 1-8 outputs");
         TestEngine e;
         using P = AudioEngine::Patch;
         e.prepare (48000.0, channels ({ 0, 1 }), channels ({ 0, 1, 2, 3 }));
@@ -1163,6 +1163,16 @@ namespace
         pk = run (0.1f, 40);
         check (near (pk[2], 0.1f, 2.0e-3f) && pk[3] == 0.0f, "talk on, dry: the mic on Aux 5 at 0 dB, not on Aux 6");
         check (pk[0] == 0.0f && pk[1] == 0.0f, "talkback never reaches the main mix");
+
+        // Aux 1-4 can take the talkback too.
+        e.setAuxOutput (5, -1);
+        e.setAuxOutput (0, 3);                    // Aux 1 -> output 4
+        e.tbToAux[0]->set (1.0f);
+        pk = run (0.1f, 40);
+        check (near (pk[3], 0.1f, 2.0e-3f) && near (pk[2], 0.1f, 2.0e-3f), "Aux 1 switched on as well: the mic on Aux 1 and Aux 5");
+        e.tbToAux[0]->set (0.0f);
+        e.setAuxOutput (0, -1);
+        e.setAuxOutput (5, 3);
 
         e.tbThroughLimiter->set (1.0f);
         e.tbLimMakeup->set (0.0f);
@@ -1976,6 +1986,91 @@ namespace
         tape.locate (0);
         b.run (e);
         check (tape.getPosition() == 0 && ! tape.isWinding(), "locate cancels a wind");
+
+        // Autolocate (RTZ and the locate memories): the tape winds there and arrives exactly.
+        tape.locate ((juce::int64) (40.0 * sr));
+        b.run (e);
+        tape.windTo ((juce::int64) (12.5 * sr));
+        runFor (0.5);
+        check (tape.isWinding() && tape.getWindSpeed() < 0.0f && tape.getPosition() > (juce::int64) (12.5 * sr), "windTo winds the tape (no jump)");
+        int blocks = 50;
+        for (; blocks < 6000 && tape.isWinding(); ++blocks)
+            b.run (e);
+        std::printf ("      autolocate 40 s -> 12.5 s took %.1f s\n", blocks / 100.0);
+        check (tape.getPosition() == (juce::int64) (12.5 * sr) && tape.getWindDirection() == 0, "and arrives exactly at the target");
+
+        tape.rewind();
+        runFor (1.0);
+        const auto from = tape.getPosition();
+        tape.windTo (from + (juce::int64) (5.0 * sr));
+        runUntilStopped();
+        check (tape.getPosition() == from + (juce::int64) (5.0 * sr), "autolocate against a running rewind: brakes, then winds forward to the target");
+    }
+
+    void testShuttleJogScrub()
+    {
+        std::puts ("Tape: shuttle ring, jog wheel and scrub");
+        TestEngine e;
+        e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }), 0);
+        auto& tape = e.tape;
+        Buffers b (1, 2, 480);   // 10 ms blocks
+        const double sr = 48000.0;
+        const auto seconds = [&] { return (double) tape.getPosition() / sr; };
+        const auto runFor = [&] (double s) { for (int i = 0; i < juce::roundToInt (s * 100.0); ++i) b.run (e); };
+
+        // A minute of a 440 Hz tone on track 1.
+        std::vector<float> tone ((size_t) (60.0 * sr));
+        for (size_t i = 0; i < tone.size(); ++i)
+            tone[i] = 0.5f * (float) std::sin (juce::MathConstants<double>::twoPi * 440.0 * (double) i / sr);
+        tape.writeTrack (0, 0, tone.data(), (int) tone.size());
+        tape.setLength ((juce::int64) tone.size());
+
+        tape.locate ((juce::int64) (10.0 * sr));
+        tape.setShuttle (4.0f);
+        runFor (1.0);
+        std::printf ("      shuttle at 4x for 1 s from 10 s: at %.3f s\n", seconds());
+        check (std::abs (tape.getWindSpeed() - 4.0f) < 0.01f && std::abs (seconds() - 13.875) < 0.05, "shuttle gets to its speed at once (4x within 1/16 s)");
+        tape.takeOutputPeak (0);
+        runFor (0.2);
+        check (tape.takeOutputPeak (0) == 0.0f, "Jog mode: the shuttle moves the tape silently");
+
+        tape.scrubOn = true;
+        runFor (0.2);
+        check (tape.takeOutputPeak (0) > 0.3f, "Scrub mode: you hear the tape while shuttling");
+
+        tape.setShuttle (0.0f);
+        runFor (0.2);
+        const auto held = tape.getPosition();
+        tape.takeOutputPeak (0);
+        runFor (0.2);
+        check (tape.getPosition() == held && tape.getWindSpeed() == 0.0f, "ring back at the centre: the tape stops");
+        check (tape.takeOutputPeak (0) < 0.01f, "and goes quiet");
+
+        tape.setShuttle (-32.0f);
+        runFor (1.0);
+        check (tape.getPosition() == 0 && tape.getWindSpeed() == 0.0f, "shuttling back stops at the start");
+
+        tape.locate ((juce::int64) (20.0 * sr));
+        b.run (e);
+        tape.jog (0.25 * sr);
+        tape.jog (0.25 * sr);   // two quarter turns
+        tape.takeOutputPeak (0);
+        runFor (0.5);
+        check (tape.getPosition() == (juce::int64) (20.5 * sr), "jog moves the tape exactly as far as the wheel turned");
+        check (tape.takeOutputPeak (0) > 0.3f, "Scrub mode: you hear the jog");
+        tape.jog (-sr);
+        runFor (0.5);
+        check (tape.getPosition() == (juce::int64) (19.5 * sr), "jog backwards");
+
+        tape.play();
+        b.run (e);
+        check (tape.isPlaying() && tape.getPosition() > (juce::int64) (19.5 * sr), "play takes over from the jog");
+        tape.setShuttle (8.0f);
+        b.run (e);
+        check (! tape.isPlaying() && tape.getWindSpeed() > 0.0f, "the shuttle takes over from play");
+        tape.stop();
+        runFor (0.5);
+        check (tape.getWindSpeed() == 0.0f && tape.getShuttle() == 0.0f, "stop ends the shuttle (braking, as from a wind)");
     }
 
     void testWowFlutter()
@@ -2126,6 +2221,7 @@ namespace
             a.tape.setInPoint (1000);
             a.tape.setOutPoint (5000);
             a.tape.loopOn = true;
+            a.tape.setMemory (2, 4321);
             const auto r = Session::save (a, folder, &written);
             check (r.ok, "session saved");
             check (folder.getChildFile ("session.json").existsAsFile() && folder.getChildFile ("Track 05.wav").existsAsFile()
@@ -2151,6 +2247,7 @@ namespace
             check (b.getPatch (AudioEngine::Patch::returnIn + 3) == (std::uint64_t (1) << (AudioEngine::Patch::auxOut + 1)), "patch cables restored");
             check (b.tape.getLength() == (juce::int64) take.size() && b.tape.getInPoint() == 1000 && b.tape.getOutPoint() == 5000 && b.tape.loopOn,
                    "tape length and locators restored");
+            check (b.tape.getMemory (2) == 4321 && b.tape.getMemory (0) == -1, "locate memories restored");
             std::vector<float> got (take.size());
             b.tape.readTrack (4, 0, got.data(), (int) got.size());
             check (got == take, "track audio restored bit for bit (32-bit float WAV)");
@@ -2515,6 +2612,7 @@ int main (int argc, char** argv)
     testBusAssignsAndAuxLinks();
     testPunchAndLoop();
     testWinding();
+    testShuttleJogScrub();
     testWowFlutter();
     testTapeFiles();
     testSessions();

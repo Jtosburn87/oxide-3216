@@ -35,7 +35,7 @@ AudioEngine::AudioEngine()
     for (int k = 0; k < Config::numSubs; ++k)
     {
         const auto id = "sub" + juce::String (k + 1);
-        groupEq.add (new FourBandEq (params, id, 2));
+        groupEq.add (new FourBandEq (params, id, 2, false, true));   // fixed bands
         subInserts.add (new InsertChain ("Sub " + juce::String (k + 1)));
         subFader[(size_t) k] = &params.add (id + ".fader", "Sub " + juce::String (k + 1) + " fader", 0.0f, 100.0f, 80.0f);
         subMain[(size_t) k] = &params.addToggle (id + ".main", "Sub " + juce::String (k + 1) + " to main", true);
@@ -62,7 +62,7 @@ AudioEngine::AudioEngine()
     for (int k = 0; k < numTalkbackAux; ++k)
     {
         const auto n = juce::String (firstTalkbackAux + k + 1);
-        tbToAux[(size_t) k] = &params.addToggle ("tb.aux" + n, "Talkback to aux " + n, k == 0);   // Aux 5 to start with
+        tbToAux[(size_t) k] = &params.addToggle ("tb.aux" + n, "Talkback to aux " + n, k == 4);   // Aux 5 to start with
     }
     tbDim = &params.addToggle ("tb.dim", "Dim monitors while talking", true);
     tbThroughLimiter = &params.addToggle ("tb.limiter", "Talkback through the TB limiter", true);

@@ -7,6 +7,7 @@
 #include "BusCompPanel.h"
 #include "InsertsUI.h"
 #include "CompressorPanel.h"
+#include "ShuttlePanel.h"
 
 /** Fixed console geometry, in desk units (pixels at 100% zoom). */
 namespace DeskLayout
@@ -186,6 +187,7 @@ public:
 
     void setCassetteAnimated (bool a) { cassette.setAnimated (a); }
     void setCassetteFrozen (bool f) { cassette.setFrozen (f); }
+    ShuttlePanel& getShuttle() { return shuttle; }
 
 private:
     AudioEngine& engine;
@@ -208,7 +210,7 @@ private:
     ParamButton wowButton;
     juce::Rectangle<int> locateBox;
     juce::int64 shownIn = -1, shownOut = -1;
-    juce::OwnedArray<Knob> groupEqKnobs;   // [sub][band][gain, freq]
+    juce::OwnedArray<Knob> groupEqKnobs;   // [sub][band] gain (fixed bands)
 
     std::array<std::array<LedMeter, 2>, Config::numSubs> subMeters;
     std::array<LedMeter, Config::numAux> auxMeters;
@@ -217,6 +219,8 @@ private:
     juce::Label mainScribble;
     BusCompPanel busPanel;
     InsertsSection inserts;
+    ShuttlePanel shuttle;          // jog / shuttle, In / Out keys and locate memories, right of the group EQ
+    juce::Rectangle<int> shuttleBox;
     juce::Rectangle<int> insertsBox;
     juce::OwnedArray<Fader> busFaders;          // Sub 1-4, then A1-A8
     juce::OwnedArray<juce::Label> busScribbles;
@@ -226,12 +230,18 @@ private:
     Knob monitorLevel, tbLevel;
     TalkButton talkButton;
     juce::TextButton tbSetup { "Setup" };
+    XlrSocket tbMic;               // talkback mic in: right-click picks the interface input patched to TB In
+    juce::String shownTbMic { "?" };   // anything update() can't produce, so the first update sets the tooltip
+    static constexpr int tbMicH = 44;
+    PluginContext* context;        // its `changed` saves the routing
     juce::Rectangle<int> deckBox, armBox, levelBox, groupEqBox, meterBox, appBox, monitorBox;
 
     /** Centre of meter slot i in the meter panel: subs, then auxes, then main (with room for the LIM lamp). */
     float meterSlotX (int slot) const { return (float) meterBox.getX() + 10.0f + ((float) slot + 0.5f) * (float) (meterBox.getWidth() - 50) / 13.0f; }
 
     void openErase();
+    void showTbMicMenu();
+    juce::String tbMicInputName() const;   // the interface input on TB In, or empty
 };
 
 /** A bank of 16 channel strips (the inputs or the tape returns). */
@@ -330,6 +340,8 @@ public:
     void setCassetteAnimated (bool a) { centre.setCassetteAnimated (a); }
     /** Frozen: the console's cassette holds still entirely (while the Tape machine window is up). */
     void setCassetteFrozen (bool f) { centre.setCassetteFrozen (f); }
+    /** The Jog / shuttle box (its keys have keyboard shortcuts). */
+    ShuttlePanel& getShuttle() { return centre.getShuttle(); }
 
     /** Lets every channel's EQ, gate and compressor be reordered (Options > Unlock chain order). */
     void setChainUnlocked (bool);

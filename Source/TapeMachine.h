@@ -85,10 +85,30 @@ public:
         the end of the recording. Stop brakes; Play and locate take over at once. Message thread. */
     void rewind();
     void fastForward();
+    /** Autolocate: wind to a position the way Rew / F Fwd do (speeding up, then braking to arrive exactly there).
+        Used by RTZ and the locate memories. Message thread. */
+    void windTo (juce::int64 samplePosition);
     int  getWindDirection() const noexcept { return windRequest.load(); }   // -1 rewind, +1 fast forward, 0 none
     bool isWinding() const noexcept { return windRequest.load() != 0 || windSpeed.load() != 0.0f; }
     float getWindSpeed() const noexcept { return windSpeed.load(); }        // signed, times play speed
     static constexpr double windMaxSpeed = 20.0, windRampSeconds = 3.0, windBrakeSeconds = 0.6;
+
+    /** The shuttle ring: wind at `speed` times play speed (signed; 0 stops). The tape gets there within a
+        fraction of a second, and stops at the start or the end of the recording. Takes over from Play, Rew and
+        F Fwd. Message thread. */
+    void setShuttle (float speed);
+    float getShuttle() const noexcept { return shuttleOn.load() ? shuttleTarget.load() : 0.0f; }
+    static constexpr float shuttleMaxSpeed = 32.0f;
+    /** The jog wheel: move the tape by `samples` (signed). The tape follows smoothly. Message thread. */
+    void jog (double samples);
+    /** Scrub: while the shuttle or the jog wheel moves the tape you hear it, at that speed and direction. */
+    std::atomic<bool> scrubOn { false };
+
+    /** Locate memories (saved with the session): tape positions, -1 = empty. Message thread. */
+    static constexpr int numMemories = 6;
+    void setMemory (int m, juce::int64 p) { if (juce::isPositiveAndBelow (m, numMemories)) memories[(size_t) m] = p; }
+    juce::int64 getMemory (int m) const { return juce::isPositiveAndBelow (m, numMemories) ? memories[(size_t) m] : -1; }
+
     void setRecordEnabled (bool);
     void eraseAll();
 
@@ -178,8 +198,20 @@ private:
     std::atomic<int> windRequest { 0 };
     std::atomic<float> windSpeed { 0.0f };
     std::atomic<bool> windReset { false };
+    std::atomic<juce::int64> windTarget { -1 };   // windTo: where the wind ends (-1: Rew / F Fwd, to either end)
     double windVel = 0.0, windPos = 0.0;   // audio thread: signed speed (times play speed), fractional position
     void wind (int numSamples) noexcept;
+
+    // Shuttle and jog (see setShuttle / jog), and scrubbing the tape they move.
+    std::atomic<float> shuttleTarget { 0.0f };
+    std::atomic<bool> shuttleOn { false }, jogOn { false };
+    std::atomic<double> jogTarget { 0.0 };
+    bool moving = false;                   // audio thread: windPos is live (it follows pos otherwise)
+    float scrubGain = 0.0f;
+    std::array<std::array<float, 2>, numTracks> scrubLowPass {};
+    void scrub (float* const* tapeOut, int numSamples, double from, double to, bool audible) noexcept;
+    float sampleAt (int track, juce::int64 p) const noexcept;
+    std::array<juce::int64, numMemories> memories;
     std::atomic<juce::int64> inPoint { 0 }, outPoint { 0 };
     std::array<std::atomic<std::uint32_t>, numTracks> trackRevision {};
     std::array<std::unique_ptr<std::atomic<bool>[]>, numTracks> chunkChanged;   // maxChunks each

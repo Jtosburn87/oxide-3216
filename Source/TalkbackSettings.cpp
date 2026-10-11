@@ -25,7 +25,6 @@ void TalkbackSettings::show (AudioEngine& engine)
 
 TalkbackSettings::TalkbackSettings (AudioEngine& e)
     : engine (e),
-      dimButton (*e.tbDim, "Dim the monitors while talking"),
       limiterButton (*e.tbThroughLimiter, "Talkback through the TB limiter"),
       inputKnob (*e.tbLimInput, "Input", juce::Colour (0xffd6392d)),
       blendKnob (*e.tbLimBlend, "Blend", juce::Colour (0xffd9d6cc)),
@@ -37,10 +36,8 @@ TalkbackSettings::TalkbackSettings (AudioEngine& e)
         b->setTooltip ("Talkback into aux " + juce::String (AudioEngine::firstTalkbackAux + k + 1) + "'s output");
         addAndMakeVisible (b);
     }
-    dimButton.setTooltip ("Turn the monitor outs down 15 dB while Talk is on, so the talkback mic does not feed back");
     limiterButton.setTooltip ("The talkback mic goes through the TB limiter. Patching TB Lim In on the patch bay breaks this: "
                               "the talkback then goes dry and the limiter works on what is patched in");
-    addAndMakeVisible (dimButton);
     addAndMakeVisible (limiterButton);
 
     const auto db = [] (float v) { return (v > 0.05f ? "+" : "") + juce::String (v, 1) + " dB"; };
@@ -65,7 +62,7 @@ TalkbackSettings::TalkbackSettings (AudioEngine& e)
     note.setJustificationType (juce::Justification::topLeft);
     addAndMakeVisible (note);
 
-    setSize (440, 424);
+    setSize (440, 412);
     startTimerHz (30);
 }
 
@@ -78,18 +75,13 @@ void TalkbackSettings::resized()
 {
     auto area = getLocalBounds().reduced (16, 12);
 
-    routeBox = area.removeFromTop (110);
+    routeBox = area.removeFromTop (98);
     {
+        // Aux 1-4 over Aux 5-8.
         auto r = routeBox.reduced (10, 0).withTrimmedTop (22);
-        auto row = r.removeFromTop (28);
-        const int w = (row.getWidth() - 3 * 6) / 4;
-        for (auto* b : auxButtons)
-        {
-            b->setBounds (row.removeFromLeft (w));
-            row.removeFromLeft (6);
-        }
-        r.removeFromTop (10);
-        dimButton.setBounds (r.removeFromTop (28));
+        const int perRow = 4, w = (r.getWidth() - (perRow - 1) * 6) / perRow;
+        for (int i = 0; i < auxButtons.size(); ++i)
+            auxButtons[i]->setBounds (r.getX() + (i % perRow) * (w + 6), r.getY() + (i / perRow) * 34, w, 28);
     }
 
     area.removeFromTop (12);

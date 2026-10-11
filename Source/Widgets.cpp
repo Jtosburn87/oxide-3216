@@ -430,3 +430,67 @@ void TransportKey::paintButton (juce::Graphics& g, bool isMouseOver, bool isButt
     }
     paintIcon (g, key, juce::Colour (0xffe9ebec).withMultipliedAlpha (isEnabled() ? 1.0f : 0.4f));
 }
+
+//==============================================================================
+void XlrSocket::paint (juce::Graphics& g)
+{
+    const auto area = getLocalBounds().toFloat();
+    const float size = juce::jmin (area.getWidth(), area.getHeight());
+    const auto flange = area.withSizeKeepingCentre (size, size).reduced (1.0f);
+    const auto c = flange.getCentre();
+    const float r = size * 0.36f;
+
+    // D-size mounting flange with two screws on the diagonal.
+    g.setColour (juce::Colour (0xff1c1e20));
+    g.fillRoundedRectangle (flange, size * 0.12f);
+    g.setColour (juce::Colour (0xff3a3e41));
+    g.drawRoundedRectangle (flange.reduced (0.5f), size * 0.12f, 1.0f);
+    const float screw = size * 0.075f;
+    for (auto p : { flange.getTopLeft() + juce::Point<float> (size * 0.13f, size * 0.13f),
+                    flange.getBottomRight() - juce::Point<float> (size * 0.13f, size * 0.13f) })
+    {
+        g.setColour (juce::Colour (0xff8a9095));
+        g.fillEllipse (juce::Rectangle<float> (screw * 2.0f, screw * 2.0f).withCentre (p));
+        g.setColour (juce::Colour (0xff2a2d2f));
+        g.drawLine (p.x - screw * 0.7f, p.y, p.x + screw * 0.7f, p.y, 1.0f);
+    }
+
+    // Metal shell.
+    const auto shell = juce::Rectangle<float> (r * 2.0f, r * 2.0f).withCentre (c);
+    g.setGradientFill (juce::ColourGradient (juce::Colour (0xffdfe3e5), shell.getX(), shell.getY(),
+                                             juce::Colour (0xff6c7276), shell.getRight(), shell.getBottom(), false));
+    g.fillEllipse (shell);
+    g.setColour (juce::Colours::black.withAlpha (0.5f));
+    g.drawEllipse (shell, 1.0f);
+
+    // Latch tab above the shell.
+    const auto tab = juce::Rectangle<float> (r * 0.55f, r * 0.32f).withCentre ({ c.x, shell.getY() - r * 0.05f });
+    g.setColour (juce::Colour (0xffb9bec1));
+    g.fillRoundedRectangle (tab, 1.5f);
+    g.setColour (juce::Colours::black.withAlpha (0.45f));
+    g.drawRoundedRectangle (tab, 1.5f, 0.8f);
+
+    // Black insert with its key slot at the top, and the three contact holes (pins 1 and 2 above, 3 below).
+    const float ri = r * 0.76f;
+    g.setColour (juce::Colour (0xff111213));
+    g.fillEllipse (juce::Rectangle<float> (ri * 2.0f, ri * 2.0f).withCentre (c));
+    g.setColour (juce::Colour (0xff8d9397));
+    g.fillRect (juce::Rectangle<float> (ri * 0.32f, ri * 0.24f).withCentre ({ c.x, c.y - ri * 0.9f }));
+    const float hole = ri * 0.17f;
+    for (auto p : { juce::Point<float> (c.x - ri * 0.42f, c.y - ri * 0.12f),
+                    juce::Point<float> (c.x + ri * 0.42f, c.y - ri * 0.12f),
+                    juce::Point<float> (c.x, c.y + ri * 0.45f) })
+    {
+        const auto h = juce::Rectangle<float> (hole * 2.0f, hole * 2.0f).withCentre (p);
+        g.setColour (juce::Colour (0xff3b3f42));
+        g.fillEllipse (h.expanded (1.0f));
+        g.setColour (juce::Colours::black);
+        g.fillEllipse (h);
+    }
+}
+
+void XlrSocket::mouseUp (const juce::MouseEvent& e)
+{
+    if (e.mods.isPopupMenu() && getLocalBounds().contains (e.getPosition()) && onPopupMenu)
+        onPopupMenu();
+}
