@@ -67,6 +67,9 @@ namespace
         {
             for (auto* s : inputStrips)
                 s->controls.fader->set (80.0f);
+            for (auto* bank : { &inputStrips, &returnStrips })
+                for (auto* s : *bank)
+                    s->controls.gateIn->set (1.0f);   // gates default to out; the gate tests need them in
             preampColour->set (0.0f);   // clean preamps, so levels are exact (testPreampColour covers the colour)
         }
     };
@@ -645,6 +648,9 @@ namespace
         check (nearDb (r.measure (1000.0f, 0.001f, 400) / 0.001f, -40.0f, 1.0f), "gate in: quiet signal cut 40 dB");
         s.controls.gateIn->set (0.0f);
         check (nearDb (r.measure (1000.0f, 0.001f) / 0.001f, 0.0f, 0.1f), "gate out: quiet signal passes");
+        s.controls.gateIn->set (1.0f);
+        s.controls.gateIn->reset();
+        check (! s.controls.gateIn->on(), "gates default to out");
     }
 
     void testGateRelease()
@@ -1499,6 +1505,23 @@ namespace
         e.setPatch (P::returnIn + 4, bit (P::mainL));
         settle (e, b);
         check (std::isfinite (b.out[0][10]), "patching main back in stays stable");
+
+        // Pull all cables: back to the default patch.
+        e.setInterfaceInput (P::tapeIn + 0, 1);
+        e.setInterfaceInput (P::interfaceOut + 2, 0);
+        e.setInputSource (5, 0);
+        e.resetPatchToDefault();
+        bool noCables = true, noWires = true, oneToOne = true;
+        for (int d = 0; d < P::numDestinations; ++d)
+        {
+            noCables = noCables && e.getPatch (d) == 0;
+            if (d < P::channelIn || d >= P::channelIn + AudioEngine::numConsoleInputs)
+                noWires = noWires && e.getInterfaceInput (d) < 0;
+        }
+        for (int c = 0; c < AudioEngine::numConsoleInputs; ++c)
+            oneToOne = oneToOne && e.getInputSource (c) == c;
+        check (noCables && noWires && oneToOne, "reset: no cables, no interface wires, channel strips 1 to 1");
+        check (near (tapeLevel (0), 0.25f), "reset: the channel 1 -> tape 1 normal is back");
     }
 
     /** Stand-in for a VST3: gain plus a fixed latency (a pure delay), optionally with a mono input. */
@@ -1668,6 +1691,15 @@ namespace
             check (chain.getDescription (1).name == "B" && chain.getDescription (2).name.isEmpty(), "move a plugin up");
             const auto xml = chain.toXml();
             check (xml->getNumChildElements() == 2 && xml->getChildElement (1)->getIntAttribute ("index") == 1, "chain saves its slots");
+
+            // The FX light follows the chain even when nothing processes it (e.g. an aux off main).
+            check (chain.isActive(), "a chain with plugins is active before any audio");
+            chain.setBypassed (0, true);
+            chain.setBypassed (1, true);
+            check (! chain.isActive(), "every plugin bypassed: not active");
+            chain.setBypassed (0, false);
+            chain.clearAll();
+            check (! chain.isActive() && chain.getLatency() == 0, "emptied without processing: not active");
         }
     }
 

@@ -8,6 +8,7 @@ namespace
     // Design geometry: two rows of modules under the name strip. Top: Input, Equaliser, Gate (with its
     // side chain). Bottom: Compressor, Aux sends, Output. The last module of each row takes the spare width.
     constexpr int margin = 12, gap = 12, sideW = 110, eqW = 4 * 54 + 14, auxW = 4 * 48 + 10;
+    constexpr int arrowW = 30;   // the previous / next channel buttons
     constexpr int row1Y = 46, row1H = 186, row2Y = row1Y + row1H + 24, row2H = 228;
     constexpr int gateW = ChannelStripPanel::designW - 2 * margin - 2 * gap - sideW - eqW;
     constexpr int outputW = ChannelStripPanel::designW - 2 * margin - 2 * gap - sideW - auxW;
@@ -16,6 +17,149 @@ namespace
     /** Every In button sits at the right end of its section's title line. */
     juce::Rectangle<int> inButtonAt (juce::Rectangle<int> section) { return { section.getRight() - 40, section.getY() - 7, 32, 14 }; }
 }
+
+//==============================================================================
+/** The header's signal chain: EQ, gate (or de-esser) and compressor as blocks in processing order.
+    Unlocked, a block can be dragged to another place; dropping it sets the channel's chain order. */
+class ChannelStripPanel::ChainBlocks : public juce::Component
+{
+public:
+    ChainBlocks (ChannelStrip& s, std::function<bool()> deEsser) : strip (s), isDeEsser (std::move (deEsser))
+    {
+        lockButton.setClickingTogglesState (true);
+        lockButton.setToggleState (true, juce::dontSendNotification);
+        lockButton.setTooltip ("Padlock closed: the chain order stays put. Click to open it, then drag the blocks into another order");
+        lockButton.onClick = [this] { setMouseCursor (locked() ? juce::MouseCursor::NormalCursor : juce::MouseCursor::DraggingHandCursor); repaint(); };
+        addAndMakeVisible (lockButton);
+    }
+
+    static constexpr int lockW = 26, blockW = 70, arrowW = 14, labelW = 40;
+    static constexpr int preferredWidth = lockW + 6 + labelW + 3 * blockW + 2 * arrowW;
+
+    void resized() override { lockButton.setBounds (0, 0, lockW, getHeight()); }
+
+    void paint (juce::Graphics& g) override
+    {
+        g.setFont (ConsoleLookAndFeel::uiFont (11.0f));
+        g.setColour (ConsoleColours::legend);
+        g.drawText ("Chain:", juce::Rectangle<int> (lockW + 6, 0, labelW, getHeight()), juce::Justification::centredLeft, false);
+
+        const auto order = shownOrder();
+        const char* const names[] = { "Equaliser", "Gate", "Compressor" };
+        for (int i = 0; i < 3; ++i)
+        {
+            if (i > 0)
+            {
+                g.setColour (ConsoleColours::legend.withAlpha (0.7f));
+                g.drawText (juce::String (juce::CharPointer_UTF8 ("\xe2\x86\x92")),   // arrow
+                            juce::Rectangle<int> (slotX (i) - arrowW, 0, arrowW, getHeight()), juce::Justification::centred, false);
+            }
+            if (order[(size_t) i] != draggedStage)
+                paintBlock (g, order[(size_t) i], juce::Rectangle<int> (slotX (i), 0, blockW, getHeight()), names);
+        }
+        if (draggedStage >= 0)
+            paintBlock (g, draggedStage, juce::Rectangle<int> (dragX, 0, blockW, getHeight()), names);
+    }
+
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        if (locked())
+            return;
+        const auto order = strip.chain();
+        for (int i = 0; i < 3; ++i)
+            if (juce::Rectangle<int> (slotX (i), 0, blockW, getHeight()).contains (e.getPosition()))
+            {
+                draggedStage = order[(size_t) i];
+                grabOffset = e.x - slotX (i);
+                dragX = slotX (i);
+                repaint();
+            }
+    }
+
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        if (draggedStage < 0)
+            return;
+        dragX = juce::jlimit (slotX (0), slotX (2), e.x - grabOffset);
+        repaint();
+    }
+
+    void mouseUp (const juce::MouseEvent&) override
+    {
+        if (draggedStage < 0)
+            return;
+        const auto order = shownOrder();
+        draggedStage = -1;
+        if (order != strip.chain())
+            strip.setChain (order);   // the panel sees the new order on its timer
+        repaint();
+    }
+
+private:
+    ChannelStrip& strip;
+    std::function<bool()> isDeEsser;
+    /** A padlock: closed (lit) while locked, open while unlocked. */
+    struct LockButton : juce::TextButton
+    {
+        LockButton() { setTitle ("Lock chain order"); }
+
+        void paintButton (juce::Graphics& g, bool over, bool down) override
+        {
+            const bool on = getToggleState();
+            getLookAndFeel().drawButtonBackground (g, *this, findColour (on ? buttonOnColourId : buttonColourId), over, down);
+
+            const auto c = getLocalBounds().toFloat().getCentre();
+            const auto body = juce::Rectangle<float> (c.x - 5.5f, c.y - 1.5f, 11.0f, 8.0f);
+            g.setColour (on ? juce::Colour (0xff141516) : ConsoleColours::legend);
+            g.fillRoundedRectangle (body, 1.5f);
+
+            // The shackle: closed into both sides of the body, or lifted and swung open on the right.
+            juce::Path shackle;
+            const float r = 3.5f, top = body.getY() - (on ? 4.0f : 6.0f);
+            shackle.startNewSubPath (c.x - r, body.getY());
+            shackle.lineTo (c.x - r, top);
+            shackle.addCentredArc (c.x, top, r, r, 0.0f, -juce::MathConstants<float>::halfPi, juce::MathConstants<float>::halfPi);
+            shackle.lineTo (c.x + r, on ? body.getY() : top + 1.5f);
+            g.strokePath (shackle, juce::PathStrokeType (1.6f));
+        }
+    };
+
+    LockButton lockButton;
+    int draggedStage = -1, grabOffset = 0, dragX = 0;
+
+    bool locked() const { return lockButton.getToggleState(); }
+    int slotX (int i) const { return lockW + 6 + labelW + i * (blockW + arrowW); }
+
+    /** The chain as shown: while a block is dragged, it takes the slot nearest to it and the others close up. */
+    ChannelStrip::Chain shownOrder() const
+    {
+        auto order = strip.chain();
+        if (draggedStage < 0)
+            return order;
+        const int target = juce::jlimit (0, 2, juce::roundToInt ((float) (dragX - slotX (0)) / (float) (blockW + arrowW)));
+        ChannelStrip::Chain result {};
+        int from = 0;
+        for (int i = 0; i < 3; ++i)
+        {
+            if (i == target) { result[(size_t) i] = draggedStage; continue; }
+            if (order[(size_t) from] == draggedStage) ++from;
+            result[(size_t) i] = order[(size_t) from++];
+        }
+        return result;
+    }
+
+    void paintBlock (juce::Graphics& g, int stage, juce::Rectangle<int> r, const char* const* names) const
+    {
+        const bool dragged = stage == draggedStage;
+        const auto box = r.toFloat().reduced (0.5f, 1.5f);
+        g.setColour (dragged ? ConsoleColours::amber : juce::Colours::black.withAlpha (locked() ? 0.25f : 0.4f));
+        g.fillRoundedRectangle (box, 3.0f);
+        g.setColour (locked() ? juce::Colour (0xff8e9598) : ConsoleColours::amber);
+        g.drawRoundedRectangle (box, 3.0f, 1.0f);
+        g.setColour (dragged ? juce::Colours::black : ConsoleColours::legend);
+        g.drawText (stage == 1 && isDeEsser() ? juce::String ("De-esser") : juce::String (names[stage]), r, juce::Justification::centred, false);
+    }
+};
 
 //==============================================================================
 ChannelStripPanel::ChannelStripPanel (ChannelStrip& s, StripBank& consoleBank, int stripIndex)
@@ -51,6 +195,24 @@ ChannelStripPanel::ChannelStripPanel (ChannelStrip& s, StripBank& consoleBank, i
     scribble.setTooltip ("Double-click to rename");
     scribble.onTextChange = [this] { strip.name = scribble.getText(); };
     add (scribble);
+
+    // Previous / next channel in this bank (wrapping round). Asked for after the click has finished,
+    // because the window replaces this panel.
+    prevButton.setButtonText (juce::CharPointer_UTF8 ("\xe2\x97\x80"));   // left triangle
+    nextButton.setButtonText (juce::CharPointer_UTF8 ("\xe2\x96\xb6"));   // right triangle
+    prevButton.setTitle ("Previous channel");
+    nextButton.setTitle ("Next channel");
+    prevButton.setTooltip ("Previous channel in this bank (1 goes round to 16)");
+    nextButton.setTooltip ("Next channel in this bank (16 goes round to 1)");
+    for (auto [button, delta] : { std::pair<juce::TextButton*, int> { &prevButton, -1 }, std::pair<juce::TextButton*, int> { &nextButton, 1 } })
+    {
+        button->onClick = [this, d = delta]
+        {
+            if (auto step = onStep)
+                juce::MessageManager::callAsync ([step, d] { step (d); });
+        };
+        add (*button);
+    }
 
     hpf.setFormatter ([] (float f) { return f < 20.5f ? juce::String ("off") : formatHz (f); });
     hpf.setEndLabels ("20", "300");
@@ -173,12 +335,12 @@ ChannelStripPanel::ChannelStripPanel (ChannelStrip& s, StripBank& consoleBank, i
         deWide->setTooltip ("Narrow (off): a band around the frequency. Wide (on): everything above it");
         deGentle = std::make_unique<ParamButton> (*d->gentle, "Gentle");
         deGentle->setTooltip ("Full (off): the whole signal comes down on an s. Gentle (on): only the sibilant band does");
-        deBypass = std::make_unique<ParamButton> (*d->bypass, "Byp");
-        deBypass->setTooltip ("Bypass the de-esser");
-        redButton (*deBypass);
+        deIn = std::make_unique<ParamButton> (*d->bypass, "In");
+        deIn->setInverted (true);   // lit = in (the setting itself is still the bypass)
+        deIn->setTooltip ("De-esser in (out = bypassed)");
         deMeter.setTooltip ("De-esser: how far it is turning the signal down (full = 20 dB)");
         for (juce::Component* c : { (juce::Component*) deFreq.get(), (juce::Component*) deReduction.get(),
-                                    (juce::Component*) deWide.get(), (juce::Component*) deGentle.get(), (juce::Component*) deBypass.get(),
+                                    (juce::Component*) deWide.get(), (juce::Component*) deGentle.get(), (juce::Component*) deIn.get(),
                                     (juce::Component*) &deMeter })
             addChildComponent (c);
 
@@ -187,6 +349,9 @@ ChannelStripPanel::ChannelStripPanel (ChannelStrip& s, StripBank& consoleBank, i
         gateModeButton.onClick = [d] { d->on->toggle(); };
         add (gateModeButton);
     }
+
+    chainBlocks = std::make_unique<ChainBlocks> (s, [this] { return shownDeEss; });
+    add (*chainBlocks);
 
     lastPops = s.gate.popCount.load();
     setSize (designW, designH);
@@ -219,7 +384,7 @@ void ChannelStripPanel::updateVisibility()
     for (auto* b : scTypeButtons)
         b->setVisible (! shownDeEss);
     for (juce::Component* c : { (juce::Component*) deFreq.get(), (juce::Component*) deReduction.get(), (juce::Component*) deWide.get(),
-                                (juce::Component*) deGentle.get(), (juce::Component*) deBypass.get() })
+                                (juce::Component*) deGentle.get(), (juce::Component*) deIn.get() })
         if (c != nullptr)
             c->setVisible (shownDeEss);
     deMeter.setVisible (shownDeEss);
@@ -272,7 +437,11 @@ void ChannelStripPanel::timerCallback()
 void ChannelStripPanel::resized()
 {
     modules.clear();
-    scribble.setBounds (margin, 10, 180, 22);
+    // Header: the name between the two arrows; the chain order at the right.
+    prevButton.setBounds (margin, 10, arrowW, 22);
+    scribble.setBounds (prevButton.getRight() + 6, 10, 180, 22);
+    nextButton.setBounds (scribble.getRight() + 6, 10, arrowW, 22);
+    chainBlocks->setBounds (getWidth() - margin - ChainBlocks::preferredWidth, 10, ChainBlocks::preferredWidth, 22);
 
     int x = margin, y = row1Y, h = row1H;
     const auto module = [&] (const juce::String& title, int w)
@@ -340,11 +509,10 @@ void ChannelStripPanel::resized()
                 deFreq->setBounds (knobAt (leftOf (b), b.getY() + 12));
                 deReduction->setBounds (knobAt (rightOf (b), b.getY() + 12));
                 auto row = juce::Rectangle<int> (b.getX() + 4, b.getY() + 70, b.getWidth() - 8, 18);
-                deWide->setBounds (row.removeFromLeft (30));
+                deWide->setBounds (row.removeFromLeft (row.getWidth() / 2 - 1));
                 row.removeFromLeft (2);
-                deBypass->setBounds (row.removeFromRight (26));
-                row.removeFromRight (2);
                 deGentle->setBounds (row);
+                deIn->setBounds (inButtonAt (all));
             }
         }
     }
@@ -399,15 +567,6 @@ void ChannelStripPanel::resized()
     shownChain = strip.chain();
 }
 
-juce::String ChannelStripPanel::chainText() const
-{
-    const char* const names[] = { "Equaliser", "Gate", "Compressor" };
-    juce::StringArray parts;
-    for (const int stage : strip.chain())
-        parts.add (stage == 1 && shownDeEss ? "De-esser" : names[stage]);
-    return "Signal chain: " + parts.joinIntoString (juce::String (juce::CharPointer_UTF8 (" \xe2\x86\x92 ")));   // arrows
-}
-
 void ChannelStripPanel::paint (juce::Graphics& g)
 {
     g.fillAll (stripGrey);
@@ -418,11 +577,6 @@ void ChannelStripPanel::paint (juce::Graphics& g)
         paintSection (g, m.title, m.box, stripGrey);
     if (! shownDeEss)
         paintSection (g, "Side chain", scBox, stripGrey);
-
-    // The modules sit in fixed places; the order the signal actually goes through them is printed here.
-    g.setFont (ConsoleLookAndFeel::uiFont (11.0f));
-    g.setColour (legend);
-    g.drawText (chainText(), juce::Rectangle<int> (200, 10, getWidth() - 200 - margin, 22), juce::Justification::centredRight, false);
 
     // What the two meters show, under each one.
     g.setFont (ConsoleLookAndFeel::uiFont (9.0f));
@@ -441,10 +595,20 @@ void ChannelStripPanel::paint (juce::Graphics& g)
 class ChannelStripWindow::Content : public juce::Component
 {
 public:
-    Content (ChannelStrip& s, StripBank& b, int i) : panel (s, b, i)
+    Content (ChannelStrip& s, StripBank& b, int i, std::function<void (int)> step) : onStep (std::move (step))
     {
-        addAndMakeVisible (panel);
+        setStrip (s, b, i);
         setSize (ChannelStripPanel::designW * 8 / 5, ChannelStripPanel::designH * 8 / 5);
+    }
+
+    /** A new panel for another channel (the old one goes). */
+    void setStrip (ChannelStrip& s, StripBank& b, int i)
+    {
+        panel.reset();
+        panel = std::make_unique<ChannelStripPanel> (s, b, i);
+        panel->onStep = onStep;
+        addAndMakeVisible (*panel);
+        resized();
     }
 
     void paint (juce::Graphics& g) override { g.fillAll (ConsoleColours::stripGrey); }
@@ -452,20 +616,28 @@ public:
     void resized() override
     {
         const float s = juce::jmin ((float) getWidth() / ChannelStripPanel::designW, (float) getHeight() / ChannelStripPanel::designH);
-        panel.setTransform (juce::AffineTransform::scale (s).translated ((getWidth() - s * ChannelStripPanel::designW) * 0.5f,
-                                                                         (getHeight() - s * ChannelStripPanel::designH) * 0.5f));
+        panel->setTransform (juce::AffineTransform::scale (s).translated ((getWidth() - s * ChannelStripPanel::designW) * 0.5f,
+                                                                          (getHeight() - s * ChannelStripPanel::designH) * 0.5f));
     }
 
-    ChannelStripPanel panel;
+private:
+    std::function<void (int)> onStep;
+    std::unique_ptr<ChannelStripPanel> panel;
 };
 
 ChannelStripWindow::ChannelStripWindow (const juce::String& title, ChannelStrip& s, StripBank& b, int i,
-                                        std::function<void()> close, std::function<bool (const juce::KeyPress&)> keyHandler)
+                                        std::function<bool (const juce::KeyPress&)> keyHandler)
     : juce::DocumentWindow (title, ConsoleColours::stripGrey, juce::DocumentWindow::allButtons),
-      onClose (std::move (close)), keys (std::move (keyHandler))
+      keys (std::move (keyHandler))
 {
     setUsingNativeTitleBar (true);
-    setContentOwned (new Content (s, b, i), true);
+    // The arrows ask after the click has finished; by then this window may have closed.
+    content = new Content (s, b, i, [safe = juce::Component::SafePointer<ChannelStripWindow> (this)] (int delta)
+    {
+        if (safe != nullptr && safe->onStep)
+            safe->onStep (delta);
+    });
+    setContentOwned (content, true);
 
     // Fit the screen if the usual size (160 %) is too big for it.
     const auto screen = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay()->userArea;
@@ -477,4 +649,10 @@ ChannelStripWindow::ChannelStripWindow (const juce::String& title, ChannelStrip&
     setResizable (true, false);
     centreWithSize (juce::roundToInt (ChannelStripPanel::designW * z), juce::roundToInt (ChannelStripPanel::designH * z));
     setVisible (true);
+}
+
+void ChannelStripWindow::showStrip (const juce::String& title, ChannelStrip& s, StripBank& b, int i)
+{
+    setName (title);
+    content->setStrip (s, b, i);
 }

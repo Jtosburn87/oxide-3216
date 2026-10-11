@@ -83,6 +83,8 @@ public:
     void setPatch (int destination, std::uint64_t sources);
     std::uint64_t getPatch (int destination) const;
     void clearPatch();
+    /** The default patch: no cables, no interface inputs wired into the bay, channel strip N from interface input N. */
+    void resetPatchToDefault();
 
     /** Extra recording offset in samples, added to the latency the driver reports.
         Positive = the driver under-reports its latency. */

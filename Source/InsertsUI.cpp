@@ -278,7 +278,7 @@ void InsertsSection::timerCallback()
         const auto text = n == 0 ? juce::String ("FX") : "FX " + juce::String (n);
         if (c.fx->getButtonText() != text)
             c.fx->setButtonText (text);
-        c.fx->setToggleState (c.chain->isActive(), juce::dontSendNotification);
+        c.fx->setToggleState (n > 0, juce::dontSendNotification);   // lit while any plugin is inserted, bypassed or not
     }
 }
 

@@ -9,9 +9,9 @@ namespace
 {
     constexpr int topBarH = 48;
 
-    /** Touchscreens: the console's viewport scrolls when a finger drags across it. Controls opt out, so a
-        drag that starts on a fader, knob, button or text field works that control and leaves the view
-        alone; dragging on the panels between them still scrolls. */
+    /** Touchscreens: a pinch that starts on the panels zooms the console. Controls opt out, so a
+        touch that starts on a fader, knob, button or text field works that control and leaves the view
+        alone. Touch never scrolls: the scroll bars do (TouchPanZoom). */
     void keepTouchDragsOnControls (juce::Component& c)
     {
         const auto* label = dynamic_cast<juce::Label*> (&c);
@@ -40,6 +40,7 @@ MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionControll
     patchButton.onClick = [this] { patchBay.setVisible (true); patchBay.toFront (true); };
     patchBay.onClose = [this] { patchBay.setVisible (false); patchButton.grabKeyboardFocus(); };
     addChildComponent (patchBay);
+    addChildComponent (topEdgeBar);   // shows itself at the top edge in full screen
 
     rackButton.setTooltip ("Every insert slot at once, as racks of outboard gear");
     rackButton.onClick = [this]
@@ -125,6 +126,7 @@ MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionControll
     deskHolder.addAndMakeVisible (desk);
     viewport.setViewedComponent (&deskHolder, false);
     viewport.setScrollBarsShown (true, true);
+    viewport.setScrollBarThickness (16);   // the scroll bars are how you get round (touch never scrolls): easy to grab
     addAndMakeVisible (viewport);
     touch = std::make_unique<TouchPanZoom> (viewport, [this] { return (float) zoomSlider.getValue() / 100.0f; },
                                             [this] (float z) { zoomSlider.setValue (z * 100.0f, juce::sendNotificationSync); });
@@ -196,6 +198,17 @@ void MainComponent::fitToWindow()
     scaleY = juce::jlimit (0.3, 2.0, viewport.getHeight() / (double) desk.getHeight());
     if (centreSectionAlone())
         scaleX = scaleY = juce::jmin (scaleX, scaleY);
+
+    // Both banks on the desk (Full view): squeezed across it looks wrong, so it keeps its proportions and
+    // fills the height; the rest is reached with the scroll bar along the bottom (which takes its own room).
+    if (desk.isOnDesk (Desk::inputSection) && desk.isOnDesk (Desk::returnSection))
+    {
+        const double h = viewport.getHeight();
+        double s = h / desk.getHeight();
+        if (desk.getWidth() * s > viewport.getWidth())
+            s = (h - viewport.getScrollBarThickness()) / desk.getHeight();
+        scaleX = scaleY = juce::jlimit (0.3, 2.0, s);
+    }
     zoomSlider.setValue (juce::jlimit (30.0, 200.0, std::floor (juce::jmin (scaleX, scaleY) * 100.0)), juce::dontSendNotification);
     applyZoom();
 }
@@ -378,7 +391,7 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
 {
     ids.addArray ({ playStop, play, stop, record, rewind, fastForward, returnToZero,
                     newSession, openSession, saveSession, saveSessionAs, exportMix, importAudio,
-                    recordViewCmd, mixViewCmd, fullViewCmd, nextViewCmd,
+                    recordViewCmd, mixViewCmd, fullViewCmd, nextViewCmd, fullScreenCmd,
                     tapeMachineCmd, rackCmd, patchBayCmd, talkbackCmd });
     for (int t = 0; t < TapeMachine::numTracks; ++t)
         ids.add (armTrack1 + t);
@@ -427,6 +440,8 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
                             info.addDefaultKeypress ('3', cmd); break;
         case nextViewCmd:   info.setInfo ("Next view", "Cycles Record, Mix, Full, then back to Record", "View", 0);
                             info.addDefaultKeypress (juce::KeyPress::tabKey, cmd); break;
+        case fullScreenCmd: info.setInfo ("Full screen", "Full screen with no title bar, or back to a normal window", "View", 0);
+                            info.addDefaultKeypress (juce::KeyPress::F11Key, 0); break;
         case tapeMachineCmd: info.setInfo ("Tape Machine", "Opens the Tape Machine window (transport, cassette and meters)", "Windows", 0);
                             info.addDefaultKeypress ('t', cmd); break;
         case rackCmd:       info.setInfo ("Rack", "Opens the effects rack", "Windows", 0);
@@ -467,6 +482,7 @@ bool MainComponent::perform (const InvocationInfo& info)
         case mixViewCmd:    showView (Desk::mixView); return true;
         case fullViewCmd:   showView (Desk::fullView); return true;
         case nextViewCmd:   showView ((desk.getView() + 1) % 3); return true;
+        case fullScreenCmd: if (onToggleFullScreen) onToggleFullScreen(); return true;
         case tapeMachineCmd: tapeMachineButton.onClick(); return true;
         case rackCmd:       rackButton.onClick(); return true;
         case patchBayCmd:   patchButton.onClick(); return true;
@@ -554,6 +570,8 @@ void MainComponent::showSectionsMenu()
         applyCassetteAnimation();
         if (saveSettings) saveSettings();
     });
+    const bool fullScreen = isFullScreenMode != nullptr && isFullScreenMode();
+    m.addItem ("Full screen (F11)", true, fullScreen, [this] { if (onToggleFullScreen) onToggleFullScreen(); });
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (sectionsButton));
 }
 
@@ -629,21 +647,57 @@ void MainComponent::openStripWindow (Desk::Section bank, int strip)
         return;
     }
 
-    const bool inputs = bank == Desk::inputSection;
-    auto& strips = inputs ? engine.inputStrips : engine.returnStrips;
-    const auto title = juce::String ("Oxide-3216  -  ") + (inputs ? "Input " : "Return ") + juce::String (strip + 1);
-    stripWindows[key] = std::make_unique<ChannelStripWindow> (title, *strips[strip], desk.getBank (bank), strip,
-        [this, key]
-        {
-            // Called from the window's close button, so delete it afterwards.
-            if (auto it = stripWindows.find (key); it != stripWindows.end())
-            {
-                it->second->setVisible (false);
-                juce::MessageManager::callAsync ([old = std::shared_ptr<ChannelStripWindow> (it->second.release())] {});
-                stripWindows.erase (it);
-            }
-        },
-        [this] (const juce::KeyPress& k) { return keyPressed (k); });
+    auto& strips = bank == Desk::inputSection ? engine.inputStrips : engine.returnStrips;
+    auto window = std::make_unique<ChannelStripWindow> (stripWindowTitle (bank, strip), *strips[strip], desk.getBank (bank), strip,
+                                                        [this] (const juce::KeyPress& k) { return keyPressed (k); });
+    auto* w = window.get();
+    w->setCallbacks ([this, w] { closeStripWindow (stripWindowKey (w)); },
+                     [this, w] (int delta) { stepStripWindow (w, delta); });
+    stripWindows[key] = std::move (window);
+}
+
+juce::String MainComponent::stripWindowTitle (Desk::Section bank, int strip) const
+{
+    return juce::String ("Oxide-3216  -  ") + (bank == Desk::inputSection ? "Input " : "Return ") + juce::String (strip + 1);
+}
+
+int MainComponent::stripWindowKey (const ChannelStripWindow* w) const
+{
+    for (auto& [key, window] : stripWindows)
+        if (window.get() == w)
+            return key;
+    return -1;
+}
+
+void MainComponent::closeStripWindow (int key)
+{
+    // May be called from the window's own close button, so delete it afterwards.
+    if (auto it = stripWindows.find (key); it != stripWindows.end())
+    {
+        it->second->setVisible (false);
+        juce::MessageManager::callAsync ([old = std::shared_ptr<ChannelStripWindow> (it->second.release())] {});
+        stripWindows.erase (it);
+    }
+}
+
+void MainComponent::stepStripWindow (ChannelStripWindow* w, int delta)
+{
+    // The previous / next channel in the same bank, wrapping round (16 -> 1, 1 -> 16).
+    const int key = stripWindowKey (w);
+    if (key < 0)
+        return;
+    const auto bank = (Desk::Section) (key / 100);
+    auto& strips = bank == Desk::inputSection ? engine.inputStrips : engine.returnStrips;
+    const int n = strips.size();
+    const int strip = ((key % 100 + delta) % n + n) % n;
+    const int newKey = (int) bank * 100 + strip;
+
+    closeStripWindow (newKey);   // that channel was open in a window of its own: this one takes over
+    auto it = stripWindows.find (key);
+    auto window = std::move (it->second);
+    stripWindows.erase (it);
+    window->showStrip (stripWindowTitle (bank, strip), *strips[strip], desk.getBank (bank), strip);
+    stripWindows[newKey] = std::move (window);
 }
 
 void MainComponent::restoreSections()

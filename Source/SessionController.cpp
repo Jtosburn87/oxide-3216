@@ -197,6 +197,7 @@ void SessionController::newSession()
         if (! ok)
             return;
         Session::reset (engine);
+        engine.resetPatchToDefault();   // a new session starts from the default patch, interface wiring included
         folder = juce::File();
         written = {};
         markClean();

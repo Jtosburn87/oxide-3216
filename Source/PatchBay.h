@@ -31,6 +31,9 @@ public:
     /** Every console input channel from the interface input with the same number. */
     void mapInterfaceOneToOne();
 
+    /** Pulls every cable and interface wire and maps the channel strips 1 to 1 (AudioEngine::resetPatchToDefault). */
+    void resetToDefault();
+
     static juce::Colour sourceColour (int source);
     static constexpr int maxInterfaceJacks = 32;
 

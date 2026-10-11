@@ -13,6 +13,15 @@ InsertChain::~InsertChain()
 
 void InsertChain::changed()
 {
+    // process() keeps these up to date, but a chain that is not being processed (an aux return off main,
+    // the idle half of a linked aux pair, the power off) would keep showing plugins that have gone.
+    bool any = false;
+    for (auto& s : slots)
+        any = any || (s.processor != nullptr && ! s.bypassed.load() && ! s.refused.load());
+    active.store (any);
+    if (! any)
+        latency.store (0);
+
     if (onChange)
         onChange();
 }

@@ -14,6 +14,7 @@
 #include "ImportAudioDialog.h"
 #include "SectionWindow.h"
 #include "ChannelStripWindow.h"
+#include "TopEdgeBar.h"
 
 /** Top bar (name plate, zoom, status) above the zoomable desk. The app buttons live on the desk. */
 class MainComponent : public juce::Component,
@@ -30,6 +31,10 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
 
+    /** Set by the main window: full screen on / off (F11, Options menu), and whether it is on. */
+    std::function<void()> onToggleFullScreen;
+    std::function<bool()> isFullScreenMode;
+
     // Commands, each with keys the user can change (Options > Keyboard shortcuts).
     juce::ApplicationCommandTarget* getNextCommandTarget() override { return nullptr; }
     void getAllCommands (juce::Array<juce::CommandID>&) override;
@@ -42,7 +47,7 @@ private:
         playStop = 1, play, stop, record, rewind, fastForward, returnToZero,
         newSession, openSession, saveSession, saveSessionAs, exportMix, importAudio,
         recordViewCmd, mixViewCmd, fullViewCmd, nextViewCmd,
-        tapeMachineCmd, rackCmd, patchBayCmd, talkbackCmd, disarmAllCmd,
+        tapeMachineCmd, rackCmd, patchBayCmd, talkbackCmd, disarmAllCmd, fullScreenCmd,
         armTrack1 = 100   // armTrack1 + t arms / disarms tape track t + 1
     };
     juce::ApplicationCommandManager commands;
@@ -70,15 +75,22 @@ private:
     Desk desk;
     juce::Component deskHolder;   // sized to the zoomed desk, so the viewport scrolls correctly
     juce::Viewport viewport;
-    std::unique_ptr<TouchPanZoom> touch;   // one-finger pan, pinch to zoom
+    std::unique_ptr<TouchPanZoom> touch;   // pinch to zoom (touch never scrolls)
     PatchBayPanel patchBay;
+    TopEdgeBar topEdgeBar { [this] { return isFullScreenMode != nullptr && isFullScreenMode(); },
+                            [this] { if (onToggleFullScreen) onToggleFullScreen(); } };   // full screen's drop-down title bar
 
     // Sections of the console that are out in windows of their own.
     std::array<std::unique_ptr<SectionWindow>, Desk::numSections> sectionWindows;
 
-    // Channel windows (double-click a knob on a strip), keyed by bank * 100 + strip index.
+    // Channel windows (double-click a knob on a strip), keyed by bank * 100 + strip index. A window's key
+    // changes when its arrows step to another channel, so callbacks find it by pointer.
     std::map<int, std::unique_ptr<ChannelStripWindow>> stripWindows;
     void openStripWindow (Desk::Section bank, int strip);
+    void closeStripWindow (int key);
+    void stepStripWindow (ChannelStripWindow*, int delta);
+    int stripWindowKey (const ChannelStripWindow*) const;   // -1 if gone
+    juce::String stripWindowTitle (Desk::Section bank, int strip) const;
     void showSectionsMenu();
     void takeOut (Desk::Section);
     void putBack (Desk::Section);

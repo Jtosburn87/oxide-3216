@@ -21,7 +21,7 @@ ChannelStrip::ChannelStrip (ParamSet& params, const juce::String& prefix, const 
     controls.pan   = &params.add (id ("pan"), "Pan", -1.0f, 1.0f, 0.0f);
     controls.order = &params.addStepped (id ("order"), "Chain order", (int) chainOrders.size(), 0);
     controls.eqIn  = &params.addToggle (id ("eq.in"), "EQ in", true);
-    controls.gateIn = &params.addToggle (id ("gate.in"), "Gate in", true);
+    controls.gateIn = &params.addToggle (id ("gate.in"), "Gate in", false);
     if (withDeEsser)
         deEsser = std::make_unique<DeEsser> (params, prefix);
     controls.main  = &params.addToggle (id ("main"), "Main", true);

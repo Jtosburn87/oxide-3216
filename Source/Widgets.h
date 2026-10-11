@@ -81,8 +81,11 @@ public:
     /** Briefly light the button in red (the gate pop indicator). */
     void flash();
 
+    /** Lit while the toggle is off: an In button for a bypass switch. */
+    void setInverted (bool);
+
 private:
-    bool flashing = false;
+    bool flashing = false, inverted = false;
     void paintButton (juce::Graphics&, bool over, bool down) override;
     void paramChanged (Param&) override;
     void clicked() override;

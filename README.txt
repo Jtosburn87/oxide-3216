@@ -48,7 +48,8 @@ mute, solo, fader. Double-click a scribble strip to rename it.
 
 THE CHANNEL WINDOW: double-click any knob on a channel strip to open that channel big, laid out
 like a channel-strip plugin (Input, Equaliser, Gate / Compressor, Aux sends, Output). Everything in
-it is the console's own control. It also has controls the strip doesn't:
+it is the console's own control. The arrows either side of the name step through the channels of
+the same bank (16 goes round to 1). It also has controls the strip doesn't:
   EQ: LF and HF "Bell" (off = shelf), Q for LMF and HMF.
   Gate: Release, and a side chain (In, HPF / LPF / BPF, Freq, Q) that filters what the gate
   listens to, not the audio.

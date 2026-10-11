@@ -852,6 +852,15 @@ void AudioEngine::clearPatch()
         p.store (0);
 }
 
+void AudioEngine::resetPatchToDefault()
+{
+    clearPatch();
+    for (auto& i : interfaceSource)
+        i.store (-1);
+    for (int c = 0; c < numConsoleInputs; ++c)
+        setInputSource (c, c);
+}
+
 const float* AudioEngine::patchSource (int s, int phase) const noexcept
 {
     // phase: 0 = nothing processed yet this block, 1 = input strips done, 2 = tape done, 3 = returns done, 4 = all.

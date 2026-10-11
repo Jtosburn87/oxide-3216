@@ -367,6 +367,13 @@ void PatchBayField::mapInterfaceOneToOne()
     changed();
 }
 
+void PatchBayField::resetToDefault()
+{
+    engine.resetPatchToDefault();
+    selected.reset();
+    changed();
+}
+
 void PatchBayField::pullCables (Kind kind, int index)
 {
     if (kind == Kind::source)
@@ -508,13 +515,9 @@ PatchBayPanel::PatchBayPanel (AudioEngine& e, std::function<void()> changed)
     addAndMakeVisible (help);
 
     closeButton.onClick = [this] { if (onClose) onClose(); };
-    clearButton.onClick = [this, &e, changed]
-    {
-        e.clearPatch();
-        field.refresh();
-        if (changed) changed();
-    };
-    clearButton.setTooltip ("Remove every patch cable (the normals and the interface inputs stay)");
+    clearButton.onClick = [this] { field.resetToDefault(); };
+    clearButton.setTooltip ("Back to the default patch: every cable and interface wire out, the normals back, "
+                            "channel strip 1 from interface input 1, 2 from 2, and so on");
     mapButton.onClick = [this] { field.mapInterfaceOneToOne(); };
     mapButton.setTooltip ("Channel strip 1 from interface input 1, channel strip 2 from input 2, and so on");
     addAndMakeVisible (closeButton);

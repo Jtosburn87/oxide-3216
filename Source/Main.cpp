@@ -217,19 +217,59 @@ private:
     public:
         MainWindow (const juce::String& name, AudioEngine& engine, PluginManager& pm, SessionController& sc,
                     juce::PropertiesFile& settings, std::function<void()> save)
-            : DocumentWindow (name, ConsoleColours::room, DocumentWindow::allButtons)
+            : DocumentWindow (name, ConsoleColours::room, DocumentWindow::allButtons),
+              settings (settings), saveSettings (save)
         {
             setUsingNativeTitleBar (true);
-            setContentOwned (new MainComponent (engine, pm, sc, settings, std::move (save)), true);
+            auto* content = new MainComponent (engine, pm, sc, settings, std::move (save));
+            content->onToggleFullScreen = [this] { setFullScreenMode (! fullScreenMode); };
+            content->isFullScreenMode = [this] { return fullScreenMode; };
+            setContentOwned (content, true);
             setResizable (true, true);
             setResizeLimits (800, 480, 10000, 10000);
             centreWithSize (getWidth(), getHeight());
             setVisible (true);
+            if (settings.getBoolValue ("fullScreen", true))   // full screen unless the user left it windowed
+                setFullScreenMode (true);
         }
 
         void closeButtonPressed() override { JUCEApplication::getInstance()->systemRequestedQuit(); }
 
+        /** Full screen: the whole display (over the taskbar), no title bar or border. Off: the normal window. */
+        void setFullScreenMode (bool on)
+        {
+            if (on == fullScreenMode)
+                return;
+            if (on)
+                windowedBounds = getBounds();
+            fullScreenMode = on;
+            setUsingNativeTitleBar (! on);   // full screen uses JUCE's own title bar at height 0, i.e. none
+            setTitleBarHeight (on ? 0 : 26);
+            setResizable (! on, ! on);
+            if (on)
+            {
+                if (auto* display = juce::Desktop::getInstance().getDisplays().getDisplayForRect (windowedBounds))
+                    setBounds (display->totalArea);
+            }
+            else
+            {
+                setBounds (windowedBounds);
+            }
+            settings.setValue ("fullScreen", on);
+            if (saveSettings) saveSettings();
+        }
+
+        juce::BorderSize<int> getBorderThickness() const override
+        {
+            return fullScreenMode ? juce::BorderSize<int>() : DocumentWindow::getBorderThickness();
+        }
+
     private:
+        juce::PropertiesFile& settings;
+        std::function<void()> saveSettings;
+        bool fullScreenMode = false;
+        juce::Rectangle<int> windowedBounds;
+
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainWindow)
     };
 

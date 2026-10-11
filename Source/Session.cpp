@@ -221,6 +221,9 @@ Session::Result Session::load (AudioEngine& e, PluginManager* plugins, const juc
         {
             if (! controls->hasProperty (s.comp.type->id))
                 s.comp.type->set ((float) ChannelCompressor::fet76);
+            // Gates default to out since 0.1.2; sessions from before the gate In switch had them in.
+            if (! controls->hasProperty (s.controls.gateIn->id))
+                s.controls.gateIn->set (1.0f);
 
             const auto thr = s.idPrefix + ".comp.thr", makeup = s.idPrefix + ".comp.makeup";
             if (! controls->hasProperty (thr) || controls->hasProperty (s.comp.fet.input->id))

@@ -53,7 +53,7 @@ void ParamSlider::mouseDoubleClick (const juce::MouseEvent& e)
 {
     if (onDoubleClick != nullptr)
         onDoubleClick();
-    else
+    else if (! e.source.isTouch())   // two quick touches while nudging a fader are not a reset (Ctrl+click still is)
         juce::Slider::mouseDoubleClick (e);
 }
 
@@ -146,7 +146,13 @@ ParamButton::~ParamButton()
 
 void ParamButton::paramChanged (Param&)
 {
-    setToggleState (param.on(), juce::dontSendNotification);
+    setToggleState (param.on() != inverted, juce::dontSendNotification);
+}
+
+void ParamButton::setInverted (bool b)
+{
+    inverted = b;
+    paramChanged (param);
 }
 
 void ParamButton::clicked()
