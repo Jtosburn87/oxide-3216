@@ -2007,6 +2007,73 @@ namespace
         check (tape.getPosition() == from + (juce::int64) (5.0 * sr), "autolocate against a running rewind: brakes, then winds forward to the target");
     }
 
+    void testScenes()
+    {
+        std::puts ("Scenes: faders and knobs only, saved with the session");
+        TestEngine e;
+        e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }));
+        auto& s = e.scenes;
+        auto& ch = *e.inputStrips[3];
+        ch.controls.fader->set (70.0f);
+        ch.controls.pan->set (-0.5f);
+        ch.eq.gain[FourBandEq::HF]->set (6.0f);
+        ch.controls.mute->set (0.0f);
+        e.tape.pitch->set (0.0f);
+        s.store (4, "Verse");
+        check (s.isStored (4) && s.getTitle (4) == "Verse" && s.getCurrent() == 4 && ! s.isEdited(), "store keeps the scene and makes it current");
+
+        ch.controls.fader->set (20.0f);
+        ch.controls.pan->set (0.5f);
+        ch.eq.gain[FourBandEq::HF]->set (-3.0f);
+        ch.controls.mute->set (1.0f);
+        e.tape.pitch->set (4.0f);
+        check (s.isEdited(), "moving a fader shows the scene as edited");
+        s.store (9, "");
+        check (s.getTitle (9) == "Scene 10", "an untitled scene is called Scene NN");
+
+        s.select (s.nextStored (-1));
+        check (s.getSelected() == 4 && s.getCurrent() == 9, "previous selects the stored scene before (no recall yet)");
+        check (ch.controls.fader->get() == 20.0f, "selecting does not recall");
+        check (! s.recall (20), "an empty scene recalls nothing");
+        check (s.recall (s.getSelected()), "go recalls the selected scene");
+        check (ch.controls.fader->get() == 70.0f && ch.controls.pan->get() == -0.5f && ch.eq.gain[FourBandEq::HF]->get() == 6.0f,
+               "faders and knobs come back");
+        check (ch.controls.mute->on() && e.tape.pitch->get() == 4.0f, "switches and the tape machine stay as they are");
+
+        // A 2 s fade from scene 05 (fader 70) to scene 10 (fader 20): halfway there after 1 s, there after 2 s.
+        s.fadeTime->set (2.0f);
+        const double t0 = juce::Time::getMillisecondCounterHiRes();
+        s.recall (9);
+        check (s.isFading() && ch.controls.fader->get() == 70.0f, "with a fade time, Go starts a glide (nothing jumps)");
+        s.advanceFade (t0 + 1000.0);
+        const float mid = ch.controls.fader->get();
+        std::printf ("      fader halfway through the fade: %.1f\n", mid);
+        check (mid > 35.0f && mid < 55.0f, "halfway through the fade the fader is about halfway");
+        e.inputStrips[5]->controls.fader->set (33.0f);   // grab another fader mid-fade
+        const auto otherBefore = e.inputStrips[5]->controls.fader->get();
+        s.advanceFade (t0 + 2500.0);
+        check (! s.isFading() && ch.controls.fader->get() == 20.0f && ch.eq.gain[FourBandEq::HF]->get() == -3.0f, "the fade ends exactly on the scene");
+        check (e.inputStrips[5]->controls.fader->get() == otherBefore, "a fader moved by hand during the fade stays where it was put");
+        check (! SceneMemory::isSceneControl (*s.fadeTime), "the fade time itself is not part of a scene");
+        s.fadeTime->set (0.0f);
+        s.recall (4);
+        check (! s.isFading() && ch.controls.fader->get() == 70.0f, "fade all the way left: instant");
+
+        // Through a session file and back.
+        const auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("Oxide3216TestScenes");
+        folder.deleteRecursively();
+        check (Session::save (e, folder).ok, "session with scenes saved");
+        TestEngine b;
+        b.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }));
+        check (Session::load (b, nullptr, folder).ok, "and loaded");
+        check (b.scenes.isStored (4) && b.scenes.isStored (9) && ! b.scenes.isStored (0) && b.scenes.getTitle (4) == "Verse"
+               && b.scenes.getCurrent() == 4, "scenes restored");
+        b.inputStrips[3]->controls.fader->set (1.0f);
+        b.scenes.recall (9);
+        check (b.inputStrips[3]->controls.fader->get() == 20.0f, "a loaded scene recalls");
+        folder.deleteRecursively();
+    }
+
     void testShuttleJogScrub()
     {
         std::puts ("Tape: shuttle ring, jog wheel and scrub");
@@ -2613,6 +2680,7 @@ int main (int argc, char** argv)
     testPunchAndLoop();
     testWinding();
     testShuttleJogScrub();
+    testScenes();
     testWowFlutter();
     testTapeFiles();
     testSessions();

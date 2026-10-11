@@ -588,6 +588,7 @@ CentreSection::CentreSection (AudioEngine& e, PluginContext* plugins)
       monitorLevel (*e.monitorLevel, "Level", juce::Colour (0xffd9d6cc)),
       tbLevel (*e.tbLevel, "TB", juce::Colour (0xffd6392d)),
       talkButton (e.talkbackOn),
+      sceneReadout (e.scenes),
       context (plugins)
 {
     addAndMakeVisible (appButtons);
@@ -608,6 +609,29 @@ CentreSection::CentreSection (AudioEngine& e, PluginContext* plugins)
     tbMic.setTitle ("Talkback mic in");
     tbMic.onPopupMenu = [this] { showTbMicMenu(); };
     addAndMakeVisible (tbMic);
+
+    // Scene: the number, and under it previous / GO / next. The arrows only move the number; GO recalls it.
+    sceneReadout.onPopupMenu = [this] { SceneMemoryPanel::show (engine.scenes); };
+    addAndMakeVisible (sceneReadout);
+    scenePrev.setButtonText (juce::CharPointer_UTF8 ("\xe2\x97\x80"));
+    sceneNext.setButtonText (juce::CharPointer_UTF8 ("\xe2\x96\xb6"));
+    scenePrev.setTooltip ("Previous stored scene (GO recalls it)");
+    sceneNext.setTooltip ("Next stored scene (GO recalls it)");
+    sceneGo.setTooltip ("Recall the scene on the readout: its faders and knobs");
+    scenePrev.setTitle ("Previous scene");
+    sceneNext.setTitle ("Next scene");
+    sceneGo.setTitle ("Go to scene");
+    const auto step = [this] (int direction)
+    {
+        if (const int s = engine.scenes.nextStored (direction); s >= 0)
+            engine.scenes.select (s);
+        sceneReadout.repaint();
+    };
+    scenePrev.onClick = [step] { step (-1); };
+    sceneNext.onClick = [step] { step (1); };
+    sceneGo.onClick = [this] { engine.scenes.recall (engine.scenes.getSelected()); sceneReadout.repaint(); };
+    for (auto* b : { &scenePrev, &sceneGo, &sceneNext })
+        addAndMakeVisible (b);
 
     cassette.projectName().referTo (engine.projectName);
     addAndMakeVisible (cassette);
@@ -837,9 +861,21 @@ void CentreSection::resized()
     const int numButtons = appButtons.getNumChildComponents();
     appBox = { panelX, 12, panelW, 28 + appButtons.heightFor (numButtons) + 10 };
     appButtons.setBounds (appBox.reduced (10).withTrimmedTop (18));
+    // Scene: the 2-digit readout, then previous / GO / next.
+    sceneBox = { panelX, appBox.getBottom() + 12, panelW, 24 + 40 + 4 + 24 + 8 };
+    {
+        auto m = sceneBox.reduced (8, 0).withTrimmedTop (24);
+        sceneReadout.setBounds (m.removeFromTop (40));
+        m.removeFromTop (4);
+        auto buttonRow = m.removeFromTop (24);
+        const int arrowW = (buttonRow.getWidth() - 8) / 4;
+        scenePrev.setBounds (buttonRow.removeFromLeft (arrowW));
+        sceneNext.setBounds (buttonRow.removeFromRight (arrowW));
+        sceneGo.setBounds (buttonRow.reduced (4, 0));
+    }
     // Monitor and talkback: the two levels side by side, Talk and Setup under them.
     // The talkback mic's XLR sits over the TB column; its input is named to the left (see paint).
-    monitorBox = { panelX, appBox.getBottom() + 16, panelW, 28 + tbMicH + 4 + Knob::preferredHeight + 6 + 26 + 10 };
+    monitorBox = { panelX, sceneBox.getBottom() + 12, panelW, 28 + tbMicH + 4 + Knob::preferredHeight + 6 + 26 + 10 };
     {
         auto m = monitorBox.reduced (8, 0).withTrimmedTop (24);
         auto micRow = m.removeFromTop (tbMicH);
@@ -918,7 +954,7 @@ void CentreSection::paint (juce::Graphics& g)
                 deckBox.reduced (10).withHeight (24), juce::Justification::centredLeft, false);
 
     // App buttons and monitor level panels, in the same style.
-    for (auto [box, title] : { std::pair { appBox, "Console" }, std::pair { monitorBox, "Monitor / TB" } })
+    for (auto [box, title] : { std::pair { appBox, "Console" }, std::pair { sceneBox, "Scene" }, std::pair { monitorBox, "Monitor / TB" } })
     {
         g.setColour (faderArea);
         g.fillRoundedRectangle (box.toFloat(), 2.0f);

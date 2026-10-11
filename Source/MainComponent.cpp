@@ -471,9 +471,9 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
                             info.addDefaultKeypress ('o', 0); break;
         case loopCmd:       info.setInfo ("Loop", "Loop between In and Out on / off", "Jog / shuttle", 0);
                             info.addDefaultKeypress ('l', 0); break;
-        case goInCmd:       info.setInfo ("Go In", "Locates to the In point", "Jog / shuttle", 0);
+        case goInCmd:       info.setInfo ("Go In", "Winds the tape to the In point", "Jog / shuttle", 0);
                             info.addDefaultKeypress ('i', juce::ModifierKeys::shiftModifier); break;
-        case goOutCmd:      info.setInfo ("Go Out", "Locates to the Out point", "Jog / shuttle", 0);
+        case goOutCmd:      info.setInfo ("Go Out", "Winds the tape to the Out point", "Jog / shuttle", 0);
                             info.addDefaultKeypress ('o', juce::ModifierKeys::shiftModifier); break;
         case punchCmd:      info.setInfo ("Punch", "Auto-punch between In and Out on / off", "Jog / shuttle", 0);
                             info.addDefaultKeypress ('p', 0); break;

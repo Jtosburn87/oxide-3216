@@ -86,7 +86,7 @@ public:
     void rewind();
     void fastForward();
     /** Autolocate: wind to a position the way Rew / F Fwd do (speeding up, then braking to arrive exactly there).
-        Used by RTZ and the locate memories. Message thread. */
+        Used by RTZ, Go In / Go Out and the locate memories. Message thread. */
     void windTo (juce::int64 samplePosition);
     int  getWindDirection() const noexcept { return windRequest.load(); }   // -1 rewind, +1 fast forward, 0 none
     bool isWinding() const noexcept { return windRequest.load() != 0 || windSpeed.load() != 0.0f; }

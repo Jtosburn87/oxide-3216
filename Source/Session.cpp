@@ -109,6 +109,7 @@ Session::Result Session::write (AudioEngine& e, const juce::File& folder, TrackR
     for (auto* p : e.params.all())
         controls->setProperty (p->id, p->get());
     root->setProperty ("controls", juce::var (controls));
+    root->setProperty ("scenes", e.scenes.toVar());
 
     auto* names = new juce::DynamicObject();
     forEachStrip (e, [&] (ChannelStrip& s) { names->setProperty (s.idPrefix, s.name); });
@@ -215,6 +216,7 @@ void Session::reset (AudioEngine& e)
     for (int m = 0; m < TapeMachine::numMemories; ++m)
         e.tape.setMemory (m, -1);
     e.projectName = "Untitled song";
+    e.scenes.clear();
 }
 
 Session::Result Session::load (AudioEngine& e, PluginManager* plugins, const juce::File& folder, TrackRevisions* written)
@@ -366,6 +368,7 @@ Session::Result Session::load (AudioEngine& e, PluginManager* plugins, const juc
     if (auto* memories = tapeInfo["memories"].getArray())   // locate memories (sessions from 0.1.4 on)
         for (int m = 0; m < juce::jmin (memories->size(), TapeMachine::numMemories); ++m)
             e.tape.setMemory (m, (juce::int64) (*memories)[m]);
+    e.scenes.fromVar (json["scenes"]);   // sessions from before scenes have none
     e.tape.locate ((juce::int64) tapeInfo["position"]);
     return r;
 }

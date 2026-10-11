@@ -6,6 +6,7 @@
 #include <atomic>
 #include "Config.h"
 #include "Params.h"
+#include "Scenes.h"
 #include "ChannelStrip.h"
 #include "StripLink.h"
 #include "TapeMachine.h"
@@ -93,6 +94,7 @@ public:
 
     // The console.
     ParamSet params;
+    SceneMemory scenes { params };   // 99 scenes of the faders and knobs (saved with the session)
     juce::OwnedArray<ChannelStrip> inputStrips, returnStrips;
     /** Stereo links between neighbouring strips (1+2, 3+4, ...): everything follows, pan mirrors. See StripLink. */
     std::array<Param*, Config::numInputStrips / 2> inputLink {};

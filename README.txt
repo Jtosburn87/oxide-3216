@@ -73,6 +73,14 @@ interface input your mic is on; that patches it into TB In on the patch bay. Hol
 double-click it to latch. Setup chooses which auxes (1-8) it goes to and sets the TB limiter. The
 monitors dim while you talk.
 
+Scenes (Scene box, under the Console buttons): 99 snapshots of every fader and knob. Switches,
+names, plugins, the patch bay and the tape machine are not part of a scene. The red readout shows
+the selected scene; it flashes until you press GO to recall it, and the amber dot lights when a
+fader or knob has moved since. The arrows pick the previous / next stored scene. Right-click the
+number for Scene Memory: scenes 01-99 with titles, Go, Store (asks before replacing a scene),
+Prev / Next, and Fade (Instant up to 5 s: recalls glide there; grab a control mid-fade and it's
+yours). Scenes and the fade time are saved with the session.
+
 Signal flow: input strip -> tape in (normalled) -> tape out -> return strip (normalled).
 Both banks go to main and/or the subs. Subs -> group EQ -> inserts -> sub fader -> main.
 Main: bus compressor -> master inserts -> main fader -> limiter at -3 dBFS -> outputs.
@@ -104,7 +112,7 @@ Jog / shuttle (right of the group EQ):
   Jog / Scrub  - Jog moves the tape silently; Scrub lets you hear it (unarmed tracks) while the
                  wheel or ring moves it, to find a spot by ear.
   In / Out     - Set In, Set Out, Loop, Punch (the same switches as under the tape machine);
-                 Go In / Go Out jump there.
+                 Go In / Go Out wind the tape there.
   Locate       - Store, then 1-6, keeps the tape position (saved with the session); 1-6 then wind
                  the tape there. RTZ winds back to zero.
 

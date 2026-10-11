@@ -244,14 +244,14 @@ ShuttlePanel::ShuttlePanel (TapeMachine& t) : tape (t), wheel (t)
 
     setIn.setTooltip ("Set the In point here");
     setOut.setTooltip ("Set the Out point here");
-    goIn.setTooltip ("Locate to the In point");
-    goOut.setTooltip ("Locate to the Out point");
+    goIn.setTooltip ("Wind the tape to the In point");
+    goOut.setTooltip ("Wind the tape to the Out point");
     loop.setTooltip ("Loop between In and Out");
     punch.setTooltip ("Auto-punch: record armed tracks only between In and Out (you hear the old take outside)");
     setIn.onClick  = [this] { tape.setInPoint (tape.getPosition()); };
     setOut.onClick = [this] { tape.setOutPoint (tape.getPosition()); };
-    goIn.onClick   = [this] { tape.locate (tape.getInPoint()); };
-    goOut.onClick  = [this] { tape.locate (tape.getOutPoint()); };
+    goIn.onClick   = [this] { tape.windTo (tape.getInPoint()); };
+    goOut.onClick  = [this] { tape.windTo (tape.getOutPoint()); };
     loop.onClick   = [this] { tape.loopOn = ! tape.loopOn.load(); };
     punch.onClick  = [this] { tape.punchOn = ! tape.punchOn.load(); };
     loop.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff3a8fd6));

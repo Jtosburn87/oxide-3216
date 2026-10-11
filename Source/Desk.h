@@ -8,6 +8,7 @@
 #include "InsertsUI.h"
 #include "CompressorPanel.h"
 #include "ShuttlePanel.h"
+#include "SceneWindow.h"
 
 /** Fixed console geometry, in desk units (pixels at 100% zoom). */
 namespace DeskLayout
@@ -143,7 +144,7 @@ void updateTapeDisplay (TapeMachine&, Cassette&, TapeClock&);
 class ButtonColumn : public juce::Component
 {
 public:
-    static constexpr int buttonH = 30, gap = 6;
+    static constexpr int buttonH = 26, gap = 4;   // compact: the Scene box sits under the column
     int heightFor (int numButtons) const { return numButtons * buttonH + juce::jmax (0, numButtons - 1) * gap; }
 
     void resized() override
@@ -231,6 +232,9 @@ private:
     TalkButton talkButton;
     juce::TextButton tbSetup { "Setup" };
     XlrSocket tbMic;               // talkback mic in: right-click picks the interface input patched to TB In
+    SceneReadout sceneReadout;     // the scene number; right-click: Scene Memory
+    juce::TextButton scenePrev, sceneGo { "GO" }, sceneNext;
+    juce::Rectangle<int> sceneBox;
     juce::String shownTbMic { "?" };   // anything update() can't produce, so the first update sets the tooltip
     static constexpr int tbMicH = 44;
     PluginContext* context;        // its `changed` saves the routing
