@@ -31,7 +31,9 @@ private:
 
     juce::Label scribble;
     juce::TextButton prevButton, nextButton;   // at the two ends of the header
-    Knob trim, hpf, pan;
+    Knob gain, trim, hpf, pan;
+    ParamButton phase;
+    ChainLinkButton gainLink;
     LedMeter inMeter, outMeter;
     juce::OwnedArray<Knob> eqKnobs;   // gain, freq per band
     // Only in this window: HF and LF bell/shelf, HMF and LMF Q.

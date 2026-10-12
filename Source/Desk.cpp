@@ -37,9 +37,12 @@ namespace
 //==============================================================================
 StripComponent::StripComponent (ChannelStrip& s)
     : strip (s),
+      gain (*s.controls.gain, "Gain"),
       trim (*s.controls.trim, "Trim"),
       hpf (*s.controls.hpf, "HPF"),
       pan (*s.controls.pan, "Pan"),
+      phase (*s.controls.phase, {}),
+      gainLink (*s.controls.gainLink, {}),
       gateThr (*s.gate.threshold, "Thr", gateCap),
       gateRange (*s.gate.range, "Range", gateCap),
       gateFast (*s.gate.fast, "Fast atk"),
@@ -58,7 +61,11 @@ StripComponent::StripComponent (ChannelStrip& s)
 
     hpf.setFormatter ([] (float f) { return f < 20.5f ? juce::String ("off") : formatHz (f); });
     hpf.setEndLabels ("20", "300");
+    setupPreamp (s, gain, trim, phase, gainLink);
+    add (gain);
     add (trim);
+    add (phase);
+    add (gainLink);
     add (hpf);
 
     for (int b = 0; b < FourBandEq::numBands; ++b)
@@ -182,7 +189,7 @@ StripComponent::StripComponent (ChannelStrip& s)
     }
 
     // Double-clicking any knob opens the whole channel in a big window (Ctrl+click resets a knob).
-    std::vector<Knob*> knobs { &trim, &hpf, &pan, &gateThr, &gateRange, deFreq.get(), deReduction.get() };
+    std::vector<Knob*> knobs { &gain, &trim, &hpf, &pan, &gateThr, &gateRange, deFreq.get(), deReduction.get() };
     compPanel.setKnobDoubleClick ([this] { if (onOpenStrip) onOpenStrip(); });
     for (auto* k : eqKnobs)  knobs.push_back (k);
     for (auto* k : auxKnobs) knobs.push_back (k);
@@ -202,6 +209,7 @@ namespace
     // height a minimised one keeps: just its title line.
     constexpr int expandedH[] = { 10 + 4 * 52 + 4, 10 + 50 + 4 + 18 + 4 + 8 + 6,10 + 2 * 52 + 2 + 17 + 4 + 16 + 6, 10 + 4 * 44 + 4 };
     constexpr int collapsedH = 8;
+    constexpr int inputH = 10 + 50 + 2 + 50 + 4;   // the Input section: two rows of knobs
     constexpr int inW = 20;   // In buttons on the EQ, gate and compressor title lines
 }
 
@@ -320,10 +328,14 @@ void StripComponent::resized()
     const int left = bx + 2, right = bx + bw - 2 - Knob::preferredWidth;
     int y = 12;
 
-    auto box = juce::Rectangle<int> (bx, y, bw, 66);
+    // Gain and trim side by side, the link between their legends; the phase switch and HPF under them.
+    auto box = juce::Rectangle<int> (bx, y, bw, inputH);
     sections.push_back ({ "Input", box });
-    trim.setBounds (knobAt (left, box.getY() + 10));
-    hpf.setBounds (knobAt (right, box.getY() + 10));
+    gain.setBounds (knobAt (left, box.getY() + 10));
+    trim.setBounds (knobAt (right, box.getY() + 10));
+    gainLink.setBounds (juce::Rectangle<int> (22, 12).withCentre ({ stripW / 2, gain.getBottom() - 6 }));
+    phase.setBounds (juce::Rectangle<int> (30, 20).withCentre ({ left + Knob::preferredWidth / 2, box.getY() + 62 + 19 }));
+    hpf.setBounds (knobAt (right, box.getY() + 62));
     y = box.getBottom() + 14;
 
     // The sections that can be minimised: a minimised one keeps only its title line (and its button).

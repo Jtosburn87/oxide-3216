@@ -10,13 +10,13 @@
 /** DSP for one mono console channel (input or tape return).
 
     Signal order (as in the prototype):
-        input -> trim -> preamp colour -> high-pass -> EQ (LF, LMF, HMF, HF) -> gate -> compressor
+        input -> phase -> gain -> preamp colour -> trim -> high-pass -> EQ (LF, LMF, HMF, HF) -> gate -> compressor
               -> [pre-fader sends] -> fader -> mute -> direct out -> [post-fader sends] -> pan -> main / subs
                                                                                      -> solo bus (when soloed) */
 class ChannelStrip
 {
 public:
-    /** idPrefix is e.g. "ch1" or "rt1"; parameters are created as "ch1.trim", "ch1.eq.hf.gain", ... */
+    /** idPrefix is e.g. "ch1" or "rt1"; parameters are created as "ch1.gain", "ch1.eq.hf.gain", ... */
     ChannelStrip (ParamSet&, const juce::String& idPrefix, const juce::String& defaultName, bool withDeEsser = false,
                   float defaultFader = 80.0f);
 
@@ -25,7 +25,10 @@ public:
 
     struct Controls
     {
-        Param* trim;    // dB, -20..+30
+        Param* phase;   // flips the input's polarity
+        Param* gain;    // dB, -20..+30: the preamp's gain (drives the colour)
+        Param* trim;    // dB, -30..+20: level after the preamp
+        Param* gainLink;   // on: turning the gain by hand turns the trim the other way (turnGain)
         Param* hpf;     // Hz, 20..300 (20 = off)
         Param* pan;     // -1..+1
         Param* main;    // main assign
@@ -39,6 +42,10 @@ public:
         Param* eqIn;                        // EQ in (out = bypassed)
         Param* gateIn;                      // gate in (out = bypassed; not the de-esser, which has its own)
     } controls;
+
+    /** The gain knob turned by hand. While the link is on, the trim moves the other way by the same amount,
+        so the preamp is driven harder (or cleaner) at the same level. Message thread only. */
+    void turnGain (float db);
 
     /** The six orders the EQ, gate and compressor can run in (stage numbers below). Order 0 is the default. */
     enum Stage { eqStage, gateStage, compStage };
@@ -68,7 +75,7 @@ public:
     void process (const float* in, float* direct, const BusPointers& buses, int numSamples) noexcept;
 
     float takePeak() noexcept { return peak.exchange (0.0f); }             // output: post-fader
-    float takeInputPeak() noexcept { return inputPeak.exchange (0.0f); }   // input: after the trim and preamp
+    float takeInputPeak() noexcept { return inputPeak.exchange (0.0f); }   // input: after the preamp and trim
 
     /** Aux send gain law from the prototype: level^2 x 1.5 (about +3.5 dB at full). */
     static float auxGain (float level) noexcept { return level * level * 1.5f; }
@@ -79,7 +86,7 @@ private:
     Dsp::Biquad hp;
     float hpFreqSet = -1.0f;
     bool eqWasIn = true;
-    Dsp::Smoothed trimGain, faderGain;
+    Dsp::Smoothed gainGain, trimGain, faderGain;
     std::atomic<float> peak { 0.0f }, inputPeak { 0.0f };
 
     std::array<float, Config::maxBlock> pre {};
@@ -90,5 +97,6 @@ private:
         float main[2], solo[2], sub[Config::numSubs][2], aux[Config::numAux];
     };
     Targets targets() const noexcept;
+    float targetGain() const noexcept;
     float targetFader() const noexcept;
 };

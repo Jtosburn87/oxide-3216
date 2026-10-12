@@ -194,6 +194,18 @@ void SceneMemory::fromVar (const juce::var& v)
             if (auto* values = o["values"].getDynamicObject())
                 for (const auto& prop : values->getProperties())
                     scene.values[prop.name.toString()] = (float) (double) prop.value;
+
+            // Before 0.1.6 a strip's preamp gain knob was called Trim ("ch1.trim"); there was no trim after it.
+            std::map<juce::String, float> renamed;
+            for (const auto& [id, value] : scene.values)
+                if (id.endsWith (".trim"))
+                    if (const auto gainId = id.dropLastCharacters (5) + ".gain"; scene.values.count (gainId) == 0)
+                        renamed[gainId] = value;
+            for (const auto& [gainId, value] : renamed)
+            {
+                scene.values[gainId] = value;
+                scene.values[gainId.dropLastCharacters (5) + ".trim"] = 0.0f;
+            }
         }
     current = isStored ((int) v.getProperty ("current", -1)) ? (int) v["current"] : -1;
     selected = juce::jlimit (0, numScenes - 1, (int) v.getProperty ("selected", 0));

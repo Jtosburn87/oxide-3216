@@ -42,7 +42,9 @@ On the return strips, the button on the gate's title line switches it to a de-es
 sibilance, Reduce is the most it turns down (dB). Wide: everything above Freq (off: a band around
 it). Gentle: only the sibilant band comes down (off: the whole signal does). Byp bypasses it.
 
-Every strip: trim, high-pass filter, 4-band EQ, gate (Fast atk = fast attack with the pop),
+Every strip: phase (Ø), gain (drives the preamp), trim (after the preamp), gain/trim link
+(the chain button between them, on by default: turning the gain turns the trim the other way,
+so you drive the preamp harder or cleaner at the same level), high-pass filter, 4-band EQ, gate (Fast atk = fast attack with the pop),
 compressor, 8 aux sends (P = pre-fader), sub assigns S1-S4, main assign, pan,
 mute, solo, fader. Double-click a scribble strip to rename it.
 

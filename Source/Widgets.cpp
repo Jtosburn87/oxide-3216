@@ -46,7 +46,10 @@ void ParamSlider::paramChanged (Param&)
 
 void ParamSlider::valueChanged()
 {
-    param.set ((float) getValue());
+    if (onUserSet != nullptr)
+        onUserSet ((float) getValue());
+    else
+        param.set ((float) getValue());
 }
 
 void ParamSlider::mouseDoubleClick (const juce::MouseEvent& e)
@@ -190,6 +193,20 @@ void ParamButton::paintButton (juce::Graphics& g, bool over, bool down)
     g.setColour (juce::Colours::white);
     g.setFont (getLookAndFeel().getTextButtonFont (*this, getHeight()));
     g.drawFittedText (getButtonText(), getLocalBounds(), juce::Justification::centred, 1);
+}
+
+//==============================================================================
+void ChainLinkButton::paintButton (juce::Graphics& g, bool over, bool down)
+{
+    const bool on = getToggleState();
+    getLookAndFeel().drawButtonBackground (g, *this, findColour (on ? buttonOnColourId : buttonColourId), over, down);
+
+    // Two rounded links side by side: overlapping (linked) or with a gap between them.
+    const auto c = getLocalBounds().toFloat().getCentre();
+    const float w = 9.0f, h = 5.5f, apart = on ? 3.0f : 6.0f;
+    g.setColour (on ? juce::Colour (0xff141516) : legend);
+    for (const float side : { -1.0f, 1.0f })
+        g.drawRoundedRectangle (juce::Rectangle<float> (w, h).withCentre ({ c.x + side * apart, c.y }), h * 0.5f, 1.4f);
 }
 
 //==============================================================================

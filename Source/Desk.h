@@ -14,7 +14,7 @@
 namespace DeskLayout
 {
     constexpr int stripW = 110, cheekW = 30, centreW = 780;
-    constexpr int knobH = 1006, faderH = 270;   // no meter bridge: the meters sit beside the faders
+    constexpr int knobH = 1056, faderH = 270;   // no meter bridge: the meters sit beside the faders
     constexpr int totalH = knobH + faderH;
 
     // Centre fader area grid: Sub 1-4, Aux 1-8, then Main (1.8 columns wide) behind a divider.
@@ -62,7 +62,9 @@ private:
     ChannelStrip& strip;
 
     LedMeter meter;
-    Knob trim, hpf, pan;
+    Knob gain, trim, hpf, pan;
+    ParamButton phase;
+    ChainLinkButton gainLink;
     juce::OwnedArray<Knob> eqKnobs;            // gain, freq per band
     Knob gateThr, gateRange;
     ParamButton gateFast;

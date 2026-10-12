@@ -16,7 +16,10 @@ ChannelStrip::ChannelStrip (ParamSet& params, const juce::String& prefix, const 
       eq (params, prefix, 1, true), gate (params, prefix), comp (params, prefix)
 {
     const auto id = [&] (const juce::String& s) { return prefix + "." + s; };
-    controls.trim  = &params.add (id ("trim"), "Trim", -20.0f, 30.0f, 0.0f);
+    controls.phase = &params.addToggle (id ("phase"), "Phase", false);
+    controls.gain  = &params.add (id ("gain"), "Gain", -20.0f, 30.0f, 0.0f);
+    controls.trim  = &params.add (id ("trim"), "Trim", -30.0f, 20.0f, 0.0f);   // the gain's range turned round
+    controls.gainLink = &params.addToggle (id ("gain.link"), "Gain / trim link", true);
     controls.hpf   = &params.add (id ("hpf"), "HPF", 20.0f, 300.0f, 20.0f, Param::Scale::log);
     controls.pan   = &params.add (id ("pan"), "Pan", -1.0f, 1.0f, 0.0f);
     controls.order = &params.addStepped (id ("order"), "Chain order", (int) chainOrders.size(), 0);
@@ -39,11 +42,25 @@ ChannelStrip::ChannelStrip (ParamSet& params, const juce::String& prefix, const 
     }
 }
 
+void ChannelStrip::turnGain (float db)
+{
+    const float before = controls.gain->get();
+    controls.gain->set (db);
+    if (controls.gainLink->on())
+        controls.trim->set (controls.trim->get() - (controls.gain->get() - before));
+}
+
 void ChannelStrip::setChain (const Chain& c)
 {
     for (size_t i = 0; i < chainOrders.size(); ++i)
         if (chainOrders[i] == c)
             controls.order->set ((float) i);
+}
+
+float ChannelStrip::targetGain() const noexcept
+{
+    // The phase switch flips the input. It is smoothed with the gain, so it swings through zero without a click.
+    return (controls.phase->on() ? -1.0f : 1.0f) * Dsp::dbToGain (controls.gain->get());
 }
 
 float ChannelStrip::targetFader() const noexcept
@@ -104,8 +121,9 @@ void ChannelStrip::prepare (double sr)
     if (deEsser != nullptr)
         deEsser->prepare (sr);
     comp.prepare (sr);
+    gainGain.prepare (sr, targetGain());
     trimGain.prepare (sr, Dsp::dbToGain (controls.trim->get()));
-    preamp.prepare (sr, controls.trim->get(), isColoured());
+    preamp.prepare (sr, controls.gain->get(), isColoured());
     faderGain.prepare (sr, targetFader());
 
     const auto t = targets();
@@ -124,9 +142,10 @@ void ChannelStrip::prepare (double sr)
 
 void ChannelStrip::process (const float* in, float* direct, const BusPointers& buses, int n) noexcept
 {
+    const float gainT = targetGain();
     const float trimT = Dsp::dbToGain (controls.trim->get());
     const float faderT = targetFader();
-    preamp.setTrim (controls.trim->get());
+    preamp.setGain (controls.gain->get());
     const bool coloured = isColoured();
 
     const float hpf = controls.hpf->get();
@@ -164,8 +183,9 @@ void ChannelStrip::process (const float* in, float* direct, const BusPointers& b
     for (int i = 0; i < n; ++i)
     {
         float x = in != nullptr ? in[i] : 0.0f;
-        x *= trimGain.next (trimT);
+        x *= gainGain.next (gainT);
         x = preamp.process (x, coloured);
+        x *= trimGain.next (trimT);
         inPk = juce::jmax (inPk, std::abs (x));
         if (hpOn)   x = hp.process (x);
         for (const int stage : order)

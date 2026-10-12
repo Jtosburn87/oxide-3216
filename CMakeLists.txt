@@ -1,6 +1,6 @@
 ﻿cmake_minimum_required(VERSION 3.22)
 
-project(Oxide3216 VERSION 0.1.5 LANGUAGES C CXX)
+project(Oxide3216 VERSION 0.1.6 LANGUAGES C CXX)
 
 # Beta builds: bump the version above with each set of changes. The label is what the app and the zip show.
 set(OXIDE_VERSION_LABEL "${PROJECT_VERSION}-beta")

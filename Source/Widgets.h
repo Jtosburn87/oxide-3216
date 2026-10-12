@@ -17,6 +17,9 @@ public:
     /** Set: a double-click calls this instead of resetting to the default (Ctrl+click still resets). */
     std::function<void()> onDoubleClick;
 
+    /** Set: moving the slider by hand sets the control through this (to move a linked control along). */
+    std::function<void (float)> onUserSet;
+
     bool keyPressed (const juce::KeyPress&) override;
     void mouseDoubleClick (const juce::MouseEvent&) override;
 
@@ -48,6 +51,8 @@ public:
     void setOnDoubleClick (std::function<void()> f) { slider.onDoubleClick = std::move (f); }
     /** The value goes down as the knob turns right (end labels are still left, right). */
     void setReversed (bool r) { slider.setReversed (r); }
+    /** Set: turning the knob by hand sets the control through this instead of directly. */
+    void setOnUserSet (std::function<void (float)> f) { slider.onUserSet = std::move (f); }
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -89,6 +94,16 @@ private:
     void paintButton (juce::Graphics&, bool over, bool down) override;
     void paramChanged (Param&) override;
     void clicked() override;
+};
+
+/** A ParamButton drawn as a chain: two links joined while on, pulled apart while off. */
+class ChainLinkButton : public ParamButton
+{
+public:
+    using ParamButton::ParamButton;
+
+private:
+    void paintButton (juce::Graphics&, bool over, bool down) override;
 };
 
 /** Long-throw fader with a printed dB scale to its left. */

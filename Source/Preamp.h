@@ -5,19 +5,19 @@
 #include "Dsp.h"
 
 /** Console colour for a channel's preamp, voiced after a Neve 1073: a class A amp between an input
-    and an output transformer. It runs straight after the trim, on every input and return strip.
+    and an output transformer. It runs straight after the gain (the trim follows it), on every input and return strip.
 
     Level reference: 0 dBFS = +18 dBu, and the amp clips at +26 dBu (clipLevel below). At normal levels
-    the stage is nearly clean, as a 1073 is; the colour shows when the trim drives it hard.
+    the stage is nearly clean, as a 1073 is; the colour shows when the gain drives it hard.
 
-    - Amp: mostly 2nd harmonic with some 3rd. About 0.1 % 2nd and 0.05 % 3rd at +20 dBu with the trim at
-      0 dB or below. Turning the trim up takes away negative feedback, as the 1073's gain switch does,
+    - Amp: mostly 2nd harmonic with some 3rd. About 0.1 % 2nd and 0.05 % 3rd at +20 dBu with the gain at
+      0 dB or below. Turning the gain up takes away negative feedback, as the 1073's gain switch does,
       so the harmonics rise to about 2.8x at +30 dB for the same output level.
     - Transformers: 3rd harmonic that grows as the frequency falls (core flux follows the low end):
       about 0.3 % at 40 Hz, +20 dBu, and almost nothing above a few hundred Hz.
     - Rails: a soft knee into the +26 dBu ceiling.
-    - Exaggeration: over the top 10 dB of the trim everything above grows to 1.4x a real 1073
-      (harmonics x1.4, a softer knee), so the trim fully up is a touch dirtier than the real thing.
+    - Exaggeration: over the top 10 dB of the gain everything above grows to 1.4x a real 1073
+      (harmonics x1.4, a softer knee), so the gain fully up is a touch dirtier than the real thing.
 
     Harmonics stop at the 3rd below the knee, so this runs at the session rate without oversampling. */
 class Preamp
@@ -25,35 +25,35 @@ class Preamp
 public:
     static constexpr float clipLevel = 2.5118864f;   // +26 dBu with 0 dBFS = +18 dBu
 
-    void prepare (double sampleRate, float trimDb, bool on) noexcept
+    void prepare (double sampleRate, float gainDb, bool on) noexcept
     {
         constexpr double twoPi = 6.283185307179586;
         fluxCoeff = (float) (1.0 - std::exp (-twoPi * fluxHz / sampleRate));
         dcCoeff = (float) std::exp (-twoPi * dcHz / sampleRate);
         mix.prepare (sampleRate, on ? 1.0f : 0.0f, 20.0f);
         reset();
-        setTrim (trimDb);
+        setGain (gainDb);
     }
 
-    /** Once per block, from the trim knob (dB, -20..+30). */
-    void setTrim (float trimDb) noexcept
+    /** Once per block, from the gain knob (dB, -20..+30). */
+    void setGain (float gainDb) noexcept
     {
-        const float fb = std::pow (10.0f, feedbackLossPerDb * std::max (0.0f, trimDb));
-        const float ex = exaggeration (trimDb);
+        const float fb = std::pow (10.0f, feedbackLossPerDb * std::max (0.0f, gainDb));
+        const float ex = exaggeration (gainDb);
         a2 = amp2nd * fb * ex;
         k3 = 2.0f * amp3rd * fb * ex;
         kT = 2.0f * transformer3rd * ex;
         knee = 1.0f - kneeWidth * ex;
     }
 
-    /** 1 at the trim fully up, 1 below the top 10 dB; smooth in between. */
-    static float exaggeration (float trimDb) noexcept
+    /** 1 at the gain fully up, 1 below the top 10 dB; smooth in between. */
+    static float exaggeration (float gainDb) noexcept
     {
-        const float t = std::clamp ((trimDb - 20.0f) / 10.0f, 0.0f, 1.0f);
+        const float t = std::clamp ((gainDb - 20.0f) / 10.0f, 0.0f, 1.0f);
         return 1.0f + 0.4f * t * t * (3.0f - 2.0f * t);
     }
 
-    /** x is the trimmed signal. on: the console colour switch (crossfades over 20 ms). */
+    /** x is the signal after the gain. on: the console colour switch (crossfades over 20 ms). */
     float process (float x, bool on) noexcept
     {
         const float target = on ? 1.0f : 0.0f;

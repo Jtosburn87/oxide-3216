@@ -248,6 +248,12 @@ Session::Result Session::load (AudioEngine& e, PluginManager* plugins, const juc
     if (auto* controls = json["controls"].getDynamicObject())
         forEachStrip (e, [&] (ChannelStrip& s)
         {
+            // Before 0.1.6 the preamp gain knob was called Trim (saved as "<strip>.trim"), with no trim after it.
+            if (! controls->hasProperty (s.controls.gain->id) && controls->hasProperty (s.controls.trim->id))
+            {
+                s.controls.gain->set ((float) (double) controls->getProperty (s.controls.trim->id));
+                s.controls.trim->set (0.0f);
+            }
             if (! controls->hasProperty (s.comp.type->id))
                 s.comp.type->set ((float) ChannelCompressor::fet76);
             // Gates default to out since 0.1.2; sessions from before the gate In switch had them in.

@@ -278,7 +278,7 @@ namespace
 
     void testStripControls()
     {
-        std::puts ("Strip controls: trim, pan, mute, solo to the monitor outs, main assign");
+        std::puts ("Strip controls: phase, gain, trim, pan, mute, solo to the monitor outs, main assign");
         {
             AudioEngine fresh;
             check (fresh.inputStrips[0]->controls.fader->get() == 0.0f && fresh.inputStrips[15]->controls.fader->get() == 0.0f
@@ -291,14 +291,38 @@ namespace
         TestEngine e;
         auto& s1 = e.inputStrips[0]->controls;
         auto& s2 = e.inputStrips[1]->controls;
-        s1.trim->set (6.0206f);
+        s1.gain->set (6.0206f);
         s1.pan->set (-1.0f);
         e.prepare (48000.0, channels ({ 0, 1 }), channels ({ 0, 1, 2, 3 }));
         mapOnly (e, 0, 0);
         Buffers b (2, 4, 512);
         std::fill (b.in[0].begin(), b.in[0].end(), 0.25f);
         b.run (e);
-        check (near (b.out[0][300], 0.5f) && near (b.out[1][300], 0.0f), "trim +6 dB, pan hard left");
+        check (near (b.out[0][300], 0.5f) && near (b.out[1][300], 0.0f), "gain +6 dB, pan hard left");
+
+        s1.trim->set (-6.0206f);
+        settle (e, b);
+        check (near (b.out[0][300], 0.25f), "trim -6 dB after the preamp");
+        s1.phase->set (1.0f);
+        settle (e, b);
+        check (near (b.out[0][300], -0.25f), "phase flips the polarity");
+        s1.phase->set (0.0f);
+        s1.trim->set (0.0f);
+        settle (e, b);
+
+        // The gain / trim link (on by default) turns the trim the opposite way, by hand only.
+        auto& s6 = *e.inputStrips[5];
+        check (s6.controls.gainLink->on(), "gain and trim start linked");
+        s6.turnGain (12.0f);
+        check (s6.controls.gain->get() == 12.0f && s6.controls.trim->get() == -12.0f, "linked: gain up 12 dB turns the trim down 12 dB");
+        s6.controls.trim->set (-8.0f);
+        s6.turnGain (2.0f);
+        check (s6.controls.trim->get() == 2.0f, "linked: the trim keeps its own offset (-8 - (2 - 12) = +2)");
+        s6.controls.gainLink->set (0.0f);
+        s6.turnGain (20.0f);
+        check (s6.controls.gain->get() == 20.0f && s6.controls.trim->get() == 2.0f, "unlinked: the gain moves alone");
+        s6.controls.gain->set (5.0f);
+        check (s6.controls.trim->get() == 2.0f, "setting the gain directly (scenes, sessions) never moves the trim");
 
         // Meters: input after the trim, output after the fader.
         s1.fader->set (0.0f);
@@ -1255,11 +1279,11 @@ namespace
     /** Harmonic levels (relative to the fundamental) of a sine through a Preamp. amp is in clipLevel units
         (0.5 = +20 dBu). Measured over whole cycles after half a second of settling. */
     struct PreampHarmonics { float h2, h3; };
-    PreampHarmonics preampHarmonics (float trimDb, double freq, float amp)
+    PreampHarmonics preampHarmonics (float gainDb, double freq, float amp)
     {
         constexpr double sr = 48000.0, twoPi = juce::MathConstants<double>::twoPi;
         Preamp p;
-        p.prepare (sr, trimDb, true);
+        p.prepare (sr, gainDb, true);
         const int warm = 24000, len = 24000;   // 0.5 s each: whole cycles at 1 kHz and 40 Hz
         double re[4] {}, im[4] {};
         for (int i = 0; i < warm + len; ++i)
@@ -1280,7 +1304,7 @@ namespace
     {
         std::puts ("Console colour: 1073-style preamps");
         const auto nominal = preampHarmonics (0.0f, 1000.0, 0.5f);
-        std::printf ("      +20 dBu, 1 kHz, trim 0: 2nd %.3f %%, 3rd %.3f %%\n", nominal.h2 * 100.0f, nominal.h3 * 100.0f);
+        std::printf ("      +20 dBu, 1 kHz, gain 0: 2nd %.3f %%, 3rd %.3f %%\n", nominal.h2 * 100.0f, nominal.h3 * 100.0f);
         check (nominal.h2 > 0.0008f && nominal.h2 < 0.0012f, "2nd harmonic about 0.1 % at +20 dBu");
         check (nominal.h3 > 0.0004f && nominal.h3 < 0.0006f, "3rd harmonic about 0.05 % at +20 dBu (2nd dominant, class A)");
 
@@ -1288,23 +1312,23 @@ namespace
         check (quiet.h2 + quiet.h3 < 0.0002f, "nearly clean at normal levels (-18 dBFS)");
 
         const auto low = preampHarmonics (0.0f, 40.0, 0.5f);
-        std::printf ("      +20 dBu, 40 Hz, trim 0: 2nd %.3f %%, 3rd %.3f %%\n", low.h2 * 100.0f, low.h3 * 100.0f);
+        std::printf ("      +20 dBu, 40 Hz, gain 0: 2nd %.3f %%, 3rd %.3f %%\n", low.h2 * 100.0f, low.h3 * 100.0f);
         check (low.h3 > 0.002f && low.h3 < 0.0045f, "transformers: about 0.3 % 3rd at 40 Hz");
 
         const auto at20 = preampHarmonics (20.0f, 1000.0, 0.5f), at30 = preampHarmonics (30.0f, 1000.0, 0.5f);
         const float real30 = std::pow (10.0f, 0.15f);   // what the lost feedback alone adds from +20 to +30 dB
-        std::printf ("      trim +30 vs +20 at the same level: 2nd x%.2f, 3rd x%.2f (feedback alone x%.2f)\n",
+        std::printf ("      gain +30 vs +20 at the same level: 2nd x%.2f, 3rd x%.2f (feedback alone x%.2f)\n",
                      at30.h2 / at20.h2, at30.h3 / at20.h3, real30);
         check (near (Preamp::exaggeration (20.0f), 1.0f) && near (Preamp::exaggeration (30.0f), 1.4f), "exaggeration 1.4x only at the top");
         check (near (at30.h2 / at20.h2 / real30, 1.4f, 0.03f) && near (at30.h3 / at20.h3 / real30, 1.4f, 0.03f),
-               "trim fully up: harmonics 1.4x a real 1073");
+               "gain fully up: harmonics 1.4x a real 1073");
 
         // Through the engine: on by default, rails hold, and the switch gives back the clean preamp.
         check (AudioEngine().preampColour->on(), "console colour is on by default");
         SineRig r;
         r.e.preampColour->set (1.0f);
-        auto& trim = *r.e.inputStrips[0]->controls.trim;
-        trim.set (30.0f);   // 0.1 x 31.6 = +10 dBFS = +28 dBu: past the rails
+        auto& gain = *r.e.inputStrips[0]->controls.gain;
+        gain.set (30.0f);   // 0.1 x 31.6 = +10 dBFS = +28 dBu: past the rails
         r.measure (1000.0f, 0.1f);
         r.e.inputStrips[0]->takeInputPeak();
         r.run (1000.0f, 0.1f, 10);
@@ -1316,7 +1340,7 @@ namespace
         r.run (1000.0f, 0.1f, 40);   // 20 ms crossfade
         r.e.inputStrips[0]->takeInputPeak();
         r.run (1000.0f, 0.1f, 10);
-        check (near (r.e.inputStrips[0]->takeInputPeak(), 0.1f * std::pow (10.0f, 1.5f), 1.0e-3f), "colour off: clean trim");
+        check (near (r.e.inputStrips[0]->takeInputPeak(), 0.1f * std::pow (10.0f, 1.5f), 1.0e-3f), "colour off: clean gain");
     }
 
     /** Steady-state output peak of a BusCompressor fed with the same sine on both sides. */
@@ -2176,6 +2200,31 @@ namespace
         folder.deleteRecursively();
     }
 
+    void testOldTrimSession()
+    {
+        std::puts ("Sessions: the preamp gain knob used to be called Trim");
+        const auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("Oxide3216TestOldTrim");
+        folder.deleteRecursively();
+        folder.createDirectory();
+        // ch1: before 0.1.6 (one "trim", the preamp gain); ch2: with gain and trim. Scene 1 is from before 0.1.6.
+        folder.getChildFile (Session::fileName).replaceWithText (
+            R"({ "format": "Oxide-3216 session", "controls": { "ch1.trim": 25.0, "ch2.gain": 10.0, "ch2.trim": -4.0, "ch2.gain.link": 0.0 },)"
+            R"( "scenes": { "scenes": [ { "number": 1, "title": "Old", "values": { "ch3.trim": 18.0 } } ] } })");
+
+        TestEngine e;
+        e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }));
+        check (Session::load (e, nullptr, folder).ok, "old session loaded");
+        const auto& c1 = e.inputStrips[0]->controls;
+        const auto& c2 = e.inputStrips[1]->controls;
+        check (c1.gain->get() == 25.0f && c1.trim->get() == 0.0f && c1.gainLink->on(),
+               "an old Trim of +25 loads as Gain +25, trim 0, linked");
+        check (c2.gain->get() == 10.0f && c2.trim->get() == -4.0f && ! c2.gainLink->on(), "gain, trim and link load as saved");
+        e.scenes.recall (0);
+        const auto& c3 = e.inputStrips[2]->controls;
+        check (c3.gain->get() == 18.0f && c3.trim->get() == 0.0f, "an old scene's Trim recalls as the gain");
+        folder.deleteRecursively();
+    }
+
     std::vector<float> readWav (const juce::File& file)
     {
         juce::AudioFormatManager fm;
@@ -2685,6 +2734,7 @@ int main (int argc, char** argv)
     testTapeFiles();
     testSessions();
     testOldCompressorSession();
+    testOldTrimSession();
     testImport();
     testNoDeviceIsSafe();
 

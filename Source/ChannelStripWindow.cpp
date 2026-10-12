@@ -164,9 +164,12 @@ private:
 //==============================================================================
 ChannelStripPanel::ChannelStripPanel (ChannelStrip& s, StripBank& consoleBank, int stripIndex)
     : strip (s), bank (consoleBank), index (stripIndex),
+      gain (*s.controls.gain, "Gain"),
       trim (*s.controls.trim, "Trim"),
       hpf (*s.controls.hpf, "HPF"),
       pan (*s.controls.pan, "Pan"),
+      phase (*s.controls.phase, {}),
+      gainLink (*s.controls.gainLink, {}),
       hfBell (*s.eq.bell[FourBandEq::HF], "Bell"),
       lfBell (*s.eq.bell[FourBandEq::LF], "Bell"),
       hmfQ (*s.eq.q[FourBandEq::HMF], "Q", juce::Colour (FourBandEq::bands[FourBandEq::HMF].capColour)),
@@ -216,7 +219,11 @@ ChannelStripPanel::ChannelStripPanel (ChannelStrip& s, StripBank& consoleBank, i
 
     hpf.setFormatter ([] (float f) { return f < 20.5f ? juce::String ("off") : formatHz (f); });
     hpf.setEndLabels ("20", "300");
+    setupPreamp (s, gain, trim, phase, gainLink);
+    add (gain);
     add (trim);
+    add (phase);
+    add (gainLink);
     add (hpf);
     add (inMeter);
 
@@ -457,11 +464,15 @@ void ChannelStripPanel::resized()
 
     // Top row: Input, Equaliser, Gate.
     {
-        // Trim over HPF, the input meter beside them.
+        // Gain and trim side by side, the link between their legends; under the gain, the phase switch
+        // and HPF, and the input meter beside them.
         const auto b = module ("Input", sideW);
-        trim.setBounds (knobAt (b.getX() + 10, b.getY() + 12));
-        hpf.setBounds (knobAt (b.getX() + 10, b.getY() + 70));
-        inMeter.setBounds (b.getRight() - 34, b.getY() + 14, 12, b.getBottom() - 16 - (b.getY() + 14));
+        gain.setBounds (knobAt (leftOf (b), b.getY() + 12));
+        trim.setBounds (knobAt (rightOf (b), b.getY() + 12));
+        gainLink.setBounds (juce::Rectangle<int> (22, 12).withCentre ({ b.getCentreX(), gain.getBottom() - 6 }));
+        phase.setBounds (juce::Rectangle<int> (30, 20).withCentre ({ gain.getBounds().getCentreX(), b.getY() + 70 + 19 }));
+        hpf.setBounds (knobAt (leftOf (b), b.getY() + 128));
+        inMeter.setBounds (trim.getBounds().getCentreX() - 6, b.getY() + 72, 12, b.getBottom() - 8 - (b.getY() + 72));
     }
     {
         // One column per band, gain over frequency, LF on the left to HF on the right (low to high, as on a

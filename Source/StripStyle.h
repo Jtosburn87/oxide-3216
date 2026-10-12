@@ -2,6 +2,7 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "ConsoleLookAndFeel.h"
+#include "ChannelStrip.h"
 #include "Eq.h"
 #include "Widgets.h"
 
@@ -67,4 +68,16 @@ namespace StripStyle
 
     inline juce::Rectangle<int> knobAt (int x, int y)      { return { x, y, Knob::preferredWidth, Knob::preferredHeight }; }
     inline juce::Rectangle<int> smallKnobAt (int x, int y) { return { x, y, Knob::smallWidth, Knob::smallHeight }; }
+
+    /** The preamp controls of the Input section: phase, gain, trim and the gain / trim link. */
+    inline void setupPreamp (ChannelStrip& s, Knob& gain, Knob& trim, ParamButton& phase, ParamButton& link)
+    {
+        gain.setEndLabels ("-20", "+30");
+        gain.setOnUserSet ([&s] (float db) { s.turnGain (db); });
+        trim.setEndLabels ("-30", "+20");
+        phase.setButtonText (juce::CharPointer_UTF8 ("\xc3\x98"));   // the polarity sign, a 0 with a line through it
+        phase.setTooltip ("Phase: flips the channel's polarity");
+        link.setTooltip ("Gain / trim link: while it is lit, turning the gain turns the trim the other way, "
+                         "so the preamp is driven harder or cleaner at the same level");
+    }
 }
