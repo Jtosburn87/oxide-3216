@@ -1,0 +1,62 @@
+# Builds the Mac version on GitHub's Mac machines and runs the engine tests there, since nobody here
+# has a Mac. The zip is kept as a download on the run's page (Actions > Mac build > the run > Artifacts).
+#
+# Mac minutes on a private repo count 10x against the monthly allowance, so it doesn't run on every
+# push: start it by hand (Actions > Mac build > Run workflow), push a tag like v0.1.7, or change this
+# file or build-mac.sh.
+name: Mac build
+
+on:
+  workflow_dispatch:
+    inputs:
+      archs:
+        description: "Architectures"
+        type: choice
+        options: ["arm64;x86_64", "arm64"]
+        default: "arm64;x86_64"
+  push:
+    tags: ["v*"]
+    branches: [main]
+    paths: [".github/workflows/macos.yml", "build-mac.sh"]
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compiler cache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: macos-${{ inputs.archs || 'arm64;x86_64' }}
+          max-size: 2G
+
+      - name: Build, test and pack
+        env:
+          OXIDE_ARCHS: ${{ inputs.archs || 'arm64;x86_64' }}
+          CMAKE_C_COMPILER_LAUNCHER: ccache
+          CMAKE_CXX_COMPILER_LAUNCHER: ccache
+        run: ./build-mac.sh Release
+
+      - name: Check the app bundle
+        run: |
+          app=build-mac/Oxide3216_artefacts/Release/Oxide-3216.app
+          lipo -info "$app/Contents/MacOS/Oxide-3216"
+          plutil -p "$app/Contents/Info.plist" | grep -E 'CFBundleIdentifier|NSMicrophoneUsageDescription|LSMinimumSystemVersion|CFBundleShortVersionString'
+          codesign --verify --deep --verbose=2 "$app"
+          # Starts the real app far enough to draw the desk into a picture, then exits.
+          perl -e 'alarm 120; exec @ARGV' "$app/Contents/MacOS/Oxide-3216" --snapshot "$RUNNER_TEMP/desk.png" 0.5 || echo "snapshot failed (exit $?)"
+          mkdir -p dist/screens && cp "$RUNNER_TEMP/desk.png" dist/screens/ 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Oxide-3216-mac
+          path: dist/*.zip
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desk-snapshot
+          path: dist/screens/
+          if-no-files-found: ignore

@@ -1,5 +1,9 @@
 ﻿cmake_minimum_required(VERSION 3.22)
 
+# macOS 11 (Big Sur) and later; build-mac.sh makes a universal binary (Apple silicon + Intel).
+# Has to come before project().
+set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Oldest macOS the app runs on")
+
 project(Oxide3216 VERSION 0.1.6 LANGUAGES C CXX)
 
 # Beta builds: bump the version above with each set of changes. The label is what the app and the zip show.
@@ -54,9 +58,14 @@ elseif(UNIX AND NOT APPLE)
     # Linux: ALSA and JACK (PipeWire serves JACK clients too).
     target_compile_definitions(Oxide3216Core PUBLIC JUCE_ALSA=1 JUCE_JACK=1)
 endif()
+# Mac audio is Core Audio (always on). Audio Units are the usual Mac plugins, hosted next to VST3.
+if(APPLE)
+    target_compile_definitions(Oxide3216Core PUBLIC JUCE_PLUGINHOST_AU=1)
+else()
+    target_compile_definitions(Oxide3216Core PUBLIC JUCE_PLUGINHOST_AU=0)
+endif()
 target_compile_definitions(Oxide3216Core PUBLIC
     JUCE_PLUGINHOST_VST3=1
-    JUCE_PLUGINHOST_AU=0
     JUCE_PLUGINHOST_LADSPA=0
     JUCE_PLUGINHOST_LV2=0
     JUCE_DIRECTSOUND=0
@@ -81,7 +90,11 @@ juce_add_gui_app(Oxide3216
     PRODUCT_NAME "Oxide-3216"
     COMPANY_NAME "Oxide-3216"
     ICON_BIG "${CMAKE_SOURCE_DIR}/Resources/oxide-3216-icon.svg"
-    VERSION ${PROJECT_VERSION})
+    VERSION ${PROJECT_VERSION}
+    # macOS bundle. Without the microphone entry macOS gives the app silence on every input.
+    BUNDLE_ID "com.oxide3216.Oxide3216"
+    MICROPHONE_PERMISSION_ENABLED TRUE
+    MICROPHONE_PERMISSION_TEXT "Oxide-3216 records from your audio interface's inputs.")
 
 target_sources(Oxide3216 PRIVATE
     Source/ImportAudioDialog.cpp

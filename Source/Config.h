@@ -12,6 +12,13 @@ namespace Config
     constexpr int maxBlock = 512;          // device blocks larger than this are processed in pieces
     constexpr double maxSampleRate = 192000.0;
     constexpr int maxTapeMinutes = 60;
+
+    /** The plugin formats the insert slots take, as the UI names them. */
+   #if defined (__APPLE__)
+    constexpr const char* pluginFormats = "VST3 / AU";
+   #else
+    constexpr const char* pluginFormats = "VST3";
+   #endif
 }
 
 /** Where a channel strip adds its outputs. */

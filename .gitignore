@@ -12,6 +12,8 @@
 .vscode/
 Thumbs.db
 /build-linux/
+/build-mac/
+.DS_Store
 
 # design reference photos, kept local
 /reference.jpg

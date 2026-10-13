@@ -9,7 +9,7 @@ ParamSlider::ParamSlider (Param& p) : param (p)
 {
     setRange (false);
     setValue (p.get(), juce::dontSendNotification);
-    setDoubleClickReturnValue (true, p.def, juce::ModifierKeys::ctrlModifier);   // double-click or Ctrl+click resets
+    setDoubleClickReturnValue (true, p.def, juce::ModifierKeys::commandModifier);   // double-click or Ctrl+click (Cmd+click on a Mac) resets
     setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
     setTitle (p.name);
     setWantsKeyboardFocus (true);

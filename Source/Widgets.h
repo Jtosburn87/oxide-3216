@@ -46,7 +46,7 @@ public:
     void setEndLabels (juce::String left, juce::String right) { endLeft = std::move (left); endRight = std::move (right); repaint(); }
     void setLegend (juce::String text) { legend = std::move (text); updateLegend(); }
     /** The value a double-click returns the knob to (normally the control's default). */
-    void setResetValue (float v) { slider.setDoubleClickReturnValue (true, v, juce::ModifierKeys::ctrlModifier); }
+    void setResetValue (float v) { slider.setDoubleClickReturnValue (true, v, juce::ModifierKeys::commandModifier); }
     /** Set: a double-click calls this instead of resetting (Ctrl+click still resets). */
     void setOnDoubleClick (std::function<void()> f) { slider.onDoubleClick = std::move (f); }
     /** The value goes down as the knob turns right (end labels are still left, right). */

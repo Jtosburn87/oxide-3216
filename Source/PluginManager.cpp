@@ -6,7 +6,10 @@ namespace
 
     void addFormats (juce::AudioPluginFormatManager& fm)
     {
-        fm.addFormat (new juce::VST3PluginFormat());
+        fm.addFormat (new juce::VST3PluginFormat());   // first: the folder scan and --snapshot use format 0
+       #if JUCE_PLUGINHOST_AU && JUCE_MAC
+        fm.addFormat (new juce::AudioUnitPluginFormat());
+       #endif
     }
 
     /** Scans one plugin file in a separate process, so a crashing plugin cannot take the console down. */

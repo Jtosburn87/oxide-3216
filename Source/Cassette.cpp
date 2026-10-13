@@ -24,7 +24,9 @@ namespace
         static const juce::String name = []
         {
             const auto names = juce::Font::findAllTypefaceNames();
-            for (auto* candidate : { "Ink Free", "Segoe Print", "Segoe Script", "Comic Sans MS" })
+            for (auto* candidate : { "Ink Free", "Segoe Print", "Segoe Script",   // Windows
+                                     "Noteworthy", "Marker Felt", "Chalkboard SE",   // macOS
+                                     "Comic Sans MS" })
                 if (names.contains (candidate))
                     return juce::String (candidate);
             return juce::String();

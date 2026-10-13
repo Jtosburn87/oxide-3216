@@ -1,7 +1,8 @@
 OXIDE-3216
 ==========
 
-A 16-track tape machine fed by a 32-channel console, for Windows 10/11 (64-bit).
+A 16-track tape machine fed by a 32-channel console, for Windows 10/11 (64-bit). A macOS
+version (11 Big Sur or later, Apple silicon and Intel) is being tested: see "On a Mac" below.
 
 
 RUNNING IT
@@ -15,6 +16,13 @@ First time:
   2. Click "Options" > "Plugins", then Options > "Scan for new or updated VST3 plug-ins" (the standard folder
      is C:\Program Files\Common Files\VST3; add others in the scan dialog). Each plugin is scanned
      in its own process, so a bad plugin cannot crash the console. Failed ones are shown in red.
+
+On a Mac (in testing): unzip and drag Oxide-3216.app to Applications. It isn't signed by a
+registered Apple developer yet, so the first time, right-click it and choose Open, then Open again
+(on macOS 15: try to open it once, then System Settings > Privacy & Security > Open Anyway).
+Allow microphone access when asked: macOS calls every audio interface input a "microphone", and
+without it every input is silent. Audio device lists your Core Audio interfaces. The plugin scan
+finds VST3 plugins and Audio Units. Wherever this README says Ctrl, use Cmd.
 
 
 THE CONSOLE
@@ -63,7 +71,7 @@ the same bank (16 goes round to 1). It also has controls the strip doesn't:
         the output is made up automatically.
   A new channel starts on 60; sessions from before the types open on 76, as they were made.
 
-Knobs and faders: drag up/down, mouse wheel, Ctrl+click for the default (double-click too, except on
+Knobs and faders: drag up/down, mouse wheel, Ctrl+click (Cmd+click on a Mac) for the default (double-click too, except on
 channel strip knobs, where it opens the channel window); with the keyboard, arrows step, Page Up/Down
 step more, Home or Delete resets.
 
@@ -138,8 +146,8 @@ Click a channel strip jack to unplug it (patch cables come out first). "Interfac
 channel 1 from input 1, channel 2 from input 2, and so on. "Pull all cables" leaves these alone.
 
 
-PLUGINS (VST3)
---------------
+PLUGINS (VST3, and Audio Units on a Mac)
+----------------------------------------
 The inserts row in the centre shows the 4 insert slots of each sub, aux return and the master,
 over their faders (slot 1 at the top; amber = running, dim = bypassed). Click a slot to open its
 plugin (an empty one: the plugin menu); the list button left of it opens the plugin menu;
@@ -169,6 +177,7 @@ its end plus 3 seconds, to a 24-bit WAV.
 WHERE THINGS ARE KEPT
 ---------------------
 %APPDATA%\Oxide-3216\Oxide-3216.settings   audio device, routing, plugin list
+(Mac: ~/Library/Application Support/Oxide-3216/Oxide-3216.settings)
 
 The app used to be called ConsoleTape. The first time Oxide-3216 starts it copies the old
 %APPDATA%\ConsoleTape settings. If Documents\ConsoleTape Sessions exists it keeps saving

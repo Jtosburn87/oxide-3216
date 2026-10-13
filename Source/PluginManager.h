@@ -3,7 +3,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "InsertChain.h"
 
-/** Knows the installed VST3 plugins and creates them.
+/** Knows the installed VST3 plugins (and Audio Units on a Mac) and creates them.
 
     Scanning runs out of process: for each plugin file the app starts another copy of itself with
     --scan-plugin. If that copy crashes or hangs (60 s), only it dies; the plugin goes on the failed

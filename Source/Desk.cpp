@@ -1001,7 +1001,7 @@ void CentreSection::paint (juce::Graphics& g)
     // Group EQ.
     paintSection (g, "Group EQ", groupEqBox, stripGrey);
     paintSection (g, "Jog / shuttle", shuttleBox, stripGrey);
-    paintSection (g, "Inserts (VST3) and aux returns", insertsBox, stripGrey);
+    paintSection (g, "Inserts (" + juce::String (Config::pluginFormats) + ") and aux returns", insertsBox, stripGrey);
     g.setFont (ConsoleLookAndFeel::uiFont (11.0f, true));
     for (int k = 0; k < Config::numSubs; ++k)
     {

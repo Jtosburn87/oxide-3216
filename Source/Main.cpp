@@ -41,6 +41,10 @@ public:
 
     void initialise (const juce::String&) override
     {
+       #if JUCE_MAC
+        if (isSnapshot() || isFolderScan() || isScanner())
+            juce::Process::setDockIconVisible (false);   // helper copies: no extra icon in the Dock per plugin
+       #endif
         if (isSnapshot())
         {
             writeSnapshot();
@@ -173,7 +177,8 @@ public:
                 for (auto* name : { "CSR Plate v6.vst3", "Black 76 v6.vst3" })
                 {
                     juce::OwnedArray<juce::PluginDescription> found;
-                    pm->formats.getFormat (0)->findAllTypesForFile (found, "C:\\Program Files\\Common Files\\VST3\\" + juce::String (name));
+                    auto& vst3 = *pm->formats.getFormat (0);
+                    vst3.findAllTypesForFile (found, vst3.getDefaultLocationsToSearch()[0].getChildFile (name).getFullPathName());
                     juce::String error;
                     if (! found.isEmpty())
                         e.auxInserts[0]->setSlot (slot, pm->create (*found[0], 48000.0, Config::maxBlock, error), *found[0]);
@@ -243,6 +248,11 @@ private:
             setUsingNativeTitleBar (! on);   // full screen uses JUCE's own title bar at height 0, i.e. none
             setTitleBarHeight (on ? 0 : 26);
             setResizable (! on, ! on);
+           #if JUCE_MAC
+            // The menu bar and Dock would sit over the top and bottom of the desk: hide them. They
+            // still slide in when the mouse reaches the screen edge.
+            juce::Desktop::getInstance().setKioskModeComponent (on ? this : nullptr, true);
+           #endif
             if (on)
             {
                 if (auto* display = juce::Desktop::getInstance().getDisplays().getDisplayForRect (windowedBounds))

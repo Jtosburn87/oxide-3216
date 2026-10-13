@@ -355,7 +355,7 @@ void MainComponent::openPluginList()
 
     juce::DialogWindow::LaunchOptions o;
     o.content.setOwned (list.release());
-    o.dialogTitle = "Plugins (VST3)  -  Options > Scan to find plugins; failed ones are shown in red";
+    o.dialogTitle = "Plugins (" + juce::String (Config::pluginFormats) + ")  -  Options > Scan to find plugins; failed ones are shown in red";
     o.dialogBackgroundColour = room;
     o.escapeKeyTriggersCloseButton = true;
     o.useNativeTitleBar = true;
@@ -637,7 +637,7 @@ void MainComponent::showSectionsMenu()
     });
     m.addSeparator();
     const bool unlocked = settings.getBoolValue ("chainUnlocked");
-    m.addItem ("Plugins (scan for VST3 plugins)...", [this] { openPluginList(); });
+    m.addItem ("Plugins (scan for " + juce::String (Config::pluginFormats) + " plugins)...", [this] { openPluginList(); });
     m.addItem ("Keyboard shortcuts...", [this] { openKeyMappings(); });
     m.addSeparator();
     m.addItem ("Unlock chain order (EQ, gate, compressor per channel)", true, unlocked, [this, unlocked]
