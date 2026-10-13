@@ -12,3 +12,7 @@
 .vscode/
 Thumbs.db
 /build-linux/
+
+# design reference photos, kept local
+/reference.jpg
+/meterbridge.jpg
