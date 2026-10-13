@@ -20,12 +20,14 @@ FetchContent_Declare(JUCE
     GIT_PROGRESS   TRUE)
 FetchContent_MakeAvailable(JUCE)
 
-# Steinberg ASIO SDK (licensed separately, not in git). See BRIEF.md.
-set(ASIO_SDK_DIR "${CMAKE_SOURCE_DIR}/sdk/ASIOSDK" CACHE PATH "Folder containing the ASIO SDK (with common/iasiodrv.h)")
-if(NOT EXISTS "${ASIO_SDK_DIR}/common/iasiodrv.h")
-    message(FATAL_ERROR
-        "ASIO SDK not found. Download it from https://www.steinberg.net/developers/ "
-        "and unzip it so that ${ASIO_SDK_DIR}/common/iasiodrv.h exists.")
+# Steinberg ASIO SDK (licensed separately, not in git). See BRIEF.md. Windows only.
+if(WIN32)
+    set(ASIO_SDK_DIR "${CMAKE_SOURCE_DIR}/sdk/ASIOSDK" CACHE PATH "Folder containing the ASIO SDK (with common/iasiodrv.h)")
+    if(NOT EXISTS "${ASIO_SDK_DIR}/common/iasiodrv.h")
+        message(FATAL_ERROR
+            "ASIO SDK not found. Download it from https://www.steinberg.net/developers/ "
+            "and unzip it so that ${ASIO_SDK_DIR}/common/iasiodrv.h exists.")
+    endif()
 endif()
 
 # Code shared by the app and the tests. JUCE modules are compiled once, into this
@@ -44,10 +46,15 @@ add_library(Oxide3216Core STATIC
     Source/Params.cpp
     Source/Scenes.cpp
     Source/TapeMachine.cpp)
-target_include_directories(Oxide3216Core PUBLIC Source "${ASIO_SDK_DIR}/common")
+target_include_directories(Oxide3216Core PUBLIC Source)
+if(WIN32)
+    target_include_directories(Oxide3216Core PUBLIC "${ASIO_SDK_DIR}/common")
+    target_compile_definitions(Oxide3216Core PUBLIC JUCE_ASIO=1 JUCE_WASAPI=1)
+elseif(UNIX AND NOT APPLE)
+    # Linux: ALSA and JACK (PipeWire serves JACK clients too).
+    target_compile_definitions(Oxide3216Core PUBLIC JUCE_ALSA=1 JUCE_JACK=1)
+endif()
 target_compile_definitions(Oxide3216Core PUBLIC
-    JUCE_ASIO=1
-    JUCE_WASAPI=1
     JUCE_PLUGINHOST_VST3=1
     JUCE_PLUGINHOST_AU=0
     JUCE_PLUGINHOST_LADSPA=0

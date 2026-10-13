@@ -13,9 +13,11 @@
 #include <vector>
 
 // The benchmark can run at audio-thread priority. (Declared here: windows.h would break near().)
+#if JUCE_WINDOWS
 extern "C" __declspec (dllimport) void* __stdcall GetCurrentThread();
 extern "C" __declspec (dllimport) int __stdcall SetThreadPriority (void*, int);
 constexpr int THREAD_PRIORITY_TIME_CRITICAL = 15;
+#endif
 
 namespace
 {
@@ -2523,7 +2525,11 @@ namespace
         // BENCH_PRIORITY=1: time-critical, like a real audio thread, so the slowest blocks are the engine's
         // own and not Windows scheduling. BENCH_NO_CHARACTER=1: tape character off.
         if (juce::SystemStats::getEnvironmentVariable ("BENCH_PRIORITY", {}) == "1")
+        {
+           #if JUCE_WINDOWS
             SetThreadPriority (GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+           #endif
+        }
         if (juce::SystemStats::getEnvironmentVariable ("BENCH_NO_CHARACTER", {}) == "1")
             e.tape.characterOn = false;
         auto all = [&] (auto fn) { for (auto* s : e.inputStrips) fn (*s); for (auto* s : e.returnStrips) fn (*s); };
