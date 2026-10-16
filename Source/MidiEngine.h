@@ -10,13 +10,13 @@
 
 class TapeMachine;
 
-/** MIDI on the MIDI page: notes, clips and the tracks that hold them. Positions are ticks of the tempo's beat
-    (Tempo::ticksPerBeat a beat) from the start of the tape, so the MIDI follows the tape exactly. */
+/** MIDI on the MIDI page: notes, clips and the tracks that hold them. Positions are ticks of a quarter note
+    (Tempo::ticksPerQuarter) from the start of the tape, laid on it by the tempo (map), so the MIDI follows the tape exactly. */
 namespace Midi
 {
     struct Note
     {
-        juce::int64 start = 0, length = Tempo::ticksPerBeat / 4;   // ticks, start from the clip's start
+        juce::int64 start = 0, length = Tempo::ticksPerQuarter / 4;   // ticks, start from the clip's start
         int pitch = 60, velocity = 100;
         bool operator== (const Note& o) const { return start == o.start && length == o.length && pitch == o.pitch && velocity == o.velocity; }
     };
@@ -111,9 +111,13 @@ public:
     static juce::Array<juce::MidiDeviceInfo> availableInputs() { return juce::MidiInput::getAvailableDevices(); }
 
     /** A standard MIDI file (dragged from a plugin's groove browser, or from Explorer) as a clip starting at 0: its
-        notes (every track and channel merged) in this tempo's ticks, the length rounded up to whole bars, named after
-        the file. beatUnit: the time signature's beat (4 = quarter notes). Empty clip and an error if it can't be read. */
-    static Midi::Clip readMidiFile (const juce::File&, int beatUnit, int beatsPerBar, double ticksPerSecond, juce::String& error);
+        notes (every track and channel merged) in our ticks, the length rounded up to whole bars of the tempo (map),
+        named after the file. Empty clip and an error if it can't be read. */
+    static Midi::Clip readMidiFile (const juce::File&, const Tempo&, juce::String& error);
+    /** A MIDI file's tempo map (its tempo and time signature changes, in our ticks). Empty and an error if it has none. */
+    static std::vector<Tempo::Change> readTempoMap (const juce::File&, juce::String& error);
+    /** A clip length from `start` to the end of the bar holding contentEnd - 1 (the last tick with something in it). */
+    static juce::int64 barsLength (const Tempo&, juce::int64 start, juce::int64 contentEnd);
     static bool isMidiFile (const juce::String& path) { return path.endsWithIgnoreCase (".mid") || path.endsWithIgnoreCase (".midi") || path.endsWithIgnoreCase (".smf"); }
 
     // Instruments (message thread) --------------------------------------------

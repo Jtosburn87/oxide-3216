@@ -90,23 +90,31 @@ void BpmReadout::setBpm (float v)
 
 void BpmReadout::mouseDown (const juce::MouseEvent&)
 {
+    if (tempo.hasMap())
+        return;
     dragStart = tempo.bpm->get();
 }
 
 void BpmReadout::mouseDrag (const juce::MouseEvent& e)
 {
-    const float perPixel = e.mods.isShiftDown() ? 0.05f : 0.5f;   // 1 a beat a minute for 2 pixels; fine: 0.1 for 2
+    if (tempo.hasMap())
+        return;   // the tempo map sets the tempo
+    const float perPixel = e.mods.isShiftDown() ? 0.05f : 0.5f;   // 1 aposition.setTooltip ("Where the tape is, in bar | beat | tick (960 ticks a quarter note).a minute for 2 pixels; fine: 0.1 for 2
     setBpm (dragStart - (float) e.getDistanceFromDragStartY() * perPixel);
 }
 
 void BpmReadout::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w)
 {
+    if (tempo.hasMap())
+        return;
     const float step = e.mods.isShiftDown() ? 0.1f : 1.0f;
     setBpm (tempo.bpm->get() + (w.deltaY > 0.0f ? step : -step));
 }
 
 void BpmReadout::mouseDoubleClick (const juce::MouseEvent&)
 {
+    if (tempo.hasMap())
+        return;
     editor = std::make_unique<juce::TextEditor>();
     editor->setFont (ConsoleLookAndFeel::uiFont ((float) getHeight() * 0.5f, true));
     editor->setJustification (juce::Justification::centred);
@@ -149,7 +157,7 @@ SignatureReadout::SignatureReadout (Tempo& t) : tempo (t)
 
 void SignatureReadout::mouseUp (const juce::MouseEvent& e)
 {
-    if (! getLocalBounds().contains (e.getPosition()))
+    if (! getLocalBounds().contains (e.getPosition()) || tempo.hasMap())
         return;
     juce::PopupMenu menu, beats, units;
     const int nowBeats = tempo.getBeatsPerBar(), nowUnit = tempo.getBeatUnit();
@@ -208,6 +216,8 @@ TempoPanel::TempoPanel (AudioEngine& e)
 
 void TempoPanel::tapped()
 {
+    if (tempo.hasMap())
+        return;
     const double now = juce::Time::getMillisecondCounterHiRes();
     if (! taps.empty() && now - taps.back() > 2000.0)
         taps.clear();   // a pause starts again
@@ -223,10 +233,25 @@ void TempoPanel::tapped()
 
 void TempoPanel::timerCallback()
 {
-    bpm.setText (BpmReadout::format (tempo.bpm->get()));
-    signature.setText (tempo.signatureText());
-    auto p = tempo.positionAt (engine.tape.getPosition(), engine.tape.getSampleRate());
+    // With a tempo map the readouts show the tempo and signature where the tape is now.
+    const double now = tempo.ticksAt ((double) engine.tape.getPosition(), engine.tape.getSampleRate());
+    bpm.setText (BpmReadout::format ((float) tempo.bpmAt (now)));
+    signature.setText (Tempo::signatureText (tempo.signatureAt (now)));
+    auto p = tempo.positionAtTicks (now);
     position.setText (juce::String::formatted ("%03d|%d|%03d", p.bar, p.beat, p.tick));
+
+    const bool map = tempo.hasMap();
+    if (map != showingMap)
+    {
+        showingMap = map;
+        tap.setEnabled (! map);
+        bpm.setTooltip (map ? "Tempo from the tempo map, where the tape is now (Session > Clear tempo map to set one tempo)"
+                            : "Tempo in beats a minute: drag up or down (Shift: fine), turn the mouse wheel, or double-click to type it");
+        bpm.setMouseCursor (map ? juce::MouseCursor::NormalCursor : juce::MouseCursor::UpDownResizeCursor);
+        signature.setTooltip (map ? "Time signature from the tempo map, where the tape is now" : "Time signature: click to choose");
+        signature.setMouseCursor (map ? juce::MouseCursor::NormalCursor : juce::MouseCursor::PointingHandCursor);
+        repaint();
+    }
 }
 
 void TempoPanel::resized()
@@ -259,7 +284,17 @@ void TempoPanel::paint (juce::Graphics& g)
 {
     g.setColour (juce::Colour (0xffaeb3b5));
     g.setFont (ConsoleLookAndFeel::uiFont (11.0f, true));
-    g.drawText ("BPM  (drag, wheel, double-click to type)", bpmLegend, juce::Justification::centred, false);
-    g.drawText ("Time signature (click)", sigLegend, juce::Justification::centred, false);
+    if (showingMap)
+    {
+        g.setColour (juce::Colour (0xffe8a33d));
+        g.drawText ("BPM  (TEMPO MAP: follows the song)", bpmLegend, juce::Justification::centred, false);
+        g.drawText ("Time signature (tempo map)", sigLegend, juce::Justification::centred, false);
+        g.setColour (juce::Colour (0xffaeb3b5));
+    }
+    else
+    {
+        g.drawText ("BPM  (drag, wheel, double-click to type)", bpmLegend, juce::Justification::centred, false);
+        g.drawText ("Time signature (click)", sigLegend, juce::Justification::centred, false);
+    }
     g.drawText ("Song position   bar | beat | tick", positionLegend, juce::Justification::centredLeft, false);
 }

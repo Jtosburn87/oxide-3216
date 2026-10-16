@@ -77,6 +77,7 @@ private:
     juce::TextButton clickSetup { "Setup" };   // the click's strip: EQ, pan, aux sends, main send
     Knob clickLevel;
     std::vector<double> taps;   // ms, the latest few
+    bool showingMap = false;
 
     juce::Rectangle<int> bpmLegend, sigLegend, positionLegend;
 

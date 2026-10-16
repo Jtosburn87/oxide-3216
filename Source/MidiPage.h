@@ -39,11 +39,23 @@ public:
     Tool tool = Tool::pointer;
     int selectedTrack = -1, selectedClip = -1;
 
-    /** The snap in ticks (a grid step; fractional in Min:Sec). */
-    double snapTicks() const;
-    juce::int64 snap (double ticks) const;   // to the nearest grid step (or as it is, with snap off)
-    double ticksPerSecond() const;
-    juce::int64 barTicks() const { return (juce::int64) engine.tempo.getBeatsPerBar() * Tempo::ticksPerBeat; }
+    // The snap grid. It follows the tempo (map): bars and beats wherever they fall, seconds in Min:Sec.
+    /** The grid line at or before a tick, and the one after a grid line. */
+    double gridFloor (double ticks) const;
+    double gridNext (double line) const;
+    juce::int64 snap (double ticks) const;       // to the nearest grid line (or as it is, with snap off)
+    juce::int64 snapDown (double ticks) const;   // to the grid line at or before it (or as it is, with snap off)
+    juce::int64 gridStep (double ticks) const;   // the length of the grid step a tick is in
+    enum class Line { bar, beat, fine };
+    /** The bars and beats grid from `from` to `to` (ticks), with the snap's finer lines in Bars: beats closer than
+        6 px and finer lines closer than 8 px at pxPerTick are left out. */
+    void forEachGridLine (double from, double to, double pxPerTick, const std::function<void (double tick, Line, int bar)>&) const;
+
+    /** Session > Import tempo map and the page's Tempo map button: a MIDI file's tempo map, from bar 1. */
+    static void importTempoMap (AudioEngine&);
+    static void clearTempoMap (AudioEngine&);
+    /** "12 changes from 120 BPM 4/4" */
+    static juce::String describeMap (const std::vector<Tempo::Change>&);
     static const std::vector<Grid>& gridsFor (bool bars);
 
     void select (int track, int clip);
@@ -77,6 +89,8 @@ private:
     } vWatch;
     int editorH = 330;
     std::uint32_t shownRevision = ~0u;
+    std::uint32_t shownTempo = ~0u;
+    std::uint32_t tempoPrint() const { return engine.tempo.getMapRevision() * 1000u + (std::uint32_t) (engine.tempo.getBeatsPerBar() * 20 + engine.tempo.getBeatUnit()); }
     juce::Array<int> shownSlots;
 
     void rebuildHeaders();

@@ -2272,6 +2272,80 @@ namespace
         e.tape.setRecordEnabled (false);
     }
 
+    void testTempoMap()
+    {
+        std::puts ("Tempo map: tempo and signature changes along the song");
+        TestEngine e;
+        e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }));
+        auto& t = e.tempo;
+        constexpr double q = Tempo::ticksPerQuarter;
+        const auto close = [] (double a, double b) { return std::abs (a - b) < 1.0e-6 * juce::jmax (1.0, std::abs (b)); };
+        check (! t.hasMap() && t.getChanges().size() == 1, "no map at first: one tempo from the controls");
+
+        // Bars 1-2 in 4/4 at 120 (4 s), bars 3-5 in 3/4 at 60 (3 s each), then 6/8 at 90.
+        t.setMap ({ { 0.0, 120.0, 4, 4 }, { 8.0 * q, 60.0, 3, 4 }, { 17.0 * q, 90.0, 6, 8 } });
+        check (t.hasMap() && t.getMap().size() == 3, "the map is in");
+        check (close (t.secondsAt (8.0 * q), 4.0f) && close (t.secondsAt (17.0 * q), 13.0f), "seconds follow the tempo changes");
+        check (close (t.ticksAtSeconds (7.0), (float) (11.0 * q)), "and back: 7 s is three quarters into the 60 BPM part");
+        check (close (t.bpmAt (10.0 * q), 60.0f) && t.signatureAt (10.0 * q).beats == 3, "tempo and signature where the tape is");
+        auto b = t.barAt (11.0 * q);
+        check (b.number == 4 && close (b.tick, (float) (11.0 * q)) && b.beats == 3 && close (b.length, (float) (3.0 * q)), "bar 4 is a 3/4 bar");
+        auto p = t.positionAt (48000 * 53 / 4, 48000.0);   // 13.25 s: 0.375 quarters into the 6/8
+        check (p.bar == 6 && p.beat == 1 && p.tick == 360, "bar | beat | tick in 6/8 after the change");
+        check (close (t.samplesAt (8.0 * q, 48000.0), 4.0f * 48000.0f), "samples follow too");
+
+        // Saved and loaded; the controls take the opening tempo; clearing keeps it.
+        const auto saved = juce::JSON::toString (t.mapToVar());
+        TestEngine other;
+        other.tempo.mapFromVar (juce::JSON::parse (saved));
+        check (other.tempo.getMap() == t.getMap(), "the map is saved");
+        t.setMap ({ { 0.0, 96.0, 7, 8 }, { 7.0 * q, 140.0, 7, 8 } });
+        check (near (t.bpm->get(), 96.0f) && t.signatureText() == "7/8", "the controls take the map's opening tempo and signature");
+        t.clearMap();
+        check (! t.hasMap() && near (t.bpm->get(), 96.0f) && t.signatureText() == "7/8", "clearing leaves that one tempo");
+        t.setSignature (4, 4);
+        t.bpm->set (120.0f);
+
+        // A signature change part-way through a bar ends that bar there.
+        t.setMap ({ { 0.0, 120.0, 4, 4 }, { 2.0 * q, 120.0, 3, 4 } });
+        check (close (t.barAt (0.0).length, (float) (2.0 * q)) && t.barAt (2.0 * q).number == 2, "a cut-short bar, then bar 2");
+
+        // The click follows: two beats at 120, then 60 (0, 0.5, 1.0, 2.0 s).
+        t.setMap ({ { 0.0, 120.0, 4, 4 }, { 2.0 * q, 60.0, 4, 4 } });
+        Buffers buf (1, 2, 480);
+        std::vector<int> found;
+        bool inClick = false;
+        int quiet = 0;
+        t.clickOn->set (1.0f);
+        e.tape.arm[0]->set (1.0f);
+        e.tape.setRecordEnabled (true);
+        e.tape.play();
+        for (int block = 0; block < 230; ++block)
+        {
+            buf.run (e);
+            for (int i = 0; i < buf.n; ++i)
+            {
+                const bool loud = std::abs (buf.out[0][(size_t) i]) > 0.02f;
+                if (loud && ! inClick)
+                    found.push_back (block * buf.n + i);
+                quiet = loud ? 0 : quiet + 1;
+                inClick = loud || (inClick && quiet < 2000);
+            }
+        }
+        e.tape.stop();
+        e.tape.setRecordEnabled (false);
+        check (found.size() == 4 && std::abs (found[1] - found[0] - 24000) < 100 && std::abs (found[2] - found[1] - 24000) < 100
+               && std::abs (found[3] - found[2] - 48000) < 100, "the click slows down with the map");
+
+        // MIDI clips stay on their bars: a note on bar 2 beat 1 sounds at 2 s at 120, at 4 s at 60.
+        t.clearMap();
+        check (close (t.secondsAt (4.0 * q), 2.0f), "bar 2 at 120");
+        t.setMap ({ { 0.0, 60.0, 4, 4 } });
+        check (close (t.secondsAt (4.0 * q), 4.0f), "bar 2 at 60");
+        t.clearMap();
+        t.bpm->set (120.0f);
+    }
+
     //==========================================================================
     /** A stand-in instrument: while a note is held it outputs velocity / 127 (on every output), sample accurately. */
     struct TestSynth : juce::AudioPluginInstance
@@ -2356,11 +2430,11 @@ namespace
 
         // One note, a beat long, at bar 2 (2 s at 120 in 4/4).
         Midi::Clip clip;
-        clip.start = 4 * Tempo::ticksPerBeat;
-        clip.length = 4 * Tempo::ticksPerBeat;
-        clip.notes.push_back ({ 0, Tempo::ticksPerBeat, 60, 127 });
+        clip.start = 4 * Tempo::ticksPerQuarter;
+        clip.length = 4 * Tempo::ticksPerQuarter;
+        clip.notes.push_back ({ 0, Tempo::ticksPerQuarter, 60, 127 });
         m.setClips (k, { clip });
-        check (m.songEnd() == 8 * Tempo::ticksPerBeat, "the song ends with the last clip");
+        check (m.songEnd() == 8 * Tempo::ticksPerQuarter, "the song ends with the last clip");
 
         e.routeInstrument (k, { Midi::Route::input, 0 });
         check (e.getPatch (P::channelIn + 0) == PatchMask::bit (P::instrumentOut + 0)
@@ -2476,7 +2550,7 @@ namespace
             const auto& c = clips.front();
             std::printf ("      clip %lld..%lld, note at %lld for %lld ticks\n", (long long) c.start, (long long) c.end(),
                          c.notes.empty() ? -1LL : (long long) c.notes[0].start, c.notes.empty() ? -1LL : (long long) c.notes[0].length);
-            check (c.start == 0 && c.length == 4 * Tempo::ticksPerBeat, "the clip covers the bar played in");
+            check (c.start == 0 && c.length == 4 * Tempo::ticksPerQuarter, "the clip covers the bar played in");
             check (c.notes.size() == 1 && c.notes[0].pitch == 60 && c.notes[0].velocity == 100, "the note and its velocity");
             check (c.notes.size() == 1 && std::abs (c.notes[0].start - 1920) <= 20 && std::abs (c.notes[0].length - 960) <= 20,
                    "at 1 s (beat 3), half a second long, to a block");
@@ -2496,10 +2570,10 @@ namespace
 
         // Program 5 and sustain down on beat 1, volume 100 on beat 2, sustain up on beat 3 (120 bpm: 0.5 s a beat).
         Midi::Clip clip;
-        clip.length = 4 * Tempo::ticksPerBeat;
-        clip.controls = { { 2 * Tempo::ticksPerBeat, 64, 0 }, { 0, 64, 127 }, { Tempo::ticksPerBeat, 7, 100 }, { 0, Midi::programChange, 4 } };
+        clip.length = 4 * Tempo::ticksPerQuarter;
+        clip.controls = { { 2 * Tempo::ticksPerQuarter, 64, 0 }, { 0, 64, 127 }, { Tempo::ticksPerQuarter, 7, 100 }, { 0, Midi::programChange, 4 } };
         m.setClips (k, { clip });
-        check (m.getClips (k)[0].controls[0].tick == 0 && m.getClips (k)[0].controls.back().tick == 2 * Tempo::ticksPerBeat, "points are kept in time order");
+        check (m.getClips (k)[0].controls[0].tick == 0 && m.getClips (k)[0].controls.back().tick == 2 * Tempo::ticksPerQuarter, "points are kept in time order");
         m.tick();
         Buffers b (1, 2, 480);
         e.tape.play();
@@ -2565,16 +2639,41 @@ namespace
             mf.writeTo (out);
         }
         juce::String error;
-        auto clip = MidiEngine::readMidiFile (file, 4, 4, 1920.0, error);
+        TestEngine e;
+        auto clip = MidiEngine::readMidiFile (file, e.tempo, error);
         check (error.isEmpty() && clip.name == "Oxide groove test", "read, named after the file");
         check (clip.notes.size() == 2 && clip.notes[0].start == 0 && clip.notes[1].start == 960 && clip.notes[0].length == 480
-               && clip.notes[0].pitch == 36 && clip.notes[1].velocity == 90, "notes on our grid (960 a quarter in 4/4)");
+               && clip.notes[0].pitch == 36 && clip.notes[1].velocity == 90, "notes on our grid (960 a quarter)");
         check (clip.length == 3840, "the clip is one bar long");
         check (clip.controls.size() == 1 && clip.controls[0].number == 4 && clip.controls[0].value == 90 && clip.controls[0].tick == 960, "its controllers come too");
-        clip = MidiEngine::readMidiFile (file, 8, 6, 1920.0, error);
-        check (clip.notes.size() == 2 && clip.notes[1].start == 1920, "in 6/8 a quarter note is two of our beats");
+        e.tempo.setSignature (6, 8);
+        clip = MidiEngine::readMidiFile (file, e.tempo, error);
+        check (clip.notes.size() == 2 && clip.notes[1].start == 960 && clip.length == 2880, "in 6/8 a quarter is still 960 ticks; the clip is one 6/8 bar");
+        e.tempo.setSignature (4, 4);
+
+        // Its tempo map: none in this one; one with tempo and signature changes.
+        error = {};
+        check (MidiEngine::readTempoMap (file, error).empty() && error.isNotEmpty(), "no tempo map in a plain groove");
+        {
+            juce::MidiMessageSequence meta;
+            meta.addEvent (juce::MidiMessage::tempoMetaEvent (500000), 0.0);            // 120
+            meta.addEvent (juce::MidiMessage::timeSignatureMetaEvent (3, 4), 0.0);
+            meta.addEvent (juce::MidiMessage::tempoMetaEvent (1000000), 1440.0);        // 60 after one 3/4 bar
+            meta.addEvent (juce::MidiMessage::timeSignatureMetaEvent (6, 8), 2880.0);
+            juce::MidiFile withMap;
+            withMap.setTicksPerQuarterNote (480);
+            withMap.addTrack (meta);
+            withMap.addTrack (seq);
+            file.deleteFile();
+            juce::FileOutputStream out (file);
+            withMap.writeTo (out);
+        }
+        error = {};
+        const auto map = MidiEngine::readTempoMap (file, error);
+        check (map.size() == 3 && map[0].bpm > 119.9 && map[0].beats == 3 && map[1].tick == 2880.0 && map[1].bpm < 60.1 && map[1].beats == 3
+               && map[2].tick == 5760.0 && map[2].beats == 6 && map[2].unit == 8 && map[2].bpm < 60.1, "the tempo map in our ticks, each change carrying tempo and signature");
         file.deleteFile();
-        MidiEngine::readMidiFile (file, 4, 4, 1920.0, error);
+        MidiEngine::readMidiFile (file, e.tempo, error);
         check (error.isNotEmpty(), "a missing file is an error, not a crash");
     }
 
@@ -3300,6 +3399,7 @@ int main (int argc, char** argv)
     testWinding();
     testShuttleJogScrub();
     testTempoAndClick();
+    testTempoMap();
     testClickStrip();
     testExports();
     testMidiPlayback();

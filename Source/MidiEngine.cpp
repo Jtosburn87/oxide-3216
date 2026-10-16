@@ -424,12 +424,12 @@ void MidiEngine::changed()
 
 double MidiEngine::ticksAt (juce::int64 samples) const noexcept
 {
-    return (double) samples / tempo.samplesPerBeat (tape.getSampleRate()) * Tempo::ticksPerBeat;
+    return tempo.ticksAt ((double) samples, tape.getSampleRate());
 }
 
 juce::int64 MidiEngine::samplesAt (juce::int64 ticks) const noexcept
 {
-    return (juce::int64) std::ceil ((double) ticks / Tempo::ticksPerBeat * tempo.samplesPerBeat (tape.getSampleRate()));
+    return (juce::int64) std::ceil (tempo.samplesAt ((double) ticks, tape.getSampleRate()) - 1.0e-6);
 }
 
 //==============================================================================
@@ -461,8 +461,8 @@ void MidiEngine::process (int n, juce::int64 from, double rate, bool rolling, bo
     for (auto& s : slots)
         anySolo = anySolo || (s->used.load (std::memory_order_relaxed) && s->soloed.load (std::memory_order_relaxed));
 
-    const double perSample = Tempo::ticksPerBeat / tempo.samplesPerBeat (tape.getSampleRate());   // ticks a tape sample
-    const double t0 = (double) from * perSample, t1 = ((double) from + (double) n * rate) * perSample;
+    // The block's ticks (the tempo map can change the tempo anywhere; within one block it is taken as steady).
+    const double t0 = tempo.ticksAt ((double) from, tape.getSampleRate()), t1 = tempo.ticksAt ((double) from + (double) n * rate, tape.getSampleRate());
     const auto to = from + (juce::int64) std::llround ((double) n * rate);
     recordingNow.store (recording, std::memory_order_relaxed);
 
@@ -591,7 +591,6 @@ void MidiEngine::finishTake (Slot& s, juce::int64 endTick)
         return;
 
     // The new clip runs from the bar of the first event to the end of the bar of the last one.
-    const juce::int64 bar = (juce::int64) tempo.getBeatsPerBar() * Tempo::ticksPerBeat;
     juce::int64 first = std::numeric_limits<juce::int64>::max(), last = 0;
     for (auto& nt : s.recorded)
     {
@@ -604,8 +603,8 @@ void MidiEngine::finishTake (Slot& s, juce::int64 endTick)
         last = juce::jmax (last, ctl.tick + 1);
     }
     Midi::Clip clip;
-    clip.start = first / bar * bar;
-    clip.length = juce::jmax (bar, (last - clip.start + bar - 1) / bar * bar);
+    clip.start = (juce::int64) std::llround (tempo.barAt ((double) first).tick);
+    clip.length = barsLength (tempo, clip.start, last);
     clip.name = s.name + " " + juce::String ((int) s.clips.size() + 1);
     for (auto nt : s.recorded)
     {
@@ -739,6 +738,7 @@ juce::var MidiEngine::toVar() const
     auto* root = new juce::DynamicObject();
     root->setProperty ("tracks", tracks);
     root->setProperty ("selected", selected.load());
+    root->setProperty ("ticks", "quarter");   // 960 a quarter note (before the tempo map: 960 a beat of the time signature)
     return juce::var (root);
 }
 
@@ -747,6 +747,9 @@ juce::StringArray MidiEngine::fromVar (const juce::var& v,
 {
     removeAllTracks();
     juce::StringArray missing;
+    // Sessions from before the tempo map counted 960 ticks a beat of the time signature (in 6/8 an eighth note).
+    const double scale = v.hasProperty ("ticks") ? 1.0 : 4.0 / (double) tempo.getBeatUnit();
+    const auto toQuarters = [scale] (juce::int64 t) { return scale == 1.0 ? t : (juce::int64) std::llround ((double) t * scale); };
     if (auto* tracks = v["tracks"].getArray())
         for (auto& t : *tracks)
         {
@@ -770,10 +773,20 @@ juce::StringArray MidiEngine::fromVar (const juce::var& v,
                 {
                     Midi::Clip clip;
                     clip.name = c["name"].toString();
-                    clip.start = (juce::int64) c["start"];
-                    clip.length = (juce::int64) c["length"];
+                    clip.start = toQuarters ((juce::int64) c["start"]);
+                    clip.length = toQuarters ((juce::int64) c["length"]);
                     clip.notes = parseNotes (c["notes"].toString());
                     clip.controls = parseControls (c["controls"].toString());
+                    if (scale != 1.0)
+                    {
+                        for (auto& n : clip.notes)
+                        {
+                            n.start = toQuarters (n.start);
+                            n.length = juce::jmax ((juce::int64) 1, toQuarters (n.length));
+                        }
+                        for (auto& ctl : clip.controls)
+                            ctl.tick = toQuarters (ctl.tick);
+                    }
                     clips.push_back (std::move (clip));
                 }
             setClips (k, std::move (clips));
@@ -813,24 +826,38 @@ juce::StringArray MidiEngine::fromVar (const juce::var& v,
 }
 
 //==============================================================================
-Midi::Clip MidiEngine::readMidiFile (const juce::File& file, int beatUnit, int beatsPerBar, double ticksPerSecond, juce::String& error)
+juce::int64 MidiEngine::barsLength (const Tempo& tempo, juce::int64 start, juce::int64 contentEnd)
+{
+    const auto lastBar = tempo.barAt ((double) juce::jmax (start, contentEnd - 1));
+    return juce::jmax ((juce::int64) 1, (juce::int64) std::llround (lastBar.end()) - start);
+}
+
+namespace
+{
+    bool readSmf (const juce::File& file, juce::MidiFile& mf, juce::String& error)
+    {
+        juce::FileInputStream in (file);
+        if (in.openedOk() && mf.readFrom (in))
+            return true;
+        error = file.getFileName() + " is not a MIDI file Oxide can read.";
+        return false;
+    }
+}
+
+Midi::Clip MidiEngine::readMidiFile (const juce::File& file, const Tempo& tempo, juce::String& error)
 {
     Midi::Clip clip;
     clip.name = file.getFileNameWithoutExtension();
-    juce::FileInputStream in (file);
     juce::MidiFile mf;
-    if (! in.openedOk() || ! mf.readFrom (in))
-    {
-        error = file.getFileName() + " is not a MIDI file Oxide can read.";
+    if (! readSmf (file, mf, error))
         return clip;
-    }
 
-    // File ticks -> ours: a quarter note is beatUnit / 4 of our beats (960 ticks each). SMPTE files go through seconds.
+    // File ticks -> ours (960 a quarter note). SMPTE files go through seconds, on the tempo (map) in force.
     const short format = mf.getTimeFormat();
     const bool smpte = format <= 0;
     if (smpte)
         mf.convertTimestampTicksToSeconds();
-    const double scale = smpte ? ticksPerSecond : Tempo::ticksPerBeat * (beatUnit / 4.0) / (double) format;
+    const auto toTicks = [&] (double t) { return (juce::int64) std::llround (smpte ? tempo.ticksAtSeconds (t) : t * Tempo::ticksPerQuarter / (double) format); };
 
     juce::MidiMessageSequence all;
     for (int t = 0; t < mf.getNumTracks(); ++t)
@@ -843,7 +870,7 @@ Midi::Clip MidiEngine::readMidiFile (const juce::File& file, int beatUnit, int b
         const auto* e = all.getEventPointer (i);
         if (e->message.isController() || e->message.isProgramChange())
         {
-            const auto tick = (juce::int64) std::llround (e->message.getTimeStamp() * scale);
+            const auto tick = toTicks (e->message.getTimeStamp());
             if (e->message.isController())
                 clip.controls.push_back ({ tick, e->message.getControllerNumber(), e->message.getControllerValue() });
             else
@@ -854,9 +881,9 @@ Midi::Clip MidiEngine::readMidiFile (const juce::File& file, int beatUnit, int b
         if (! e->message.isNoteOn())
             continue;
         Midi::Note n;
-        n.start = (juce::int64) std::llround (e->message.getTimeStamp() * scale);
+        n.start = toTicks (e->message.getTimeStamp());
         const double off = e->noteOffObject != nullptr ? e->noteOffObject->message.getTimeStamp() : e->message.getTimeStamp() + (smpte ? 0.1 : format / 4.0);
-        n.length = juce::jmax ((juce::int64) 1, (juce::int64) std::llround (off * scale) - n.start);
+        n.length = juce::jmax ((juce::int64) 1, toTicks (off) - n.start);
         n.pitch = e->message.getNoteNumber();
         n.velocity = juce::jlimit (1, 127, (int) e->message.getVelocity());
         clip.notes.push_back (n);
@@ -868,7 +895,55 @@ Midi::Clip MidiEngine::readMidiFile (const juce::File& file, int beatUnit, int b
         return clip;
     }
     std::sort (clip.notes.begin(), clip.notes.end(), [] (const Midi::Note& a, const Midi::Note& b) { return a.start < b.start; });
-    const juce::int64 bar = (juce::int64) beatsPerBar * Tempo::ticksPerBeat;
-    clip.length = juce::jmax (bar, (last + bar - 1) / bar * bar);
+    clip.length = barsLength (tempo, 0, last);
     return clip;
+}
+
+std::vector<Tempo::Change> MidiEngine::readTempoMap (const juce::File& file, juce::String& error)
+{
+    juce::MidiFile mf;
+    if (! readSmf (file, mf, error))
+        return {};
+    const short format = mf.getTimeFormat();
+    if (format <= 0)
+    {
+        error = file.getFileName() + " counts time in SMPTE frames: it has no tempo map in bars.";
+        return {};
+    }
+
+    juce::MidiMessageSequence meta;
+    for (int t = 0; t < mf.getNumTracks(); ++t)
+        for (const auto* e : *mf.getTrack (t))
+            if (e->message.isTempoMetaEvent() || e->message.isTimeSignatureMetaEvent())
+                meta.addEvent (e->message);
+    meta.sort();
+    if (meta.getNumEvents() == 0)
+    {
+        error = file.getFileName() + " has no tempo map in it.";
+        return {};
+    }
+
+    // Every change carries the full state (a MIDI file changes tempo and signature separately). Before the first
+    // of either, MIDI files mean 120 and 4/4.
+    std::vector<Tempo::Change> map;
+    Tempo::Change now;
+    if (meta.getEventTime (0) > 0.0)
+        map.push_back (now);   // 120 4/4 from the start
+    for (const auto* e : meta)
+    {
+        now.tick = e->message.getTimeStamp() * Tempo::ticksPerQuarter / (double) format;
+        if (e->message.isTempoMetaEvent())
+        {
+            const double secondsPerQuarter = e->message.getTempoSecondsPerQuarterNote();
+            if (secondsPerQuarter > 0.0)
+                now.bpm = 60.0 / secondsPerQuarter;
+        }
+        else
+            e->message.getTimeSignatureInfo (now.beats, now.unit);
+        if (! map.empty() && std::abs (map.back().tick - now.tick) < 0.5)
+            map.back() = now;   // tempo and signature at one tick: one change
+        else
+            map.push_back (now);
+    }
+    return map;
 }

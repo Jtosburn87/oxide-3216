@@ -110,6 +110,7 @@ Session::Result Session::write (AudioEngine& e, const juce::File& folder, TrackR
         controls->setProperty (p->id, p->get());
     root->setProperty ("controls", juce::var (controls));
     root->setProperty ("scenes", e.scenes.toVar());
+    root->setProperty ("tempoMap", e.tempo.mapToVar());   // empty: one tempo (the tempo controls)
     root->setProperty ("midi", e.midi.toVar());   // the MIDI page: tracks, clips, instruments (routing is in the patch)
 
     auto* names = new juce::DynamicObject();
@@ -209,6 +210,7 @@ void Session::reset (AudioEngine& e)
     e.resetBusNames();
     e.clearPatch();
     e.midi.removeAllTracks();
+    e.tempo.clearMap();
     forEachChain (e, [] (InsertChain& c) { c.clearAll(); });
     e.tape.eraseAll();
     e.tape.setInPoint (0);
@@ -315,6 +317,9 @@ Session::Result Session::load (AudioEngine& e, PluginManager* plugins, const juc
                     r.warnings.add ("Missing plugin: " + missing);
         });
     }
+
+    // The tempo map (after the controls: it sets the tempo controls to its opening tempo).
+    e.tempo.mapFromVar (json["tempoMap"]);
 
     // The MIDI page (sessions from before it have none).
     if (json.hasProperty ("midi"))

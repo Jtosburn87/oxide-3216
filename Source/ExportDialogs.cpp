@@ -22,8 +22,7 @@ namespace
     /** The end of the song in tape samples: the end of the recording or of the last MIDI clip, whichever is later. */
     juce::int64 songEnd (AudioEngine& e)
     {
-        const auto midiEnd = (juce::int64) std::ceil ((double) e.midi.songEnd() / Tempo::ticksPerBeat
-                                                      * e.tempo.samplesPerBeat (e.tape.getSampleRate()));
+        const auto midiEnd = (juce::int64) std::ceil (e.tempo.samplesAt ((double) e.midi.songEnd(), e.tape.getSampleRate()));
         return juce::jmax (e.tape.getLength(), midiEnd);
     }
 

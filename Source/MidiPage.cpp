@@ -101,29 +101,121 @@ const std::vector<MidiPage::Grid>& MidiPage::gridsFor (bool bars)
     return bars ? barGrids : secGrids;
 }
 
-double MidiPage::ticksPerSecond() const
+double MidiPage::gridFloor (double ticks) const
 {
-    const double sr = engine.tape.getSampleRate();
-    return Tempo::ticksPerBeat * sr / engine.tempo.samplesPerBeat (sr);
+    ticks = juce::jmax (0.0, ticks);
+    const auto& grids = gridsFor (barsGrid);
+    const double value = grids[(size_t) juce::jlimit (0, (int) grids.size() - 1, snapIndex)].value;
+    auto& tempo = engine.tempo;
+    if (! barsGrid)
+        return tempo.ticksAtSeconds (std::floor (tempo.secondsAt (ticks) / value + 1.0e-6) * value);
+    const auto bar = tempo.barAt (ticks);
+    if (value <= 0.0)
+        return bar.tick;
+    const double step = Tempo::ticksPerQuarter * 4.0 / value;   // a 1/value note, counted from the bar line
+    return bar.tick + std::floor ((ticks - bar.tick) / step + 1.0e-6) * step;
 }
 
-double MidiPage::snapTicks() const
+double MidiPage::gridNext (double line) const
 {
     const auto& grids = gridsFor (barsGrid);
-    const auto& g = grids[(size_t) juce::jlimit (0, (int) grids.size() - 1, snapIndex)];
+    const double value = grids[(size_t) juce::jlimit (0, (int) grids.size() - 1, snapIndex)].value;
+    auto& tempo = engine.tempo;
     if (! barsGrid)
-        return g.value * ticksPerSecond();
-    if (g.value <= 0.0)
-        return (double) barTicks();
-    return Tempo::ticksPerBeat * engine.tempo.getBeatUnit() / g.value;   // a 1/value note
+        return tempo.ticksAtSeconds ((std::round (tempo.secondsAt (line) / value) + 1.0) * value);
+    const auto bar = tempo.barAt (line + 0.001);
+    if (value <= 0.0)
+        return bar.end();
+    return juce::jmin (line + Tempo::ticksPerQuarter * 4.0 / value, bar.end());   // a short bar ends the step early
 }
 
 juce::int64 MidiPage::snap (double ticks) const
 {
     if (! snapOn)
         return (juce::int64) std::llround (ticks);
-    const double g = juce::jmax (1.0, snapTicks());
-    return (juce::int64) std::llround (std::round (ticks / g) * g);
+    const double before = gridFloor (ticks), after = gridNext (before);
+    return (juce::int64) std::llround (ticks - before < after - ticks ? before : after);
+}
+
+juce::int64 MidiPage::snapDown (double ticks) const
+{
+    if (! snapOn)
+        return (juce::int64) juce::jmax (0.0, ticks);
+    return (juce::int64) std::llround (gridFloor (ticks));
+}
+
+juce::int64 MidiPage::gridStep (double ticks) const
+{
+    const double line = gridFloor (ticks);
+    return juce::jmax ((juce::int64) 1, (juce::int64) std::llround (gridNext (line) - line));
+}
+
+void MidiPage::forEachGridLine (double from, double to, double pxPerTick, const std::function<void (double, Line, int)>& fn) const
+{
+    double fine = 0.0;   // the snap's note value, drawn finer than the beats
+    if (barsGrid)
+    {
+        const auto& grids = gridsFor (true);
+        const double value = grids[(size_t) juce::jlimit (0, (int) grids.size() - 1, snapIndex)].value;
+        if (value > 0.0)
+            fine = Tempo::ticksPerQuarter * 4.0 / value;
+    }
+    auto bar = engine.tempo.barAt (from);
+    for (int guard = 0; bar.tick <= to && guard < 100000; ++guard)
+    {
+        fn (bar.tick, Line::bar, bar.number);
+        const double beat = Tempo::beatTicks (bar.unit);
+        const bool beats = beat * pxPerTick >= 6.0;
+        const double step = fine > 0.0 && fine < beat - 0.5 && fine * pxPerTick >= 8.0 ? fine : beat;
+        if (beats || step < beat)
+            for (double t = bar.tick + step; t < bar.end() - 0.5 && t <= to; t += step)
+            {
+                const bool onBeat = std::fmod (t - bar.tick + 0.5, beat) < 1.0;
+                if (! onBeat || beats)
+                    fn (t, onBeat ? Line::beat : Line::fine, bar.number);
+            }
+        bar = engine.tempo.barAt (bar.end() + 0.001);
+    }
+}
+
+juce::String MidiPage::describeMap (const std::vector<Tempo::Change>& map)
+{
+    if (map.empty())
+        return "no tempo map";
+    const auto& first = map.front();
+    const auto start = BpmReadout::format ((float) first.bpm) + " BPM " + juce::String (first.beats) + "/" + juce::String (first.unit);
+    if (map.size() == 1)
+        return start + ", no changes";
+    return start + ", then " + juce::String ((int) map.size() - 1) + (map.size() == 2 ? " change" : " changes");
+}
+
+void MidiPage::importTempoMap (AudioEngine& engine)
+{
+    static std::unique_ptr<juce::FileChooser> chooser;
+    chooser = std::make_unique<juce::FileChooser> ("Import tempo map from a MIDI file",
+                                                   juce::File::getSpecialLocation (juce::File::userDocumentsDirectory), "*.mid;*.midi;*.smf");
+    chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [&engine] (const juce::FileChooser& fc)
+    {
+        const auto file = fc.getResult();
+        if (file == juce::File())
+            return;
+        juce::String error;
+        auto map = MidiEngine::readTempoMap (file, error);
+        if (map.empty())
+        {
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Import tempo map", error);
+            return;
+        }
+        engine.tempo.setMap (std::move (map));
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Import tempo map",
+                                                "Tempo map from " + file.getFileName() + ": " + describeMap (engine.tempo.getMap()) + ".\n\n"
+                                                "The click, the grid and the MIDI follow it from bar 1. Audio on tape does not move.");
+    });
+}
+
+void MidiPage::clearTempoMap (AudioEngine& engine)
+{
+    engine.tempo.clearMap();   // the tempo controls keep the map's opening tempo and signature
 }
 
 void MidiPage::select (int track, int clip)
@@ -173,7 +265,10 @@ public:
 
         bars.setTooltip ("Where the tape is: bar | beat | tick");
         clock.setTooltip ("Where the tape is: minutes and seconds");
-        tempoText.setTooltip ("Tempo and time signature (set them in the Tempo box on the console)");
+        tempoText.setTooltip ("Tempo and time signature where the tape is (set them in the Tempo box on the console, or import a tempo map)");
+        tempoMap.setTooltip ("Tempo map: import one from a MIDI file (tempo and time signature changes from bar 1), or clear it");
+        styleSmall (tempoMap);
+        tempoMap.onClick = [this] { tempoMapMenu(); };
 
         for (auto* b : { &gridBars, &gridSecs })
         {
@@ -225,8 +320,31 @@ public:
                                     (juce::Component*) &bars, (juce::Component*) &clock, (juce::Component*) &tempoText,
                                     (juce::Component*) &gridBars, (juce::Component*) &gridSecs, (juce::Component*) &snapBox,
                                     (juce::Component*) &snapOn, (juce::Component*) &pointer, (juce::Component*) &pencil,
-                                    (juce::Component*) &addTrack, (juce::Component*) &console })
+                                    (juce::Component*) &addTrack, (juce::Component*) &tempoMap, (juce::Component*) &console })
             addAndMakeVisible (c);
+    }
+
+    void tempoMapMenu()
+    {
+        auto& tempo = page.engine.tempo;
+        juce::PopupMenu menu;
+        if (tempo.hasMap())
+            menu.addSectionHeader ("Tempo map: " + describeMap (tempo.getMap()));
+        menu.addItem (1, "Import tempo map...");
+        menu.addItem (2, "Clear tempo map", tempo.hasMap());
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&tempoMap),
+                            [safe = juce::Component::SafePointer<Toolbar> (this)] (int r)
+                            {
+                                if (safe == nullptr)
+                                    return;
+                                if (r == 1)
+                                    importTempoMap (safe->page.engine);
+                                else if (r == 2)
+                                {
+                                    clearTempoMap (safe->page.engine);
+                                    safe->page.refreshAll();
+                                }
+                            });
     }
 
     void setGrid (bool b)
@@ -253,42 +371,46 @@ public:
         auto& tape = page.engine.tape;
         play.setToggleState (tape.isPlaying(), juce::dontSendNotification);
         rec.setToggleState (tape.isRecordEnabled(), juce::dontSendNotification);
-        const auto pos = page.engine.tempo.positionAt (tape.getPosition(), tape.getSampleRate());
+        auto& tempo = page.engine.tempo;
+        const double now = tempo.ticksAt ((double) tape.getPosition(), tape.getSampleRate());
+        const auto pos = tempo.positionAtTicks (now);
         bars.setText (juce::String::formatted ("%03d|%d|%03d", pos.bar, pos.beat, pos.tick));
         const auto tenths = (juce::int64) ((double) tape.getPosition() / juce::jmax (1.0, tape.getSampleRate()) * 10.0);
         clock.setText (juce::String::formatted ("%02d:%02d.%d", (int) (tenths / 600), (int) ((tenths / 10) % 60), (int) (tenths % 10)));
-        tempoText.setText (BpmReadout::format (page.engine.tempo.bpm->get()) + " " + page.engine.tempo.signatureText());
+        tempoText.setText (BpmReadout::format ((float) tempo.bpmAt (now)) + " " + Tempo::signatureText (tempo.signatureAt (now)));
+        tempoMap.setToggleState (tempo.hasMap(), juce::dontSendNotification);
     }
 
     void resized() override
     {
-        auto r = getLocalBounds().reduced (10, 8);
+        auto r = getLocalBounds().reduced (6, 8);
         for (auto* b : { &rew, &stop, &play, &rec })
         {
-            b->setBounds (r.removeFromLeft (40));
+            b->setBounds (r.removeFromLeft (36));
             r.removeFromLeft (2);
         }
-        r.removeFromLeft (10);
+        r.removeFromLeft (6);
         bars.setBounds (r.removeFromLeft (170));
         r.removeFromLeft (6);
         clock.setBounds (r.removeFromLeft (120));
         r.removeFromLeft (6);
         tempoText.setBounds (r.removeFromLeft (150));
-        r.removeFromLeft (16);
-        gridLabel = r.removeFromLeft (34);
-        gridBars.setBounds (r.removeFromLeft (52));
-        gridSecs.setBounds (r.removeFromLeft (64));
-        r.removeFromLeft (12);
-        snapLabel = r.removeFromLeft (38);
-        snapBox.setBounds (r.removeFromLeft (84));
         r.removeFromLeft (4);
-        snapOn.setBounds (r.removeFromLeft (78));
-        r.removeFromLeft (16);
-        pointer.setBounds (r.removeFromLeft (70));
-        pencil.setBounds (r.removeFromLeft (66));
-        console.setBounds (r.removeFromRight (100));
-        r.removeFromRight (8);
-        addTrack.setBounds (r.removeFromRight (120));
+        tempoMap.setBounds (r.removeFromLeft (104));   // next to the tempo it sets
+        r.removeFromLeft (10);
+        gridBars.setBounds (r.removeFromLeft (48));
+        gridSecs.setBounds (r.removeFromLeft (62));
+        r.removeFromLeft (8);
+        snapLabel = r.removeFromLeft (36);
+        snapBox.setBounds (r.removeFromLeft (76));
+        r.removeFromLeft (4);
+        snapOn.setBounds (r.removeFromLeft (56));
+        r.removeFromLeft (8);
+        pointer.setBounds (r.removeFromLeft (64));
+        pencil.setBounds (r.removeFromLeft (60));
+        console.setBounds (r.removeFromRight (92));
+        r.removeFromRight (6);
+        addTrack.setBounds (r.removeFromRight (106));
     }
 
     void paint (juce::Graphics& g) override
@@ -298,7 +420,6 @@ public:
         g.fillRect (0, getHeight() - 1, getWidth(), 1);
         g.setColour (textDim);
         g.setFont (ConsoleLookAndFeel::uiFont (11.0f, true));
-        g.drawText ("GRID", gridLabel, juce::Justification::centredLeft, false);
         g.drawText ("SNAP", snapLabel, juce::Justification::centredLeft, false);
     }
 
@@ -306,11 +427,12 @@ private:
     MidiPage& page;
     juce::TextButton rew, stop, play, rec;
     SegmentDisplay bars, clock, tempoText;
-    juce::TextButton gridBars { "Bars" }, gridSecs { "Min:Sec" }, snapOn { "Snap on" };
+    juce::TextButton gridBars { "Bars" }, gridSecs { "Min:Sec" }, snapOn { "Snap" };
     juce::ComboBox snapBox;
     juce::TextButton pointer { "Pointer" }, pencil { "Pencil" };
+    juce::TextButton tempoMap { juce::CharPointer_UTF8 ("Tempo map \xe2\x96\xbe") };
     juce::TextButton addTrack { "+ MIDI track" }, console { juce::CharPointer_UTF8 ("Console \xe2\x97\x82") };
-    juce::Rectangle<int> gridLabel, snapLabel;
+    juce::Rectangle<int> snapLabel;
 };
 
 //==============================================================================
@@ -615,16 +737,16 @@ public:
     ScrollWatch hWatch;
     ZoomButtons zoom;
 
-    double xForTick (double ticks) const { return (ticks / Tempo::ticksPerBeat - scrollBeats) * pxPerBeat; }
-    double tickForX (double x) const { return (x / pxPerBeat + scrollBeats) * Tempo::ticksPerBeat; }
+    double xForTick (double ticks) const { return (ticks / Tempo::ticksPerQuarter - scrollBeats) * pxPerBeat; }
+    double tickForX (double x) const { return (x / pxPerBeat + scrollBeats) * Tempo::ticksPerQuarter; }
     int laneTop (int row) const { return rulerH + row * page.laneH - scrollY; }
     int areaHeight() const { return getHeight() - 26; }   // above the scroll bar and zoom buttons
 
     void updateScroll()
     {
         const double visibleBeats = getWidth() / pxPerBeat;
-        const double songBeats = (double) page.midi.songEnd() / Tempo::ticksPerBeat;
-        const double tapeBeats = page.engine.tape.getLength() / page.engine.tempo.samplesPerBeat (page.engine.tape.getSampleRate());
+        const double songBeats = (double) page.midi.songEnd() / Tempo::ticksPerQuarter;
+        const double tapeBeats = page.engine.tempo.ticksAt ((double) page.engine.tape.getLength(), page.engine.tape.getSampleRate()) / Tempo::ticksPerQuarter;
         const double total = juce::jmax (songBeats, tapeBeats, scrollBeats + visibleBeats) + 16.0;
         hScroll.setRangeLimits (0.0, total, juce::dontSendNotification);
         hScroll.setCurrentRange (scrollBeats, visibleBeats, juce::dontSendNotification);
@@ -700,14 +822,14 @@ public:
 
         // In / Out (the tape's locators) on the ruler, and the play line.
         auto& tape = page.engine.tape;
-        const double perSample = Tempo::ticksPerBeat / page.engine.tempo.samplesPerBeat (tape.getSampleRate());
+        const auto tickOf = [&] (juce::int64 samples) { return page.engine.tempo.ticksAt ((double) samples, tape.getSampleRate()); };
         if (tape.getOutPoint() > tape.getInPoint())
         {
-            const float x0 = (float) xForTick ((double) tape.getInPoint() * perSample), x1 = (float) xForTick ((double) tape.getOutPoint() * perSample);
+            const float x0 = (float) xForTick (tickOf (tape.getInPoint())), x1 = (float) xForTick (tickOf (tape.getOutPoint()));
             g.setColour (juce::Colour (0x553a8fd6));
             g.fillRect (x0, (float) rulerH - 6.0f, x1 - x0, 6.0f);
         }
-        const float px = (float) xForTick ((double) tape.getPosition() * perSample);
+        const float px = (float) xForTick (tickOf (tape.getPosition()));
         g.setColour (playheadColour);
         g.fillRect (px - 1.0f, 0.0f, 2.0f, (float) h);
 
@@ -726,7 +848,7 @@ public:
             // Zoom round the mouse.
             const double at = tickForX (e.position.x);
             pxPerBeat = juce::jlimit (4.0, 400.0, pxPerBeat * (wheel.deltaY > 0 ? 1.25 : 0.8));
-            scrollBeats = juce::jmax (0.0, at / Tempo::ticksPerBeat - e.position.x / pxPerBeat);
+            scrollBeats = juce::jmax (0.0, at / Tempo::ticksPerQuarter - e.position.x / pxPerBeat);
         }
         else if (e.mods.isCommandDown())
             page.zoomLanes (wheel.deltaY > 0 ? 1 : -1);
@@ -792,8 +914,8 @@ public:
         {
             dragNew = true;
             dragTrack = track;
-            newStart = page.snapOn ? floorToGrid (tickForX (pos.x)) : (juce::int64) tickForX (pos.x);
-            newEnd = newStart + juce::jmax ((juce::int64) page.snapTicks(), (juce::int64) 1);
+            newStart = page.snapDown (tickForX (pos.x));
+            newEnd = newStart + page.gridStep ((double) newStart);
             repaint();
         }
     }
@@ -810,7 +932,7 @@ public:
         {
             newEnd = juce::jmax (newStart + 1, page.snap (tick));
             if (newEnd <= newStart)
-                newEnd = newStart + (juce::int64) juce::jmax (1.0, page.snapTicks());
+                newEnd = newStart + page.gridStep ((double) newStart);
             repaint();
             return;
         }
@@ -898,14 +1020,14 @@ public:
         if (! juce::isPositiveAndBelow (row, slots.size()) || clipAt (slots[row], e.position.x) >= 0)
             return;
         const int track = slots[row];
-        const auto bar = page.barTicks();
-        const auto start = (juce::int64) (tickForX (e.position.x)) / bar * bar;
+        const auto bar = page.engine.tempo.barAt (tickForX (e.position.x));
+        const auto start = (juce::int64) std::llround (bar.tick);
         int index = 0;
         page.changeClips (track, [&] (std::vector<Midi::Clip>& clips)
         {
             Midi::Clip c;
             c.start = start;
-            c.length = bar;
+            c.length = juce::jmax ((juce::int64) 1, (juce::int64) std::llround (bar.end()) - start);
             c.name = page.midi.getName (track) + " " + juce::String ((int) clips.size() + 1);
             clips.push_back (c);
             index = (int) clips.size() - 1;
@@ -952,10 +1074,55 @@ public:
     void filesDropped (const juce::StringArray& files, int x, int y) override
     {
         dropping = false;
+        repaint();
         const auto slots = page.midi.usedSlots();
         const int row = y < rulerH ? 0 : (int) std::floor ((y - rulerH + scrollY) / (double) page.laneH);
-        int track = juce::isPositiveAndBelow (row, slots.size()) ? slots[row] : -1;
-        auto start = dropTick ((float) x);
+        const int track = juce::isPositiveAndBelow (row, slots.size()) ? slots[row] : -1;
+        const auto start = dropTick ((float) x);
+
+        // A file with a tempo map in it: ask whether the map comes too (it starts where the clip lands).
+        for (auto& path : files)
+        {
+            if (! MidiEngine::isMidiFile (path))
+                continue;
+            juce::String error;
+            auto map = MidiEngine::readTempoMap (juce::File (path), error);
+            if (map.empty())
+                break;
+            juce::PopupMenu menu;
+            menu.addSectionHeader (juce::File (path).getFileName() + " has a tempo map: " + describeMap (map));
+            menu.addItem (1, "Import MIDI and tempo map");
+            menu.addItem (2, "Import MIDI only");
+            menu.addItem (3, "Cancel");
+            menu.showMenuAsync (juce::PopupMenu::Options().withTargetScreenArea (juce::Rectangle<int> (1, 1).withPosition (localPointToGlobal (juce::Point<int> (x, y)))),
+                                [safe = juce::Component::SafePointer<Timeline> (this), files, track, start, map] (int r)
+                                {
+                                    if (safe == nullptr || r == 0 || r == 3)
+                                        return;
+                                    if (r == 1)
+                                    {
+                                        // The map from the drop point on; before it the tempo stays as it was.
+                                        std::vector<Tempo::Change> merged;
+                                        for (auto& c : safe->page.engine.tempo.getChanges())
+                                            if (c.tick < (double) start - 0.5)
+                                                merged.push_back (c);
+                                        for (auto c : map)
+                                        {
+                                            c.tick += (double) start;
+                                            merged.push_back (c);
+                                        }
+                                        safe->page.engine.tempo.setMap (std::move (merged));
+                                    }
+                                    safe->importFiles (files, track, start);
+                                });
+            return;
+        }
+        importFiles (files, track, start);
+    }
+
+    /** MIDI files as clips on a track (-1: a new one), one after another from `start`. */
+    void importFiles (const juce::StringArray& files, int track, juce::int64 start)
+    {
         juce::StringArray problems;
         int index = -1;
         for (auto& path : files)
@@ -963,8 +1130,7 @@ public:
             if (! MidiEngine::isMidiFile (path))
                 continue;
             juce::String error;
-            auto clip = MidiEngine::readMidiFile (juce::File (path), page.engine.tempo.getBeatUnit(), page.engine.tempo.getBeatsPerBar(),
-                                                  page.ticksPerSecond(), error);
+            auto clip = MidiEngine::readMidiFile (juce::File (path), page.engine.tempo, error);
             if (error.isNotEmpty())
             {
                 problems.add (error);
@@ -979,7 +1145,12 @@ public:
                     break;
                 }
             }
+            // Whole bars from where it lands (the bars there can differ from the file's start under a tempo map).
+            juce::int64 contentEnd = 1;
+            for (auto& n : clip.notes)    contentEnd = juce::jmax (contentEnd, n.start + n.length);
+            for (auto& c : clip.controls) contentEnd = juce::jmax (contentEnd, c.tick + 1);
             clip.start = start;
+            clip.length = MidiEngine::barsLength (page.engine.tempo, start, start + contentEnd);
             start = clip.end();   // several files land one after another
             page.changeClips (track, [&] (std::vector<Midi::Clip>& clips) { clips.push_back (clip); index = (int) clips.size() - 1; });
         }
@@ -996,7 +1167,7 @@ public:
         auto& tape = page.engine.tape;
         if (! tape.isPlaying() || dragMode != none)
             return;
-        const double x = xForTick ((double) tape.getPosition() * Tempo::ticksPerBeat / page.engine.tempo.samplesPerBeat (tape.getSampleRate()));
+        const double x = xForTick (page.engine.tempo.ticksAt ((double) tape.getPosition(), tape.getSampleRate()));
         if (x > getWidth() - 40 || x < 0)
         {
             scrollBeats = juce::jmax (0.0, scrollBeats + (x - 80.0) / pxPerBeat);
@@ -1020,16 +1191,10 @@ private:
     juce::int64 dropTick (float x) const
     {
         const double t = juce::jmax (0.0, tickForX (x));
-        return page.snapOn ? floorToGrid (t) : (juce::int64) t;
+        return page.snapDown (t);
     }
 
     int rowOf (int track) const { return page.midi.usedSlots().indexOf (track); }
-
-    juce::int64 floorToGrid (double ticks) const
-    {
-        const double g = juce::jmax (1.0, page.snapTicks());
-        return (juce::int64) (std::floor (ticks / g) * g);
-    }
 
     int clipAt (int track, float x) const
     {
@@ -1044,7 +1209,7 @@ private:
     {
         const auto ticks = juce::jmax (0.0, tickForX (x));
         const auto snapped = page.snapOn ? (double) page.snap (ticks) : ticks;
-        page.engine.tape.locate ((juce::int64) (snapped / Tempo::ticksPerBeat * page.engine.tempo.samplesPerBeat (page.engine.tape.getSampleRate())));
+        page.engine.tape.locate ((juce::int64) std::llround (page.engine.tempo.samplesAt (snapped, page.engine.tape.getSampleRate())));
         repaint();
     }
 
@@ -1099,39 +1264,33 @@ private:
         });
     }
 
+    /** Min:Sec: the first whole step at or before the left edge, and the step (1, 5 or 30 s) for the zoom there. */
+    std::pair<double, double> secondsGrid() const
+    {
+        auto& tempo = page.engine.tempo;
+        const double s0 = juce::jmax (0.0, tempo.secondsAt (tickForX (0.0)));
+        const double pxPerSecond = xForTick (tempo.ticksAtSeconds (s0 + 1.0)) - xForTick (tempo.ticksAtSeconds (s0));
+        const double step = pxPerSecond >= 40.0 ? 1.0 : pxPerSecond >= 8.0 ? 5.0 : 30.0;
+        return { std::floor (s0 / step) * step, step };
+    }
+
     void paintGrid (juce::Graphics& g, int top, int bottom)
     {
         const int w = getWidth();
         if (page.barsGrid)
         {
-            const int perBar = page.engine.tempo.getBeatsPerBar();
-            const int firstBeat = (int) std::floor (scrollBeats);
-            const int lastBeat = (int) std::ceil (scrollBeats + w / pxPerBeat);
-            const double fine = page.snapTicks() / Tempo::ticksPerBeat;   // the snap, in beats
-            for (int b = firstBeat; b <= lastBeat; ++b)
+            page.forEachGridLine (tickForX (0.0), tickForX (w), pxPerBeat / Tempo::ticksPerQuarter, [&] (double t, Line kind, int)
             {
-                const float x = (float) ((b - scrollBeats) * pxPerBeat);
-                if (fine < 1.0 && pxPerBeat * fine >= 8.0)
-                    for (double f = fine; f < 0.999; f += fine)
-                    {
-                        g.setColour (lineFine);
-                        g.fillRect (x + (float) (f * pxPerBeat), (float) top, 1.0f, (float) (bottom - top));
-                    }
-                const bool barLine = b % perBar == 0;
-                if (! barLine && pxPerBeat < 6.0)
-                    continue;
-                g.setColour (barLine ? lineBar : lineBeat);
-                g.fillRect (x, (float) top, 1.0f, (float) (bottom - top));
-            }
+                g.setColour (kind == Line::bar ? lineBar : kind == Line::beat ? lineBeat : lineFine);
+                g.fillRect ((float) xForTick (t), (float) top, 1.0f, (float) (bottom - top));
+            });
         }
         else
         {
-            const double pxPerSecond = pxPerBeat * page.ticksPerSecond() / Tempo::ticksPerBeat;
-            const double step = pxPerSecond >= 40.0 ? 1.0 : pxPerSecond >= 8.0 ? 5.0 : 30.0;
-            const double firstSec = std::floor (scrollBeats * Tempo::ticksPerBeat / page.ticksPerSecond() / step) * step;
-            for (double s = firstSec; ; s += step)
+            const auto [first, step] = secondsGrid();
+            for (double s = first; ; s += step)
             {
-                const float x = (float) xForTick (s * page.ticksPerSecond());
+                const float x = (float) xForTick (page.engine.tempo.ticksAtSeconds (s));
                 if (x > w)
                     break;
                 g.setColour (std::fmod (s, 60.0) == 0.0 ? lineBar : lineBeat);
@@ -1143,6 +1302,7 @@ private:
     void paintRuler (juce::Graphics& g)
     {
         const int w = getWidth();
+        auto& tempo = page.engine.tempo;
         g.setColour (rulerBg);
         g.fillRect (0, 0, w, rulerH);
         g.setColour (juce::Colour (0xff1d1f22));
@@ -1151,30 +1311,28 @@ private:
         g.setFont (ConsoleLookAndFeel::uiFont (11.0f, true));
         if (page.barsGrid)
         {
-            const int perBar = page.engine.tempo.getBeatsPerBar();
-            const double pxPerBar = pxPerBeat * perBar;
+            auto bar = tempo.barAt (tickForX (0.0));
+            const double pxPerBar = bar.length * pxPerBeat / Tempo::ticksPerQuarter;
             const int every = pxPerBar >= 40.0 ? 1 : pxPerBar >= 10.0 ? 4 : 16;
-            const int firstBar = (int) std::floor (scrollBeats / perBar);
-            for (int bar = firstBar; ; ++bar)
+            for (int guard = 0; guard < 100000; ++guard)
             {
-                const float x = (float) ((bar * perBar - scrollBeats) * pxPerBeat);
+                const float x = (float) xForTick (bar.tick);
                 if (x > w)
                     break;
-                if (bar % every != 0)
-                    continue;
-                g.fillRect (x, 14.0f, 1.0f, (float) rulerH - 14.0f);
-                g.drawText (juce::String (bar + 1), juce::Rectangle<float> (x + 3.0f, 2.0f, 40.0f, 14.0f), juce::Justification::centredLeft, false);
+                if ((bar.number - 1) % every == 0)
+                {
+                    g.fillRect (x, 14.0f, 1.0f, (float) rulerH - 14.0f);
+                    g.drawText (juce::String (bar.number), juce::Rectangle<float> (x + 3.0f, 2.0f, 40.0f, 14.0f), juce::Justification::centredLeft, false);
+                }
+                bar = tempo.barAt (bar.end() + 0.001);
             }
         }
         else
         {
-            const double tps = page.ticksPerSecond();
-            const double pxPerSecond = pxPerBeat * tps / Tempo::ticksPerBeat;
-            const double step = pxPerSecond >= 40.0 ? 1.0 : pxPerSecond >= 8.0 ? 5.0 : 30.0;
-            const double firstSec = std::floor (scrollBeats * Tempo::ticksPerBeat / tps / step) * step;
-            for (double s = firstSec; ; s += step)
+            const auto [first, step] = secondsGrid();
+            for (double s = first; ; s += step)
             {
-                const float x = (float) xForTick (s * tps);
+                const float x = (float) xForTick (tempo.ticksAtSeconds (s));
                 if (x > w)
                     break;
                 const int whole = (int) s;
@@ -1182,6 +1340,19 @@ private:
                 g.drawText (juce::String::formatted ("%d:%02d", whole / 60, whole % 60), juce::Rectangle<float> (x + 3.0f, 2.0f, 50.0f, 14.0f),
                             juce::Justification::centredLeft, false);
             }
+        }
+
+        // The tempo map's changes: a small amber mark on the ruler's bottom edge (after the first, at bar 1).
+        g.setColour (amber);
+        const auto& map = tempo.getMap();
+        for (size_t i = 1; i < map.size(); ++i)
+        {
+            const float x = (float) xForTick (map[i].tick);
+            if (x < -4.0f || x > (float) w + 4.0f)
+                continue;
+            juce::Path mark;
+            mark.addTriangle (x - 3.5f, (float) rulerH - 1.0f, x + 3.5f, (float) rulerH - 1.0f, x, (float) rulerH - 6.0f);
+            g.fillPath (mark);
         }
     }
 
@@ -1339,23 +1510,18 @@ public:
         // Grid.
         g.saveState();
         g.reduceClipRegion (keysW, 0, getWidth() - keysW, areaH());
-        const double step = juce::jmax (1.0, page.snapTicks());
-        const double beat = Tempo::ticksPerBeat, bar = (double) page.barTicks();
-        for (double t = 0.0; t <= (double) c->length + 0.5; t += (step * pxPerTick >= 6.0 ? step : beat))
+        page.forEachGridLine ((double) c->start, (double) c->end(), pxPerTick, [&] (double tick, Line kind, int barNumber)
         {
-            const float x = xFor (t);
-            const bool isBar = std::fmod ((double) c->start + t, bar) < 0.5;
-            const bool isBeat = std::fmod ((double) c->start + t, beat) < 0.5;
-            g.setColour (isBar ? lineBar : isBeat ? lineBeat.brighter (0.15f) : lineFine.brighter (0.1f));
+            const float x = xFor (tick - (double) c->start);
+            g.setColour (kind == Line::bar ? lineBar : kind == Line::beat ? lineBeat.brighter (0.15f) : lineFine.brighter (0.1f));
             g.fillRect (x, (float) rulerH2, 1.0f, (float) (notesBottom - rulerH2));
-            if (isBar)
+            if (kind == Line::bar)
             {
                 g.setColour (textDim);
                 g.setFont (ConsoleLookAndFeel::uiFont (10.0f, true));
-                const auto barNumber = (c->start + (juce::int64) t) / page.barTicks() + 1;
                 g.drawText (juce::String (barNumber), juce::Rectangle<float> (x + 3.0f, 2.0f, 40.0f, 14.0f), juce::Justification::centredLeft, false);
             }
-        }
+        });
         // Past the clip's end: shaded.
         g.setColour (juce::Colours::black.withAlpha (0.35f));
         g.fillRect (xFor ((double) c->length), (float) rulerH2, (float) getWidth(), (float) (notesBottom - rulerH2));
@@ -1641,7 +1807,7 @@ public:
         if (selection.size() > 1)
             return juce::String ((int) selection.size()) + " notes selected";
         const auto& n = c->notes[(size_t) *selection.begin()];
-        return "Note " + noteName (n.pitch) + "   vel " + juce::String (n.velocity) + "   " + juce::String ((double) n.length / Tempo::ticksPerBeat, 2) + " beats";
+        return "Note " + noteName (n.pitch) + "   vel " + juce::String (n.velocity) + "   " + juce::String ((double) n.length / Tempo::ticksPerQuarter, 2) + " quarter notes";
     }
 
 private:
@@ -1905,11 +2071,10 @@ private:
         if (c == nullptr)
             return;
         Midi::Note n;
-        const double g = juce::jmax (1.0, page.snapTicks());
         const double t = tickFor (p.x);
-        n.start = page.snapOn ? (juce::int64) (std::floor ((c->start + t) / g) * g) - c->start : (juce::int64) t;
+        n.start = page.snapOn ? page.snapDown ((double) c->start + t) - c->start : (juce::int64) t;
         n.start = juce::jlimit ((juce::int64) 0, juce::jmax ((juce::int64) 0, c->length - 1), n.start);
-        n.length = juce::jmax ((juce::int64) 1, (juce::int64) g);
+        n.length = page.gridStep ((double) (c->start + n.start));
         n.pitch = pitchFor (p.y);
         n.velocity = 100;
         edit ([n] (Midi::Clip& cl) { cl.notes.push_back (n); }, false);
@@ -2159,9 +2324,10 @@ void MidiPage::timerCallback()
         rebuildHeaders();
         refreshAll();
     }
-    else if (midi.getRevision() != shownRevision)
-        refreshAll();
+    else if (midi.getRevision() != shownRevision || tempoPrint() != shownTempo)
+        refreshAll();   // clips changed, or the bars moved (tempo map, signature)
     shownRevision = midi.getRevision();
+    shownTempo = tempoPrint();
     timeline->follow();
     // The play line moves: repaint the timeline (cheap enough at 30 Hz).
     timeline->repaint();

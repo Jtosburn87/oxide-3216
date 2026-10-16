@@ -425,6 +425,8 @@ void MainComponent::showSessionMenu()
     m.addCommandItem (&commands, saveSessionAs, "Save as...");
     m.addSeparator();
     m.addCommandItem (&commands, importAudio, "Import audio...");
+    m.addCommandItem (&commands, importTempoMapCmd, "Import tempo map...");
+    m.addCommandItem (&commands, clearTempoMapCmd, "Clear tempo map");
     juce::PopupMenu exports;
     exports.addCommandItem (&commands, exportMix, "Bounce Song...");
     exports.addCommandItem (&commands, exportTapeCmd, "Export From Tape...");
@@ -466,7 +468,7 @@ bool MainComponent::AssignedKeysFirst::keyPressed (const juce::KeyPress& k, juce
 void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
 {
     ids.addArray ({ playStop, play, stop, record, rewind, fastForward, returnToZero,
-                    newSession, openSession, saveSession, saveSessionAs, exportMix, exportTapeCmd, importAudio,
+                    newSession, openSession, saveSession, saveSessionAs, exportMix, exportTapeCmd, importAudio, importTempoMapCmd, clearTempoMapCmd,
                     recordViewCmd, mixViewCmd, fullViewCmd, nextViewCmd, fullScreenCmd,
                     tapeMachineCmd, midiPageCmd, rackCmd, patchBayCmd, talkbackCmd });
     for (int t = 0; t < TapeMachine::numTracks; ++t)
@@ -547,6 +549,9 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
                             info.addDefaultKeypress ('e', cmd | juce::ModifierKeys::shiftModifier); break;
         case importAudio:   info.setInfo ("Import audio", "Imports an audio file onto one tape track (a stereo file onto two)", "Session", 0);
                             info.addDefaultKeypress ('i', cmd); break;
+        case importTempoMapCmd: info.setInfo ("Import tempo map", "Reads the tempo and time signature changes from a MIDI file: the click, the grid and the MIDI follow them from bar 1", "Session", 0); break;
+        case clearTempoMapCmd:  info.setInfo ("Clear tempo map", "Back to one tempo and time signature (the map's opening ones) for the whole song", "Session", 0);
+                                info.setActive (engine.tempo.hasMap()); break;
         case recordViewCmd: info.setInfo ("Record view", "Shows input channels 1-16 and the centre section", "View", 0);
                             info.addDefaultKeypress ('1', cmd); break;
         case mixViewCmd:    info.setInfo ("Mix view", "Shows the centre section and the tape returns", "View", 0);
@@ -614,6 +619,8 @@ bool MainComponent::perform (const InvocationInfo& info)
         case exportMix:     sessions.bounceSong(); return true;
         case exportTapeCmd: sessions.exportFromTape(); return true;
         case importAudio:   ImportAudioDialog::show (engine, settings); return true;
+        case importTempoMapCmd: MidiPage::importTempoMap (engine); return true;
+        case clearTempoMapCmd:  MidiPage::clearTempoMap (engine); return true;
         case recordViewCmd: showView (Desk::recordView); return true;
         case mixViewCmd:    showView (Desk::mixView); return true;
         case fullViewCmd:   showView (Desk::fullView); return true;

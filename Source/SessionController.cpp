@@ -62,6 +62,7 @@ std::uint64_t SessionController::fingerprint() const
     for (int m = 0; m < TapeMachine::numMemories; ++m)
         h = mix (h, (std::uint64_t) tape.getMemory (m));
     h = mix (h, (std::uint64_t) engine.scenes.getRevision());
+    h = mix (h, (std::uint64_t) engine.tempo.getMapRevision());
     for (int d = 0; d < AudioEngine::Patch::numDestinations; ++d)
         h = mix (h, engine.getPatch (d).hash());
     for (auto* s : engine.inputStrips)  h = mix (h, s->name);
