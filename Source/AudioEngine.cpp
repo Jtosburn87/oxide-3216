@@ -58,6 +58,7 @@ AudioEngine::AudioEngine()
     oscFreq = &params.add ("osc.freq", "Oscillator frequency", 20.0f, 20000.0f, 1000.0f, Param::Scale::log);
     oscLevel = &params.add ("osc.level", "Oscillator level", -60.0f, 0.0f, -18.0f);
     preampColour = &params.addToggle ("console.colour", "Console colour", true);
+    pdcOn = &params.addToggle ("console.pdc", "Plugin delay compensation", true);
 
     tbLevel = &params.add ("tb.level", "Talkback level", -60.0f, 10.0f, 0.0f);
     for (int k = 0; k < numTalkbackAux; ++k)
@@ -598,7 +599,11 @@ void AudioEngine::render (const float* const* inputs, int numInputs, float* cons
         for (int k = 0; k < Config::numAux; ++k)
             if (! idleReturn (k) && auxMain[(size_t) k]->on() && auxInserts[k]->isActive())
                 compensation = juce::jmax (compensation, auxInserts[k]->getLatency());
+        if (! pdcOn->on())
+            compensation = 0;   // compensation off: nothing waits for the bus plugins
         compensation = juce::jmin (compensation, Dsp::DelayLine::capacity - 1);
+        // Every output waits as long as main does (the compensation, then the master inserts' own delay).
+        const int outputDelay = juce::jmin (compensation + masterInserts.getLatency(), Dsp::DelayLine::capacity - 1);
         mainDelayL.process (mixL.data(), n, compensation);
         mainDelayR.process (mixR.data(), n, compensation);
 
@@ -633,8 +638,14 @@ void AudioEngine::render (const float* const* inputs, int numInputs, float* cons
             raisePeak (subPeak[(size_t) k][1], pr);
             for (int i = 0; i < n; ++i)
                 subMono[(size_t) k][(size_t) i] = 0.5f * (l[i] + r[i]);   // the patch bay sub out is mono
-            if (subOut[k][0] != nullptr) juce::FloatVectorOperations::add (subOut[k][0] + start, l, n);
-            if (subOut[k][1] != nullptr) juce::FloatVectorOperations::add (subOut[k][1] + start, r, n);
+            // Sub outputs, in step with main (this sub's plugins already took their share of the delay).
+            for (int side = 0; side < 2; ++side)
+                if (subOut[k][side] != nullptr)
+                {
+                    std::memcpy (subOutTemp.data(), side == 0 ? l : r, sizeof (float) * (size_t) n);
+                    subOutDelay[(size_t) (k * 2 + side)].process (subOutTemp.data(), n, outputDelay - subInserts[k]->getLatency());
+                    juce::FloatVectorOperations::add (subOut[k][side] + start, subOutTemp.data(), n);
+                }
 
             // Into the main mix when assigned, compensated. (The sub buffers themselves stay undelayed for the patch bay.)
             const int d = compensation - subInserts[k]->getLatency();
@@ -703,6 +714,11 @@ void AudioEngine::render (const float* const* inputs, int numInputs, float* cons
             juce::FloatVectorOperations::add (mixR.data(), returnR.data(), n);
         }
 
+        // The aux outputs (headphone cues) wait as long as main, so what a player hears on a cue lines up with what
+        // the overdub compensation expects. The returns above took the bus undelayed; the talkback below is not held back.
+        for (int k = 0; k < Config::numAux; ++k)
+            auxOutDelay[(size_t) k].process (aux[(size_t) k].data(), n, outputDelay);
+
         // Talkback: the mic through the TB limiter (while the limiter's input is normalled to it), into the
         // chosen aux outputs. After the aux returns, so it never reaches the main mix through an effect.
         {
@@ -738,8 +754,19 @@ void AudioEngine::render (const float* const* inputs, int numInputs, float* cons
 
         // The click (never while exporting): into the aux outputs it is sent to, like the talkback after the aux returns,
         // so it reaches the headphone mixes but never the main mix through an effect.
-        const bool clickNow = mainLeft == nullptr && mainRight == nullptr
-                              && tempo.renderClick (clickOut.data(), n, tapeFrom, tapeTo, tape.getSampleRate(), tape.isPlaying());
+        const bool clickRendered = mainLeft == nullptr && mainRight == nullptr
+                                   && tempo.renderClick (clickOut.data(), n, tapeFrom, tapeTo, tape.getSampleRate(), tape.isPlaying());
+        // Held back like every other output (and its delayed tail still comes out after the last beat).
+        if (clickRendered)
+            clickTail = outputDelay + n;
+        else if (clickTail > 0)
+        {
+            juce::FloatVectorOperations::clear (clickOut.data(), n);
+            clickTail -= n;
+        }
+        const bool clickNow = clickRendered || clickTail > 0;
+        if (clickNow)
+            clickDelay.process (clickOut.data(), n, outputDelay);
         if (clickNow)
             for (int k = 0; k < Config::numAux; ++k)
                 if (const float g = ChannelStrip::auxGain (tempo.clickAux[(size_t) k]->get()); g > 0.0f)
@@ -801,6 +828,10 @@ void AudioEngine::render (const float* const* inputs, int numInputs, float* cons
             if (mainOut[side] != nullptr)
                 juce::FloatVectorOperations::add (mainOut[side] + start, mix[side], n);
         }
+
+        // The solo bus, in step with main.
+        soloDelayL.process (soloL.data(), n, outputDelay);
+        soloDelayR.process (soloR.data(), n, outputDelay);
 
         // Monitor outs: main, or the solo bus while anything is soloed (a short crossfade between them),
         // at the monitor level.

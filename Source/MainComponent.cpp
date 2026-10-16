@@ -295,6 +295,8 @@ void MainComponent::timerCallback()
     statusLabel.setText (deviceText + "  |  "
                              + (running ? "CPU " + juce::String (juce::roundToInt (dm.getCpuUsage() * 100.0)) + "%"
                                         : juce::String ("AUDIO STOPPED"))
+                             + (engine.getPluginLatency() > 0 ? "  |  plugin delay " + juce::String (engine.getPluginLatency() * 1000.0 / juce::jmax (1.0, engine.tape.getSampleRate()), 1) + " ms" : juce::String())
+                             + (! engine.pdcOn->on() ? "  |  PDC off" : juce::String())
                              + (xruns > 0 ? "  |  dropouts " + juce::String (xruns) : juce::String())
                              + (dropped > 0 ? "  |  tape overrun" : juce::String()),
                          juce::dontSendNotification);
@@ -702,6 +704,12 @@ void MainComponent::showSectionsMenu()
         if (saveSettings) saveSettings();
     });
     const bool fullScreen = isFullScreenMode != nullptr && isFullScreenMode();
+    {
+        const bool pdc = engine.pdcOn->on();
+        const double ms = engine.getPluginLatency() * 1000.0 / juce::jmax (1.0, engine.tape.getSampleRate());
+        m.addItem ("Plugin delay compensation" + (pdc && engine.getPluginLatency() > 0 ? " (" + juce::String (ms, 1) + " ms now)" : juce::String()),
+                   true, pdc, [this, pdc] { engine.pdcOn->set (pdc ? 0.0f : 1.0f); });
+    }
     m.addItem ("Full screen (F11)", true, fullScreen, [this] { if (onToggleFullScreen) onToggleFullScreen(); });
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (sectionsButton));
 }

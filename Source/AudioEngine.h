@@ -156,6 +156,10 @@ public:
 
     /** Extra delay added by plugins (latency compensation + master inserts), in samples. */
     int getPluginLatency() const noexcept { return pluginLatency.load (std::memory_order_relaxed); }
+    /** Plugin delay compensation (on): the dry mix, the subs and the aux returns wait for the slowest bus plugin chain,
+        and every output (aux and sub outs, the click, the solo bus on the monitors) is held back to stay in step with
+        main. Off: nothing waits (lowest latency for tracking), so bus plugins with latency come out late. */
+    Param* pdcOn = nullptr;
     Param* mainFader = nullptr;
     Param* monitorLevel = nullptr;   // dB, -60 (off) .. +10: level of the monitor outs (headphones)
     static float monitorGain (float db) noexcept { return db <= -59.5f ? 0.0f : Dsp::dbToGain (db); }
@@ -283,6 +287,12 @@ private:
     std::array<Block, Config::numSubs> subMono {};
     Block returnL {}, returnR {};
     Dsp::DelayLine mainDelayL, mainDelayR;
+    // Outputs held back by the plugin delay so they stay in step with main (see pdcOn).
+    std::array<Dsp::DelayLine, Config::numAux> auxOutDelay;
+    std::array<Dsp::DelayLine, Config::numSubs * 2> subOutDelay;
+    Dsp::DelayLine clickDelay, soloDelayL, soloDelayR;
+    int clickTail = 0;    // samples of delayed click still to come out after it stops
+    Block subOutTemp {};
     std::array<Dsp::DelayLine, Config::numSubs * 2> subDelay;
     std::array<Dsp::DelayLine, Config::numAux * 2> returnDelay;
     const float* patchSource (int source, int phase) const noexcept;

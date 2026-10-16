@@ -1651,6 +1651,56 @@ namespace
         return idx;
     }
 
+    void testDelayCompensationOutputs()
+    {
+        std::puts ("Plugin delay compensation: aux and sub outputs stay in step with main; off: nothing waits");
+        using P = AudioEngine::Patch;
+        TestEngine e;
+        // Outputs: main 1/2, aux 1 on 3, sub 1 on 4/5.
+        e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1, 2, 3, 4 }), 0);
+        mapOnly (e, 0, 0);
+        e.setAuxOutput (0, 2);
+        e.setSubOutput (0, 0, 3);
+        e.setSubOutput (0, 1, 4);
+        auto& s = *e.inputStrips[0];
+        s.controls.auxLevel[0]->set (0.5f);   // a cue send
+        s.controls.sub[0]->set (1.0f);
+        e.subInserts[0]->setSlot (0, std::make_unique<TestPlugin> (1.0f, 100), testDescription ("Delay 100"));
+
+        // An impulse at sample 10 of block 2; the first output sample above the threshold on each output.
+        const auto arrivals = [&e] ()
+        {
+            Buffers b (1, 5, 256);
+            std::array<int, 5> first;
+            first.fill (-1);
+            for (int k = 0; k < 12; ++k)
+            {
+                std::fill (b.in[0].begin(), b.in[0].end(), 0.0f);
+                if (k == 2)
+                    b.in[0][10] = 0.25f;
+                b.run (e);
+                for (int o = 0; o < 5; ++o)
+                    for (int i = 0; i < b.n && first[(size_t) o] < 0; ++i)
+                        if (std::abs (b.out[(size_t) o][(size_t) i]) > 0.02f)
+                            first[(size_t) o] = k * b.n + i;
+            }
+            return first;
+        };
+        arrivals();   // the chain reports its latency
+        auto at = arrivals();
+        std::printf ("      main %d, aux 1 out %d, sub 1 out %d\n", at[0], at[2], at[3]);
+        const int expected = 2 * 256 + 10 + 100;
+        check (at[0] == expected && at[2] == expected && at[3] == expected, "main, the aux cue and the sub out all arrive together");
+
+        e.pdcOn->set (0.0f);
+        arrivals();
+        at = arrivals();
+        std::printf ("      compensation off: main %d, aux 1 out %d, sub 1 out %d\n", at[0], at[2], at[3]);
+        check (at[0] == 2 * 256 + 10 && at[2] == 2 * 256 + 10 && at[3] == expected, "off: the dry paths don't wait (the sub plugin is late)");
+        check (e.getPluginLatency() == 0, "off: overdubs aren't shifted for the bus plugins");
+        juce::ignoreUnused (P::mainL);
+    }
+
     void testInserts()
     {
         std::puts ("Insert slots, aux returns, latency compensation");
@@ -3172,6 +3222,7 @@ int main (int argc, char** argv)
     testMasterSection();
     testPatchBay();
     testInserts();
+    testDelayCompensationOutputs();
     testBusAssignsAndAuxLinks();
     testPunchAndLoop();
     testWinding();
