@@ -51,7 +51,10 @@ public:
     void changeClips (int track, const std::function<void (std::vector<Midi::Clip>&)>&);
     void refreshAll();
 
-    static constexpr int headerW = 300, laneH = 82, rulerH = 28, toolbarH = 50;
+    static constexpr int headerW = 300, rulerH = 28, toolbarH = 50;
+    int laneH = 82;   // track height: the vertical zoom (Timeline zoom buttons)
+    /** One step taller (+1) or shorter (-1) for every track. */
+    void zoomLanes (int direction);
 
 private:
     class Toolbar;

@@ -362,8 +362,12 @@ void MainComponent::showMidiPage (bool show)
     }
     midiPage->setVisible (show);
     viewport.setVisible (! show);
-    for (auto& b : viewSwitch.buttons)
-        b.setEnabled (! show);
+    // Record / Mix / Full stay live: on the MIDI page none is lit, and clicking one goes back to the console in that view.
+    if (show)
+        for (auto& b : viewSwitch.buttons)
+            b.setToggleState (false, juce::dontSendNotification);
+    else
+        viewSwitch.setView (desk.getView());
     zoomSlider.setEnabled (! show);
     midiButton.setToggleState (show, juce::dontSendNotification);
     if (show)

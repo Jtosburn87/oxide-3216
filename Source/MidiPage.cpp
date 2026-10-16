@@ -39,6 +39,53 @@ namespace
         void scrollBarMoved (juce::ScrollBar*, double start) override { if (moved) moved (start); }
     };
 
+    /** H - + and V - +: horizontal and vertical zoom, for the bottom right corner of a view. */
+    class ZoomButtons : public juce::Component
+    {
+    public:
+        ZoomButtons()
+        {
+            const auto setUp = [this] (juce::TextButton& b, const char* text, const juce::String& tip, std::function<void()> fn)
+            {
+                b.setButtonText (juce::String (juce::CharPointer_UTF8 (text)));
+                b.setTooltip (tip);
+                b.onClick = std::move (fn);
+                addAndMakeVisible (b);
+            };
+            setUp (hOut, "−", "Zoom out across (Ctrl + mouse wheel too)", [this] { if (onHorizontal) onHorizontal (-1); });
+            setUp (hIn, "+", "Zoom in across (Ctrl + mouse wheel too)", [this] { if (onHorizontal) onHorizontal (1); });
+            setUp (vOut, "−", "Zoom out down: shorter rows", [this] { if (onVertical) onVertical (-1); });
+            setUp (vIn, "+", "Zoom in down: taller rows", [this] { if (onVertical) onVertical (1); });
+        }
+
+        std::function<void (int)> onHorizontal, onVertical;
+        static constexpr int width = 152;
+
+        void resized() override
+        {
+            auto r = getLocalBounds();
+            hLabel = r.removeFromLeft (14);
+            hOut.setBounds (r.removeFromLeft (30));
+            hIn.setBounds (r.removeFromLeft (30));
+            r.removeFromLeft (8);
+            vLabel = r.removeFromLeft (14);
+            vOut.setBounds (r.removeFromLeft (30));
+            vIn.setBounds (r.removeFromLeft (30));
+        }
+
+        void paint (juce::Graphics& g) override
+        {
+            g.setColour (juce::Colour (0xffaeb3b5));
+            g.setFont (ConsoleLookAndFeel::uiFont (13.0f, true));
+            g.drawText ("H", hLabel, juce::Justification::centred, false);
+            g.drawText ("V", vLabel, juce::Justification::centred, false);
+        }
+
+    private:
+        juce::TextButton hOut, hIn, vOut, vIn;
+        juce::Rectangle<int> hLabel, vLabel;
+    };
+
     void styleSmall (juce::TextButton& b)
     {
         b.setColour (juce::TextButton::buttonOnColourId, amber);
@@ -331,7 +378,8 @@ public:
 
     void resized() override
     {
-        auto r = getLocalBounds().reduced (8, 6).withTrimmedLeft (8);
+        // Short tracks (zoomed out) drop the routing row, then the instrument row.
+        auto r = getLocalBounds().reduced (8, getHeight() < 50 ? 5 : 6).withTrimmedLeft (8);
         auto top = r.removeFromTop (22);
         for (auto* b : { &solo, &mute, &rec })
         {
@@ -339,11 +387,20 @@ public:
             top.removeFromRight (3);
         }
         name.setBounds (top);
+        const bool showInstrument = r.getHeight() >= 24, showRouting = r.getHeight() >= 48;
+        for (auto* b : { &instrument, &list })
+            b->setVisible (showInstrument);
+        for (auto* b : { &input, &route })
+            b->setVisible (showRouting);
+        if (! showInstrument)
+            return;
         r.removeFromTop (4);
         auto mid = r.removeFromTop (20);
         list.setBounds (mid.removeFromRight (24));
         mid.removeFromRight (3);
         instrument.setBounds (mid);
+        if (! showRouting)
+            return;
         r.removeFromTop (4);
         auto bottom = r.removeFromTop (20);
         route.setBounds (bottom.removeFromRight (bottom.getWidth() / 2));
@@ -547,17 +604,21 @@ public:
         hScroll.setAutoHide (false);
         hWatch.moved = [this] (double start) { scrollBeats = start; page.refreshAll(); };
         hScroll.addListener (&hWatch);
+        addAndMakeVisible (zoom);
+        zoom.onHorizontal = [this] (int d) { zoomAcross (d > 0 ? 1.25 : 0.8); };
+        zoom.onVertical = [this] (int d) { page.zoomLanes (d); };
     }
 
     double pxPerBeat = 40.0, scrollBeats = 0.0;
     int scrollY = 0;
     juce::ScrollBar hScroll { false };
     ScrollWatch hWatch;
+    ZoomButtons zoom;
 
     double xForTick (double ticks) const { return (ticks / Tempo::ticksPerBeat - scrollBeats) * pxPerBeat; }
     double tickForX (double x) const { return (x / pxPerBeat + scrollBeats) * Tempo::ticksPerBeat; }
-    int laneTop (int row) const { return rulerH + row * laneH - scrollY; }
-    int areaHeight() const { return getHeight() - hScroll.getHeight(); }
+    int laneTop (int row) const { return rulerH + row * page.laneH - scrollY; }
+    int areaHeight() const { return getHeight() - 26; }   // above the scroll bar and zoom buttons
 
     void updateScroll()
     {
@@ -571,8 +632,21 @@ public:
 
     void resized() override
     {
-        hScroll.setBounds (getLocalBounds().removeFromBottom (14));
+        auto bar = getLocalBounds().removeFromBottom (26);
+        zoom.setBounds (bar.removeFromRight (ZoomButtons::width).reduced (0, 1));
+        bar.removeFromRight (6);
+        hScroll.setBounds (bar.reduced (0, 5));
         updateScroll();
+    }
+
+    /** Zooms across round the middle of the view. */
+    void zoomAcross (double factor)
+    {
+        const double centreBeats = scrollBeats + getWidth() * 0.5 / pxPerBeat;
+        pxPerBeat = juce::jlimit (4.0, 400.0, pxPerBeat * factor);
+        scrollBeats = juce::jmax (0.0, centreBeats - getWidth() * 0.5 / pxPerBeat);
+        updateScroll();
+        page.refreshAll();
     }
 
     void paint (juce::Graphics& g) override
@@ -586,9 +660,9 @@ public:
         for (int i = 0; i < slots.size(); ++i)
         {
             g.setColour (slots[i] == page.selectedTrack ? laneAlt.brighter (0.06f) : (i % 2 == 0 ? laneBg : laneAlt));
-            g.fillRect (0, laneTop (i), w, laneH);
+            g.fillRect (0, laneTop (i), w, page.laneH);
             g.setColour (juce::Colour (0xff1d1f22));
-            g.fillRect (0, laneTop (i) + laneH - 1, w, 1);
+            g.fillRect (0, laneTop (i) + page.laneH - 1, w, 1);
         }
         paintGrid (g, rulerH, h);
 
@@ -602,7 +676,7 @@ public:
         {
             g.setColour (page.midi.getColour (dragTrack).withAlpha (0.35f));
             const auto r = juce::Rectangle<double> (xForTick ((double) newStart), laneTop (rowOf (dragTrack)) + 4.0,
-                                                    xForTick ((double) newEnd) - xForTick ((double) newStart), laneH - 8.0);
+                                                    xForTick ((double) newEnd) - xForTick ((double) newStart), page.laneH - 8.0);
             g.fillRect (r.toFloat());
         }
 
@@ -613,14 +687,14 @@ public:
             const float dx = (float) xForTick ((double) dropTick ((float) dropAt.x));
             g.setColour (amber);
             g.fillRect (dx - 1.0f, 0.0f, 2.0f, (float) h);
-            const int row = dropAt.y < rulerH ? 0 : (int) std::floor ((dropAt.y - rulerH + scrollY) / (double) laneH);
+            const int row = dropAt.y < rulerH ? 0 : (int) std::floor ((dropAt.y - rulerH + scrollY) / (double) page.laneH);
             const auto where = juce::isPositiveAndBelow (row, slots.size()) ? page.midi.getName (slots[row]) : juce::String ("a new track");
             g.setFont (ConsoleLookAndFeel::uiFont (12.0f, true));
             g.drawText ("Drop onto " + where, juce::Rectangle<float> (dx + 6.0f, (float) rulerH + 4.0f, 240.0f, 16.0f), juce::Justification::centredLeft, false);
             if (juce::isPositiveAndBelow (row, slots.size()))
             {
                 g.setColour (amber.withAlpha (0.12f));
-                g.fillRect (0, laneTop (row), w, laneH);
+                g.fillRect (0, laneTop (row), w, page.laneH);
             }
         }
 
@@ -674,7 +748,7 @@ public:
             dragMode = locating;
             return;
         }
-        const int row = (int) std::floor ((pos.y - rulerH + scrollY) / laneH);
+        const int row = (int) std::floor ((pos.y - rulerH + scrollY) / page.laneH);
         const auto slots = page.midi.usedSlots();
         if (! juce::isPositiveAndBelow (row, slots.size()))
             return;
@@ -686,6 +760,20 @@ public:
             if (e.mods.isPopupMenu())
             {
                 clipMenu (track, clip);
+                return;
+            }
+            if (e.mods.isAltDown() && page.tool == Tool::pointer)
+            {
+                // Alt: a copy of the clip comes away with the mouse (just a click: the copy goes straight after it).
+                const auto copy = page.midi.getClips (track)[(size_t) clip];
+                int index = clip;
+                page.changeClips (track, [&] (std::vector<Midi::Clip>& clips) { clips.push_back (copy); index = (int) clips.size() - 1; });
+                page.select (track, index);
+                dragMode = move;
+                dragTrack = track;
+                original = copy;
+                downTick = tickForX (pos.x);
+                altCopy = true;
                 return;
             }
             const auto& c = page.midi.getClips (track)[(size_t) clip];
@@ -759,6 +847,18 @@ public:
 
     void mouseUp (const juce::MouseEvent&) override
     {
+        if (altCopy)
+        {
+            altCopy = false;
+            const auto& clips = page.midi.getClips (dragTrack);
+            if (juce::isPositiveAndBelow (page.selectedClip, (int) clips.size()) && clips[(size_t) page.selectedClip].start == original.start)
+            {
+                const int index = page.selectedClip;
+                const auto after = original.end();
+                page.changeClips (dragTrack, [index, after] (std::vector<Midi::Clip>& cl) { cl[(size_t) index].start = after; });
+                page.refreshAll();
+            }
+        }
         if (dragNew)
         {
             dragNew = false;
@@ -783,7 +883,7 @@ public:
         // Pointer tool: double-click empty lane space for a one-bar clip.
         if (e.position.y < rulerH || page.tool != Tool::pointer)
             return;
-        const int row = (int) std::floor ((e.position.y - rulerH + scrollY) / laneH);
+        const int row = (int) std::floor ((e.position.y - rulerH + scrollY) / page.laneH);
         const auto slots = page.midi.usedSlots();
         if (! juce::isPositiveAndBelow (row, slots.size()) || clipAt (slots[row], e.position.x) >= 0)
             return;
@@ -843,7 +943,7 @@ public:
     {
         dropping = false;
         const auto slots = page.midi.usedSlots();
-        const int row = y < rulerH ? 0 : (int) std::floor ((y - rulerH + scrollY) / (double) laneH);
+        const int row = y < rulerH ? 0 : (int) std::floor ((y - rulerH + scrollY) / (double) page.laneH);
         int track = juce::isPositiveAndBelow (row, slots.size()) ? slots[row] : -1;
         auto start = dropTick ((float) x);
         juce::StringArray problems;
@@ -905,6 +1005,7 @@ private:
     juce::int64 newStart = 0, newEnd = 0;
     bool dropping = false;
     juce::Point<int> dropAt;
+    bool altCopy = false;
 
     juce::int64 dropTick (float x) const
     {
@@ -1080,7 +1181,7 @@ private:
         if (x1 < 0.0f || x0 > (float) getWidth())
             return;
         const auto colour = page.midi.getColour (track);
-        const juce::Rectangle<float> r (x0, (float) y, juce::jmax (3.0f, x1 - x0 - 1.0f), (float) laneH - 8.0f);
+        const juce::Rectangle<float> r (x0, (float) y, juce::jmax (3.0f, x1 - x0 - 1.0f), (float) page.laneH - 8.0f);
         g.setColour (colour.withAlpha (0.22f));
         g.fillRoundedRectangle (r, 3.0f);
         g.setColour (selected ? juce::Colours::white : colour);
@@ -1121,12 +1222,46 @@ private:
 class MidiPage::PianoRoll : public juce::Component
 {
 public:
-    explicit PianoRoll (MidiPage& p) : page (p) { setWantsKeyboardFocus (true); }
+    explicit PianoRoll (MidiPage& p) : page (p)
+    {
+        setWantsKeyboardFocus (true);
+        addAndMakeVisible (zoom);
+        zoom.onHorizontal = [this] (int d) { zoomAcross (d > 0 ? 1.25 : 0.8); };
+        zoom.onVertical = [this] (int d) { zoomRows (d); };
+    }
+
+    void resized() override
+    {
+        zoom.setBounds (getLocalBounds().removeFromBottom (zoomBarH).removeFromRight (ZoomButtons::width + 6).reduced (3, 1).withTrimmedRight (3));
+    }
+
+    void zoomAcross (double factor)
+    {
+        const double centre = tickFor ((float) (keysW + (getWidth() - keysW) / 2));
+        pxPerTick = juce::jlimit (0.005, 2.0, pxPerTick * factor);
+        scrollTicks = juce::jmax (0.0, centre - (getWidth() - keysW) * 0.5 / pxPerTick);
+        repaint();
+    }
+
+    /** Taller (+1) or shorter (-1) note rows, keeping the middle pitch in place. */
+    void zoomRows (int direction)
+    {
+        static constexpr int heights[] = { 6, 8, 11, 14, 18, 24 };
+        int i = 0;
+        while (i < 5 && heights[i] < rowH)
+            ++i;
+        const int centrePitch = topPitch - visibleRows() / 2;
+        rowH = heights[juce::jlimit (0, 5, i + direction)];
+        topPitch = juce::jlimit (visibleRows() - 1, 127, centrePitch + visibleRows() / 2);
+        repaint();
+    }
 
     std::set<int> selection;   // note indices in the clip
     int shownTrack = -1, shownClip = -1;
 
-    static constexpr int keysW = 46, rowH = 11, velocityH = 84, rulerH2 = 18;
+    static constexpr int keysW = 46, velocityH = 84, rulerH2 = 18, zoomBarH = 28;
+    int rowH = 11;   // the vertical zoom
+    int areaH() const { return getHeight() - zoomBarH; }   // above the zoom buttons
 
     const Midi::Clip* clip() const
     {
@@ -1167,7 +1302,7 @@ public:
             g.drawText ("Select a clip to edit its notes here (double-click a lane, or draw one with the pencil)", getLocalBounds(), juce::Justification::centred, false);
             return;
         }
-        const int notesBottom = getHeight() - velocityH;
+        const int notesBottom = areaH() - velocityH;
         // Keys and rows.
         for (int row = 0; row <= visibleRows(); ++row)
         {
@@ -1190,7 +1325,7 @@ public:
         }
         // Grid.
         g.saveState();
-        g.reduceClipRegion (keysW, 0, getWidth() - keysW, getHeight());
+        g.reduceClipRegion (keysW, 0, getWidth() - keysW, areaH());
         const double step = juce::jmax (1.0, page.snapTicks());
         const double beat = Tempo::ticksPerBeat, bar = (double) page.barTicks();
         for (double t = 0.0; t <= (double) c->length + 0.5; t += (step * pxPerTick >= 6.0 ? step : beat))
@@ -1236,8 +1371,8 @@ public:
             const float x = xFor ((double) n.start);
             const float h = (float) (velocityH - 14) * (float) n.velocity / 127.0f;
             g.setColour (selection.count (i) > 0 ? colour.brighter (0.6f) : colour);
-            g.fillRect (x, (float) getHeight() - 4.0f - h, 4.0f, h);
-            g.fillEllipse (x - 1.0f, (float) getHeight() - 7.0f - h, 6.0f, 6.0f);
+            g.fillRect (x, (float) areaH() - 4.0f - h, 4.0f, h);
+            g.fillEllipse (x - 1.0f, (float) areaH() - 7.0f - h, 6.0f, 6.0f);
         }
         g.restoreState();
         g.setColour (textDim);
@@ -1270,7 +1405,7 @@ public:
         const auto* c = clip();
         if (c == nullptr || e.position.x < keysW)
             return;
-        const int notesBottom = getHeight() - velocityH;
+        const int notesBottom = areaH() - velocityH;
 
         if (e.position.y >= notesBottom)
         {
@@ -1326,7 +1461,7 @@ public:
 
     void mouseDoubleClick (const juce::MouseEvent& e) override
     {
-        if (page.tool == Tool::pointer && clip() != nullptr && e.position.x >= keysW && e.position.y < getHeight() - velocityH && noteAt (e.position) < 0)
+        if (page.tool == Tool::pointer && clip() != nullptr && e.position.x >= keysW && e.position.y < areaH() - velocityH && noteAt (e.position) < 0)
             addNote (e.position, false);
     }
 
@@ -1467,6 +1602,7 @@ public:
 
 private:
     MidiPage& page;
+    ZoomButtons zoom;
     double pxPerTick = 0.1, scrollTicks = 0.0;
     int topPitch = 72;
     enum class Drag { none, move, resize, velocity } drag = Drag::none;
@@ -1474,7 +1610,7 @@ private:
     double downTick = 0.0;
     int downPitch = 60, anchor = 0;
 
-    int visibleRows() const { return juce::jmax (1, (getHeight() - velocityH - rulerH2) / rowH); }
+    int visibleRows() const { return juce::jmax (1, (areaH() - velocityH - rulerH2) / rowH); }
     float xFor (double ticks) const { return (float) (keysW + (ticks - scrollTicks) * pxPerTick); }
     double tickFor (float x) const { return (x - keysW) / pxPerTick + scrollTicks; }
     int pitchFor (float y) const { return juce::jlimit (0, 127, topPitch - (int) std::floor ((y - rulerH2) / rowH)); }
@@ -1564,8 +1700,8 @@ private:
 
     void setVelocity (float y)
     {
-        const int notesBottom = getHeight() - velocityH;
-        const int v = juce::jlimit (1, 127, juce::roundToInt ((float) (getHeight() - 4 - y) / (float) (velocityH - 14) * 127.0f));
+        const int notesBottom = areaH() - velocityH;
+        const int v = juce::jlimit (1, 127, juce::roundToInt ((float) (areaH() - 4 - y) / (float) (velocityH - 14) * 127.0f));
         juce::ignoreUnused (notesBottom);
         edit ([this, v] (Midi::Clip& c)
         {
@@ -1685,6 +1821,17 @@ MidiPage::MidiPage (AudioEngine& e, PluginContext& c)
     vScroll.addListener (&vWatch);
     setWantsKeyboardFocus (true);
     startTimerHz (30);
+}
+
+void MidiPage::zoomLanes (int direction)
+{
+    static constexpr int heights[] = { 34, 58, 82, 110, 140, 180 };
+    int i = 0;
+    while (i < 5 && heights[i] < laneH)
+        ++i;
+    laneH = heights[juce::jlimit (0, 5, i + direction)];
+    layoutHeaders();
+    refreshAll();
 }
 
 MidiPage::~MidiPage()
