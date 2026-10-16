@@ -1,5 +1,6 @@
 #include "TempoPanel.h"
 #include "SceneWindow.h"
+#include "ClickSettings.h"
 #include "ConsoleLookAndFeel.h"
 
 using namespace ConsoleColours;
@@ -197,6 +198,10 @@ TempoPanel::TempoPanel (AudioEngine& e)
                       "On the main and monitor outs only: never recorded or exported.");
     clickLevel.setFormatter ([] (float db) { return juce::String (juce::roundToInt (db)) + " dB"; });
     clickLevel.setEndLabels ("-40", "0");
+    clickSetup.setTooltip ("The click's strip: level, pan, EQ, sends to Aux 1-8 (headphone mixes) and the main send");
+    clickSetup.setTitle ("Click setup");
+    clickSetup.onClick = [this] { ClickSettings::show (engine); };
+    addAndMakeVisible (clickSetup);
     startTimerHz (30);
     timerCallback();
 }
@@ -245,6 +250,8 @@ void TempoPanel::resized()
     auto bottom = r.removeFromTop (Knob::preferredHeight);
     clickLevel.setBounds (bottom.removeFromRight (Knob::preferredWidth + 20).withSizeKeepingCentre (Knob::preferredWidth, Knob::preferredHeight));
     bottom.removeFromRight (12);
+    clickSetup.setBounds (bottom.removeFromRight (80).withSizeKeepingCentre (80, 30));
+    bottom.removeFromRight (8);
     click.setBounds (bottom.withSizeKeepingCentre (bottom.getWidth(), 30));
 }
 

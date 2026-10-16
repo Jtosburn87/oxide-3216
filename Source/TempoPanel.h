@@ -74,6 +74,7 @@ private:
     SegmentDisplay position;
     juce::TextButton tap { "Tap" };
     ParamButton click;
+    juce::TextButton clickSetup { "Setup" };   // the click's strip: EQ, pan, aux sends, main send
     Knob clickLevel;
     std::vector<double> taps;   // ms, the latest few
 

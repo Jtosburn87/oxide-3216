@@ -96,7 +96,8 @@ yours). Scenes and the fade time are saved with the session.
 Tempo (top right of the centre section): the tempo (drag up / down, Shift for fine, mouse wheel, or
 double-click to type 20-300), the time signature (click for a menu), Tap (tap the beat four times or
 more), the song position in bar | beat | tick (bar 1 is the start of the tape; 960 ticks a beat), and
-the Click with its level. The click sounds on every beat while the tape plays, higher on the first
+the Click with its level and Setup: the click's own strip with level, pan, a four-band EQ, sends
+to Aux 1-8 for the headphone mixes (they join after the aux returns, like the talkback) and the Main send on / off. The click sounds on every beat while the tape plays, higher on the first
 beat of the bar, on the main and monitor outs only: it is never recorded or exported. The tempo is
 saved with the session and is not part of scenes.
 

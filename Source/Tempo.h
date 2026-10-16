@@ -2,6 +2,9 @@
 
 #include <juce_core/juce_core.h>
 #include "Params.h"
+#include "Config.h"
+#include "Eq.h"
+#include <array>
 
 /** The song's tempo and time signature, the bar | beat | tick position they give the tape, and the click.
 
@@ -18,6 +21,13 @@ public:
     Param* beatUnit = nullptr;     // stepped 0..3 = 2, 4, 8, 16 (the note that gets the beat)
     Param* clickOn = nullptr;
     Param* clickLevel = nullptr;   // dB, -40..0
+    // The click's own strip (Setup, next to Click): EQ, pan, the main send and sends to the aux outputs (for the
+    // headphone mixes; like the talkback they join after the aux returns, so the click never reaches the mix).
+    Param* clickPan = nullptr;      // -1..1
+    Param* clickMain = nullptr;     // to the main and monitor outs (on)
+    Param* clickEqIn = nullptr;
+    std::array<Param*, Config::numAux> clickAux {};   // 0..1, the channel aux send law
+    FourBandEq clickEq;             // click.eq.hf.gain ...
 
     static constexpr float minBpm = 20.0f, maxBpm = 300.0f;
     static constexpr int ticksPerBeat = 960;
@@ -37,6 +47,8 @@ public:
 
     // Click (audio thread) --------------------------------------------------
     void prepare (double sampleRate);
+    /** Left / right gains of the click on the main outs (pan, constant power). */
+    std::pair<float, float> clickPanGains() const noexcept;
     /** Writes this block's click into out[0..n) (cleared first). The tape went from tape sample `from` to `to`
         during the block; running = the tape is playing (not winding or stopped). A jump (locate, loop) clicks
         nothing until the tape runs smoothly again. Returns false when the block is silent. */

@@ -113,6 +113,7 @@ target_sources(Oxide3216 PRIVATE
     Source/BusCompWindow.cpp
     Source/MidiPage.cpp
     Source/TempoPanel.cpp
+    Source/ClickSettings.cpp
     Source/MeterBridge.cpp
     Source/TapeMachineWindow.cpp
     Source/EraseDialog.cpp

@@ -2,13 +2,18 @@
 #include <cmath>
 #include <juce_audio_basics/juce_audio_basics.h>
 
-Tempo::Tempo (ParamSet& params)
+Tempo::Tempo (ParamSet& params) : clickEq (params, "click", 1)
 {
     bpm = &params.add ("tempo.bpm", "Tempo", minBpm, maxBpm, 120.0f);
     beatsPerBar = &params.addStepped ("tempo.beats", "Beats a bar", 16, 3);   // 4
     beatUnit = &params.addStepped ("tempo.unit", "Beat unit", 4, 1);          // quarter notes
     clickOn = &params.addToggle ("click.on", "Click", false);
     clickLevel = &params.add ("click.level", "Click level", -40.0f, 0.0f, -12.0f);
+    clickPan = &params.add ("click.pan", "Click pan", -1.0f, 1.0f, 0.0f);
+    clickMain = &params.addToggle ("click.main", "Click to main", true);
+    clickEqIn = &params.addToggle ("click.eq.in", "Click EQ in", true);
+    for (int k = 0; k < Config::numAux; ++k)
+        clickAux[(size_t) k] = &params.add ("click.aux" + juce::String (k + 1), "Click to aux " + juce::String (k + 1), 0.0f, 1.0f, 0.0f);
 }
 
 void Tempo::setSignature (int beats, int unit)
@@ -47,6 +52,7 @@ juce::String Tempo::format (Position p)
 void Tempo::prepare (double sr)
 {
     sampleRate = sr > 0.0 ? sr : 48000.0;
+    clickEq.prepare (sampleRate);
     envDecay = (float) std::exp (-1.0 / (0.025 * sampleRate));   // 25 ms
     attack = 0.0f;
     env = 0.0f;
@@ -98,5 +104,16 @@ bool Tempo::renderClick (float* out, int n, juce::int64 from, juce::int64 to, do
         phase += phaseInc;
         env *= envDecay;
     }
+    // The click's EQ.
+    clickEq.update();
+    if (clickEqIn->on() && ! clickEq.isFlat())
+        for (int i = 0; i < n; ++i)
+            out[i] = clickEq.process (0, out[i]);
     return true;
+}
+
+std::pair<float, float> Tempo::clickPanGains() const noexcept
+{
+    const float angle = (clickPan->get() + 1.0f) * juce::MathConstants<float>::pi * 0.25f;
+    return { std::cos (angle), std::sin (angle) };
 }

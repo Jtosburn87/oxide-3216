@@ -736,7 +736,16 @@ void AudioEngine::render (const float* const* inputs, int numInputs, float* cons
             }
         }
 
-        // Aux outputs (after the talkback).
+        // The click (never while exporting): into the aux outputs it is sent to, like the talkback after the aux returns,
+        // so it reaches the headphone mixes but never the main mix through an effect.
+        const bool clickNow = mainLeft == nullptr && mainRight == nullptr
+                              && tempo.renderClick (clickOut.data(), n, tapeFrom, tapeTo, tape.getSampleRate(), tape.isPlaying());
+        if (clickNow)
+            for (int k = 0; k < Config::numAux; ++k)
+                if (const float g = ChannelStrip::auxGain (tempo.clickAux[(size_t) k]->get()); g > 0.0f)
+                    juce::FloatVectorOperations::addWithMultiply (aux[(size_t) k].data(), clickOut.data(), g, n);
+
+        // Aux outputs (after the talkback and the click).
         for (int k = 0; k < Config::numAux; ++k)
             if (auxOut[k] != nullptr)
                 juce::FloatVectorOperations::add (auxOut[k] + start, aux[(size_t) k].data(), n);
@@ -817,16 +826,18 @@ void AudioEngine::render (const float* const* inputs, int numInputs, float* cons
             monitorGainS.prepare (currentSampleRate, levelT);
         }
 
-        // Click: added to the main and monitor outs after the limiter, so it is heard but never recorded or exported.
-        if (mainLeft == nullptr && mainRight == nullptr
-            && tempo.renderClick (clickOut.data(), n, tapeFrom, tapeTo, tape.getSampleRate(), tape.isPlaying()))
+        // Click, with its main send on: added to the main and monitor outs after the limiter, so it is heard but never
+        // recorded or exported.
+        if (clickNow && tempo.clickMain->on())
         {
+            const auto [gl, gr] = tempo.clickPanGains();
             for (int side = 0; side < 2; ++side)
             {
+                const float g = side == 0 ? gl : gr;
                 if (mainOut[side] != nullptr)
-                    juce::FloatVectorOperations::add (mainOut[side] + start, clickOut.data(), n);
+                    juce::FloatVectorOperations::addWithMultiply (mainOut[side] + start, clickOut.data(), g, n);
                 if (monitorOut[side] != nullptr && monitorOut[side] != mainOut[side])
-                    juce::FloatVectorOperations::add (monitorOut[side] + start, clickOut.data(), n);
+                    juce::FloatVectorOperations::addWithMultiply (monitorOut[side] + start, clickOut.data(), g, n);
             }
         }
 

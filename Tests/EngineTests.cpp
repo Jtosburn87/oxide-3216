@@ -2555,6 +2555,58 @@ namespace
                && clips[0].notes == c.notes, "the clip and its notes");
     }
 
+    void testClickStrip()
+    {
+        std::puts ("Click strip: aux sends for the headphones, the main send, pan, EQ");
+        TestEngine e;
+        e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1, 2 }));
+        e.setAuxOutput (2, 2);   // Aux 3 on interface output 3
+        auto& t = e.tempo;
+        t.clickOn->set (1.0f);
+        t.clickMain->set (0.0f);
+        t.clickAux[2]->set (1.0f);
+        e.tape.arm[0]->set (1.0f);
+        e.tape.setRecordEnabled (true);
+        e.tape.play();
+        Buffers b (1, 3, 480);
+        float mainPeak = 0.0f, auxPeak = 0.0f;
+        for (int k = 0; k < 10; ++k)
+        {
+            b.run (e);
+            for (int i = 0; i < b.n; ++i)
+            {
+                mainPeak = juce::jmax (mainPeak, std::abs (b.out[0][(size_t) i]), std::abs (b.out[1][(size_t) i]));
+                auxPeak = juce::jmax (auxPeak, std::abs (b.out[2][(size_t) i]));
+            }
+        }
+        std::printf ("      main %.4f, aux 3 %.4f\n", mainPeak, auxPeak);
+        check (mainPeak < 0.001f, "main send off: nothing on the main outs");
+        check (auxPeak > 0.1f, "the click is on aux 3's output");
+
+        // Main on, panned hard left.
+        e.tape.stop();
+        e.tape.locate (0);
+        t.clickMain->set (1.0f);
+        t.clickPan->set (-1.0f);
+        t.clickAux[2]->set (0.0f);
+        e.tape.play();
+        float left = 0.0f, right = 0.0f;
+        for (int k = 0; k < 10; ++k)
+        {
+            b.run (e);
+            for (int i = 0; i < b.n; ++i)
+            {
+                left = juce::jmax (left, std::abs (b.out[0][(size_t) i]));
+                right = juce::jmax (right, std::abs (b.out[1][(size_t) i]));
+            }
+        }
+        check (left > 0.1f && right < 0.001f, "panned left: only the left main out");
+        e.tape.stop();
+        e.tape.setRecordEnabled (false);
+        check (e.params.find ("click.eq.hf.gain") != nullptr && ! SceneMemory::isSceneControl (*e.params.find ("click.eq.hf.gain")),
+               "the click EQ is there and stays out of scenes");
+    }
+
     void testWowFlutter()
     {
         std::puts ("Tape: wow and flutter");
@@ -3125,6 +3177,7 @@ int main (int argc, char** argv)
     testWinding();
     testShuttleJogScrub();
     testTempoAndClick();
+    testClickStrip();
     testMidiPlayback();
     testMidiRouting();
     testMidiRecording();
