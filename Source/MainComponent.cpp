@@ -96,6 +96,7 @@ MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionControll
     setWantsKeyboardFocus (true);
     // A plugin window must close before its plugin is deleted.
     forEachChain ([this] (InsertChain& c) { c.beforeDelete = [this] (juce::AudioProcessor* p) { pluginWindows.close (p); }; });
+    engine.midi.beforeDelete = [this] (juce::AudioProcessor* p) { pluginWindows.close (p); };
 
     zoomLabel.setText ("Zoom", juce::dontSendNotification);
     zoomLabel.setFont (ConsoleLookAndFeel::uiFont (14.0f));
@@ -173,6 +174,7 @@ MainComponent::~MainComponent()
         tapeWindow->onShownChanged = nullptr;
     tapeWindow = nullptr;
     forEachChain ([] (InsertChain& c) { c.beforeDelete = nullptr; c.onChange = nullptr; });
+    engine.midi.beforeDelete = nullptr;
     pluginWindows.closeAll();
     if (pluginListWindow != nullptr)
         delete pluginListWindow.getComponent();

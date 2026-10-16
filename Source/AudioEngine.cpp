@@ -16,7 +16,8 @@ AudioEngine::AudioEngine()
     monitorOutput[0].store (-1);
     monitorOutput[1].store (-1);
     for (auto& p : patch)
-        p.store (0);
+        for (auto& w : p)
+            w.store (0);
     for (auto& o : auxOutput)
         o.store (-1);
     for (auto& pair : subOutput)
@@ -152,6 +153,7 @@ void AudioEngine::initialise (const juce::XmlElement* savedState)
     const juce::XmlElement* deviceXml = savedState != nullptr ? savedState->getChildByName ("DEVICESETUP") : nullptr;
 
     deviceManager.initialise (64, 64, deviceXml, true);
+    midi.enableDeviceInputs();   // MIDI keyboards for the MIDI page (the tests never call initialise)
 
     // First run: prefer ASIO when a driver is installed.
     if (deviceXml == nullptr)
@@ -406,6 +408,7 @@ void AudioEngine::prepare (double sampleRate, const juce::BigInteger& activeInpu
     monitorGainS.prepare (currentSampleRate, monitorGain (monitorLevel->get()));
     busComp.prepare (currentSampleRate);
     tempo.prepare (currentSampleRate);
+    midi.prepare (currentSampleRate, Config::maxBlock);
     for (auto* c : subInserts) c->prepare (currentSampleRate, Config::maxBlock);
     for (auto* c : auxInserts) c->prepare (currentSampleRate, Config::maxBlock);
     masterInserts.prepare (currentSampleRate, Config::maxBlock);
@@ -526,12 +529,12 @@ void AudioEngine::render (const float* const* inputs, int numInputs, float* cons
     for (auto* eq : groupEq)
         eq->update();
 
-    std::uint64_t patchedSources = 0;
-    for (auto& p : patch)
-        patchedSources |= p.load (std::memory_order_relaxed);
+    PatchMask patchedSources;
+    for (int d = 0; d < Patch::numDestinations; ++d)
+        patchedSources |= loadPatch (d);
 
     // The oscillator only runs while a cable carries it.
-    const bool osc = ((patchedSources >> Patch::oscillator) & 1u) != 0;
+    const bool osc = patchedSources.test (Patch::oscillator);
     const int oscTypeNow = juce::roundToInt (oscType->get());
     const float oscFreqNow = oscFreq->get();
     const float oscGain = oscillatorMuted.load (std::memory_order_relaxed) ? 0.0f : Dsp::dbToGain (oscLevel->get());
@@ -541,6 +544,8 @@ void AudioEngine::render (const float* const* inputs, int numInputs, float* cons
         const int n = juce::jmin (maxBlock, numSamples - start);
         if (osc)
             oscillator.process (oscOut.data(), n, oscTypeNow, oscFreqNow, oscGain);
+        // The MIDI page's instruments, first: their outputs can be patched anywhere.
+        midi.process (n, tape.getPosition(), tape.getPlaybackRate(), tape.isPlaying(), tape.isRecordEnabled() && tape.isPlaying());
         juce::FloatVectorOperations::clear (mixL.data(), n);
         juce::FloatVectorOperations::clear (mixR.data(), n);
         juce::FloatVectorOperations::clear (soloL.data(), n);
@@ -709,7 +714,7 @@ void AudioEngine::render (const float* const* inputs, int numInputs, float* cons
                 juce::FloatVectorOperations::clear (tbLimOut.data(), n);
 
             // TB Send: normalled from the limiter while the mic feeds it, otherwise straight from TB In.
-            const bool normalled = patch[(size_t) Patch::tbLimiterIn].load (std::memory_order_relaxed) == 0
+            const bool normalled = ! loadPatch (Patch::tbLimiterIn).any()
                                    && interfaceIn[Patch::tbLimiterIn] == nullptr;
             const float* sendNormal = throughLimiter && normalled ? (mic != nullptr ? tbLimOut.data() : nullptr) : mic;
             const float* talk = patchedInput (Patch::tbSend, sendNormal, interfaceAt (Patch::tbSend, start), 3, n);
@@ -830,7 +835,7 @@ void AudioEngine::render (const float* const* inputs, int numInputs, float* cons
             for (int k = 0; k < Patch::numInterfaceOuts; ++k)
             {
                 const int d = Patch::interfaceOut + k;
-                if (patch[(size_t) d].load (std::memory_order_relaxed) == 0 && interfaceIn[d] == nullptr)
+                if (! loadPatch (d).any() && interfaceIn[d] == nullptr)
                     continue;
                 if (float* out = outFor (k))
                     if (const float* signal = patchedInput (d, nullptr, interfaceAt (d, start), 4, n))
@@ -838,39 +843,42 @@ void AudioEngine::render (const float* const* inputs, int numInputs, float* cons
             }
 
         // Keep this block of every patched source for cables that point backwards in the signal flow.
-        if (patchedSources != 0)
+        if (patchedSources.any())
             for (int s = 0; s < Patch::numSources; ++s)
-                if ((patchedSources >> s) & 1u)
+                if (patchedSources.test (s))
                     std::memcpy (patchPrevious[(size_t) s].data(), patchSource (s, 4), sizeof (float) * (size_t) n);
     }
 }
 
 //==============================================================================
-void AudioEngine::setPatch (int dest, std::uint64_t sources)
+void AudioEngine::setPatch (int dest, PatchMask sources)
 {
     if (! juce::isPositiveAndBelow (dest, Patch::numDestinations))
         return;
-    constexpr auto all = Patch::numSources >= 64 ? ~std::uint64_t (0) : (std::uint64_t (1) << (Patch::numSources % 64)) - 1;
-    sources &= all;
+    sources &= PatchMask::firstBits (Patch::numSources);
     if (dest == Patch::tbLimiterIn)
-        sources &= ~(std::uint64_t (1) << Patch::tbLimiterOut);   // the TB limiter cannot be patched into itself
-    patch[(size_t) dest].store (sources);
+        sources &= ~PatchMask::bit (Patch::tbLimiterOut);   // the TB limiter cannot be patched into itself
+    patch[(size_t) dest][0].store (sources.words[0]);
+    patch[(size_t) dest][1].store (sources.words[1]);
 }
 
-std::uint64_t AudioEngine::getPatch (int dest) const
+PatchMask AudioEngine::getPatch (int dest) const
 {
-    return juce::isPositiveAndBelow (dest, Patch::numDestinations) ? patch[(size_t) dest].load() : 0;
+    return juce::isPositiveAndBelow (dest, Patch::numDestinations) ? loadPatch (dest) : PatchMask();
 }
 
 void AudioEngine::clearPatch()
 {
     for (auto& p : patch)
-        p.store (0);
+        for (auto& w : p)
+            w.store (0);
 }
 
 void AudioEngine::resetPatchToDefault()
 {
     clearPatch();
+    for (int k = 0; k < MidiEngine::maxTracks; ++k)
+        midi.restoreList (k).clear();   // no instrument is routed any more
     for (auto& i : interfaceSource)
         i.store (-1);
     for (int c = 0; c < numConsoleInputs; ++c)
@@ -882,6 +890,7 @@ const float* AudioEngine::patchSource (int s, int phase) const noexcept
     // phase: 0 = nothing processed yet this block, 1 = input strips done, 2 = tape done, 3 = returns done, 4 = all.
     // Anything not processed yet comes from the previous block.
     const float* previous = patchPrevious[(size_t) s].data();
+    if (s >= Patch::instrumentOut) return midi.output (s - Patch::instrumentOut);   // rendered at the start of every block
     if (s == Patch::oscillator) return oscOut.data();   // made at the start of every block
     if (s == Patch::tbLimiterOut) return phase >= 4 ? tbLimOut.data() : previous;
     if (s < Patch::returnOut) return phase >= 1 ? inputDirect[(size_t) s].data() : previous;
@@ -894,8 +903,8 @@ const float* AudioEngine::patchSource (int s, int phase) const noexcept
 
 const float* AudioEngine::patchedInput (int dest, const float* normal, const float* interfaceIn, int phase, int n) noexcept
 {
-    const auto cables = patch[(size_t) dest].load (std::memory_order_relaxed);
-    if (cables == 0)
+    const auto cables = loadPatch (dest);
+    if (! cables.any())
         return interfaceIn != nullptr ? interfaceIn : normal;
 
     // A cable or an interface input breaks a normal; the interface input and the cables add up.
@@ -906,7 +915,109 @@ const float* AudioEngine::patchedInput (int dest, const float* normal, const flo
         std::memset (d, 0, sizeof (float) * (size_t) n);
 
     for (int s = 0; s < Patch::numSources; ++s)
-        if ((cables >> s) & 1u)
+        if (cables.test (s))
             juce::FloatVectorOperations::add (d, patchSource (s, phase), n);
     return d;
+}
+
+//==============================================================================
+// MIDI instruments into the console (the MIDI page's routing button).
+namespace
+{
+    PatchMask instrumentBits (int slot)
+    {
+        using P = AudioEngine::Patch;
+        return PatchMask::bit (P::instrumentOut + 2 * slot) | PatchMask::bit (P::instrumentOut + 2 * slot + 1);
+    }
+}
+
+Midi::Route AudioEngine::getInstrumentRoute (int slot) const
+{
+    if (! midi.isUsed (slot))
+        return {};
+    const auto& list = midi.restoreList (slot);
+    if (list.empty())
+        return {};
+    const int d = list.front().destination;
+    if (! (getPatch (d) & instrumentBits (slot)).any())
+        return {};   // its cable was pulled in the patch bay
+    if (d >= Patch::channelIn && d < Patch::channelIn + Config::numInputStrips)
+        return { Midi::Route::input, d - Patch::channelIn };
+    if (d >= Patch::tapeIn && d < Patch::tapeIn + Config::numTracks)
+        return { Midi::Route::tape, d - Patch::tapeIn };
+    return {};
+}
+
+int AudioEngine::instrumentRoutedInto (int destination) const
+{
+    for (int k = 0; k < MidiEngine::maxTracks; ++k)
+        if (midi.isUsed (k))
+            for (auto& r : midi.restoreList (k))
+                if (r.destination == destination)
+                    return k;
+    return -1;
+}
+
+void AudioEngine::routeInstrument (int slot, Midi::Route route)
+{
+    if (! midi.isUsed (slot))
+        return;
+
+    // Put back what this track's last routing replaced (keeping any cable added in the patch bay since).
+    auto& list = midi.restoreList (slot);
+    for (auto it = list.rbegin(); it != list.rend(); ++it)
+    {
+        const int d = it->destination;
+        setPatch (d, it->mask | (getPatch (d) & ~instrumentBits (slot)));
+        if (getInterfaceInput (d) < 0)
+            setInterfaceInput (d, it->interfaceInput);
+        if (it->link >= 0)
+            if (auto* link = inputLink[(size_t) juce::jlimit (0, (int) inputLink.size() - 1, (d - Patch::channelIn) / 2)])
+                link->set ((float) it->link);
+    }
+    list.clear();
+
+    if (route.kind == Midi::Route::none)
+        return;
+
+    const bool toInputs = route.kind == Midi::Route::input;
+    const bool stereo = midi.isStereo (slot);
+    const int base = toInputs ? Patch::channelIn : Patch::tapeIn;
+    const int count = toInputs ? Config::numInputStrips : Config::numTracks;
+    int first = juce::jlimit (0, count - 1, route.first);
+    if (stereo)
+        first = juce::jmin (first & ~1, count - 2);   // pairs: 1+2, 3+4, ...
+    const int width = stereo ? 2 : 1;
+
+    // Another track routed into these inputs gives them up (all of its routing).
+    for (int i = 0; i < width; ++i)
+    {
+        const int other = instrumentRoutedInto (base + first + i);
+        if (other >= 0 && other != slot)
+            routeInstrument (other, {});
+    }
+
+    for (int i = 0; i < width; ++i)
+    {
+        const int d = base + first + i;
+        Restore r { d, getPatch (d), getInterfaceInput (d), -1 };
+        if (toInputs && stereo && i == 0)
+            r.link = inputLink[(size_t) (first / 2)]->on() ? 1 : 0;
+        list.push_back (r);
+        setPatch (d, PatchMask::bit (Patch::instrumentOut + 2 * slot + i));   // replaces its cables...
+        setInterfaceInput (d, -1);                                          // ...and its interface input
+    }
+    if (toInputs && stereo)
+        inputLink[(size_t) (first / 2)]->set (1.0f);   // a stereo instrument links its two strips
+}
+
+void AudioEngine::removeMidiTrack (int slot)
+{
+    if (! midi.isUsed (slot))
+        return;
+    routeInstrument (slot, {});
+    for (int d = 0; d < Patch::numDestinations; ++d)   // and any cable from it patched by hand
+        if ((getPatch (d) & instrumentBits (slot)).any())
+            setPatch (d, getPatch (d) & ~instrumentBits (slot));
+    midi.removeTrack (slot);
 }

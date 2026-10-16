@@ -555,7 +555,7 @@ void TapeMachine::process (const float* const* tapeIn, float* const* tapeOut, in
         moving = false;
         const bool endOfTape = pos >= (juce::int64) maxChunks * chunkSize - Config::maxBlock;
         const bool looping = loop && pos < loopOut;
-        if (endOfTape || (! rec && ! looping && pos >= length.load()))
+        if (endOfTape || (! rec && ! looping && pos >= juce::jmax (length.load(), playOnUntil.load())))
             playing.store (false);
         scrubGain = 0.0f;
     }

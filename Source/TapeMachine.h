@@ -155,6 +155,8 @@ public:
     bool isRecording (int track) const noexcept;
     juce::int64 getPosition() const noexcept { return position.load(); }
     juce::int64 getLength() const noexcept   { return length.load(); }
+    /** Play goes on past the end of the recording up to here (tape samples): the end of the MIDI page's last clip. */
+    void setPlayOnUntil (juce::int64 samples) noexcept { playOnUntil.store (samples); }
     juce::int64 getCapacity() const noexcept { return (juce::int64) maxChunks * chunkSize; }   // samples per track
     double getSampleRate() const noexcept    { return sampleRate; }
     int getLatency() const noexcept          { return latency.load(); }
@@ -192,7 +194,7 @@ private:
     std::array<std::vector<std::atomic<float*>>, numTracks> chunks;
 
     std::atomic<bool> playing { false }, recordEnabled { false };
-    std::atomic<juce::int64> position { 0 }, length { 0 }, locateRequest { -1 }, dropped { 0 };
+    std::atomic<juce::int64> position { 0 }, length { 0 }, locateRequest { -1 }, dropped { 0 }, playOnUntil { 0 };
     std::atomic<std::uint64_t> blocksProcessed { 0 };
     juce::int64 pos = 0;   // audio thread's own copy of the position
     std::atomic<int> windRequest { 0 };

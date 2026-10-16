@@ -8,6 +8,7 @@ namespace Config
     constexpr int numReturnStrips = numTracks;
     constexpr int numSubs = 4;   // stereo sub groups, each with a group EQ
     constexpr int numAux  = 8;   // mono aux buses
+    constexpr int numMidiTracks = 16;   // MIDI page tracks, each with an instrument (two patch bay outputs)
 
     constexpr int maxBlock = 512;          // device blocks larger than this are processed in pieces
     constexpr double maxSampleRate = 192000.0;

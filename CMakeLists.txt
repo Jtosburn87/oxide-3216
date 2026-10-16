@@ -50,6 +50,7 @@ add_library(Oxide3216Core STATIC
     Source/Params.cpp
     Source/Scenes.cpp
     Source/Tempo.cpp
+    Source/MidiEngine.cpp
     Source/TapeMachine.cpp)
 target_include_directories(Oxide3216Core PUBLIC Source)
 if(WIN32)

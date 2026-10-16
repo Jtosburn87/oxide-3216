@@ -80,6 +80,15 @@ juce::Array<juce::PluginDescription> PluginManager::effects() const
     return list;
 }
 
+juce::Array<juce::PluginDescription> PluginManager::instruments() const
+{
+    juce::Array<juce::PluginDescription> list;
+    for (auto& d : known.getTypes())
+        if (d.isInstrument)
+            list.add (d);
+    return list;
+}
+
 juce::File PluginManager::deadMansPedalFile() const
 {
     return settings.getFile().getSiblingFile ("PluginScanCrash.txt");

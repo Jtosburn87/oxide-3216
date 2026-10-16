@@ -2222,6 +2222,240 @@ namespace
         e.tape.setRecordEnabled (false);
     }
 
+    //==========================================================================
+    /** A stand-in instrument: while a note is held it outputs velocity / 127 (on every output), sample accurately. */
+    struct TestSynth : juce::AudioPluginInstance
+    {
+        explicit TestSynth (bool stereo)
+            : juce::AudioPluginInstance (BusesProperties().withOutput ("Out", stereo ? juce::AudioChannelSet::stereo() : juce::AudioChannelSet::mono(), true)),
+              outs (stereo ? 2 : 1) {}
+
+        void fillInPluginDescription (juce::PluginDescription& d) const override { d.name = "Test synth"; d.isInstrument = true; d.pluginFormatName = "Test"; }
+        const juce::String getName() const override { return "Test synth"; }
+        void prepareToPlay (double, int) override {}
+        void releaseResources() override {}
+        void processBlock (juce::AudioBuffer<float>& b, juce::MidiBuffer& m) override
+        {
+            int pos = 0;
+            const auto fill = [&] (int until)
+            {
+                for (int c = 0; c < b.getNumChannels(); ++c)
+                    for (int i = pos; i < until; ++i)
+                        b.setSample (c, i, level);
+                pos = until;
+            };
+            for (const auto meta : m)
+            {
+                fill (meta.samplePosition);
+                const auto msg = meta.getMessage();
+                if (msg.isNoteOn()) { level = msg.getFloatVelocity(); held = msg.getNoteNumber(); ++noteOns; }
+                else if (msg.isNoteOff() && msg.getNoteNumber() == held) level = 0.0f;
+            }
+            fill (b.getNumSamples());
+        }
+        bool isBusesLayoutSupported (const BusesLayout& l) const override { return l.getMainOutputChannels() == outs; }
+        double getTailLengthSeconds() const override { return 0.0; }
+        bool acceptsMidi() const override { return true; }
+        bool producesMidi() const override { return false; }
+        juce::AudioProcessorEditor* createEditor() override { return nullptr; }
+        bool hasEditor() const override { return false; }
+        int getNumPrograms() override { return 1; }
+        int getCurrentProgram() override { return 0; }
+        void setCurrentProgram (int) override {}
+        const juce::String getProgramName (int) override { return {}; }
+        void changeProgramName (int, const juce::String&) override {}
+        void getStateInformation (juce::MemoryBlock& mb) override { mb.append ("synth", 5); }
+        void setStateInformation (const void*, int) override {}
+
+        float level = 0.0f;
+        int held = -1, noteOns = 0;
+        const int outs;
+    };
+
+    /** The first sample of output 0 above a threshold over a number of blocks, or -1. */
+    int firstSound (AudioEngine& e, Buffers& b, int blocks, float threshold = 0.05f)
+    {
+        int found = -1;
+        for (int k = 0; k < blocks; ++k)
+        {
+            b.run (e);
+            for (int i = 0; i < b.n && found < 0; ++i)
+                if (std::abs (b.out[0][(size_t) i]) > threshold)
+                    found = k * b.n + i;
+        }
+        return found;
+    }
+
+    void testMidiPlayback()
+    {
+        std::puts ("MIDI page: an instrument plays its clip in step with the tape, into the console through the patch bay");
+        using P = AudioEngine::Patch;
+        TestEngine e;
+        e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }));
+        auto& m = e.midi;
+        const int k = m.addTrack ("Keys");
+        check (k == 0 && m.isUsed (0) && m.getName (0) == "Keys", "a track takes the first slot");
+        auto synth = std::make_unique<TestSynth> (true);
+        auto* raw = synth.get();
+        m.setInstrument (k, std::move (synth), {});
+        check (m.isStereo (k), "a stereo instrument");
+
+        // One note, a beat long, at bar 2 (2 s at 120 in 4/4).
+        Midi::Clip clip;
+        clip.start = 4 * Tempo::ticksPerBeat;
+        clip.length = 4 * Tempo::ticksPerBeat;
+        clip.notes.push_back ({ 0, Tempo::ticksPerBeat, 60, 127 });
+        m.setClips (k, { clip });
+        check (m.songEnd() == 8 * Tempo::ticksPerBeat, "the song ends with the last clip");
+
+        e.routeInstrument (k, { Midi::Route::input, 0 });
+        check (e.getPatch (P::channelIn + 0) == PatchMask::bit (P::instrumentOut + 0)
+               && e.getPatch (P::channelIn + 1) == PatchMask::bit (P::instrumentOut + 1), "routing patches L and R into strips 1 and 2 (sources past 64)");
+        check (e.getInstrumentRoute (k) == Midi::Route { Midi::Route::input, 0 }, "the route reads back from the patch");
+
+        m.tick();   // the tape plays on to the end of the clip
+        e.tape.play();
+        Buffers b (1, 2, 480);
+        const int onset = firstSound (e, b, 300);   // 3 s
+        std::printf ("      note heard from sample %d (bar 2 = 96000)\n", onset);
+        check (onset >= 96000 && onset <= 96001, "the note starts on bar 2 to the sample");
+        check (e.tape.isPlaying(), "a blank tape plays on while clips are ahead");
+        check (raw->noteOns == 1, "one note on");
+        const int quiet = firstSound (e, b, 1);
+        check (raw->level == 0.0f, "the note ends after a beat");
+        juce::ignoreUnused (quiet);
+
+        // Back to just before the note: it plays again; stopping mid-note ends it.
+        e.tape.locate (96000 - 4800);
+        firstSound (e, b, 1);
+        const int again = firstSound (e, b, 20);
+        check (again >= 4800 - 480 - 2 && again <= 4800 - 480 + 2 && raw->noteOns == 2, "after a locate the note plays again on time");
+        e.tape.stop();
+        firstSound (e, b, 2);
+        check (raw->level == 0.0f, "stop ends whatever the clips had sounding");
+
+        m.setMuted (k, true);
+        e.tape.locate (96000 - 4800);
+        e.tape.play();
+        firstSound (e, b, 30);
+        check (raw->noteOns == 2, "a muted track plays nothing");
+        e.tape.stop();
+    }
+
+    void testMidiRouting()
+    {
+        std::puts ("MIDI page: the routing button patches the console and puts it back");
+        using P = AudioEngine::Patch;
+        TestEngine e;
+        e.prepare (48000.0, channels ({ 0, 1, 2, 3 }), channels ({ 0, 1 }));
+        auto& m = e.midi;
+        const int a = m.addTrack(), b = m.addTrack();
+        m.setInstrument (a, std::make_unique<TestSynth> (true), {});
+        m.setInstrument (b, std::make_unique<TestSynth> (false), {});
+        check (! m.isStereo (b), "a mono instrument");
+
+        e.setInputSource (2, 2);
+        e.setInputSource (3, 3);
+        e.routeInstrument (a, { Midi::Route::input, 3 });   // a stereo instrument on strip 4 lands on the pair 3+4
+        check (e.getPatch (P::channelIn + 2).test (P::instrumentOut + 0) && e.getPatch (P::channelIn + 3).test (P::instrumentOut + 1),
+               "stereo goes to an odd / even pair");
+        check (e.getInputSource (2) == -1 && e.getInputSource (3) == -1, "the strips' interface inputs come out");
+        check (e.inputLink[1]->on(), "the pair is linked");
+
+        e.routeInstrument (b, { Midi::Route::input, 3 });   // the mono one takes strip 4: the stereo one gives up the pair
+        check (e.getInstrumentRoute (a).kind == Midi::Route::none, "the other track is unrouted");
+        check (e.getInputSource (2) == 2, "strip 3 has its interface input back");
+        check (e.getPatch (P::channelIn + 3) == PatchMask::bit (P::instrumentOut + 2), "strip 4 now hears the mono instrument (track 2 left)");
+        check (! e.inputLink[1]->on(), "the link is put back as it was");
+
+        e.routeInstrument (b, {});
+        check (e.getInputSource (3) == 3 && ! e.getPatch (P::channelIn + 3).any(), "Not routed: strip 4 is back on interface input 4");
+
+        e.routeInstrument (a, { Midi::Route::tape, 4 });
+        check (e.getPatch (P::tapeIn + 4).test (P::instrumentOut + 0) && e.getPatch (P::tapeIn + 5).test (P::instrumentOut + 1),
+               "to tape 5+6");
+        check (e.instrumentRoutedInto (P::tapeIn + 5) == a, "the tape in knows which track feeds it");
+
+        e.removeMidiTrack (a);
+        check (! e.getPatch (P::tapeIn + 4).any() && ! e.getPatch (P::tapeIn + 5).any() && ! m.isUsed (a), "removing a track takes its routing with it");
+
+        e.routeInstrument (b, { Midi::Route::input, 0 });
+        e.resetPatchToDefault();
+        check (e.getInstrumentRoute (b).kind == Midi::Route::none && e.getInputSource (0) == 0, "Pull all cables unroutes the instruments");
+    }
+
+    void testMidiRecording()
+    {
+        std::puts ("MIDI page: playing an armed track while the tape records makes a clip");
+        TestEngine e;
+        e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }));
+        auto& m = e.midi;
+        const int k = m.addTrack();
+        auto synth = std::make_unique<TestSynth> (true);
+        auto* raw = synth.get();
+        m.setInstrument (k, std::move (synth), {});
+        m.setArmed (k, true);
+
+        Buffers b (1, 2, 480);
+        m.injectLive (k, juce::MidiMessage::noteOn (1, 64, (juce::uint8) 90));
+        b.run (e);
+        check (raw->noteOns == 1, "the armed track plays what comes in, tape stopped or not");
+        m.injectLive (k, juce::MidiMessage::noteOff (1, 64));
+        b.run (e);
+
+        e.tape.setRecordEnabled (true);
+        e.tape.play();
+        for (int i = 0; i < 100; ++i) b.run (e);                // 1 s
+        m.injectLive (k, juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100));
+        for (int i = 0; i < 50; ++i) b.run (e);                 // 0.5 s
+        m.injectLive (k, juce::MidiMessage::noteOff (1, 60));
+        for (int i = 0; i < 10; ++i) b.run (e);
+        m.tick();
+        check (m.getClips (k).empty(), "no clip while still recording");
+        e.tape.stop();
+        e.tape.setRecordEnabled (false);
+        m.tick();
+        const auto& clips = m.getClips (k);
+        check (clips.size() == 1, "stopping makes the take a clip");
+        if (clips.size() == 1)
+        {
+            const auto& c = clips.front();
+            std::printf ("      clip %lld..%lld, note at %lld for %lld ticks\n", (long long) c.start, (long long) c.end(),
+                         c.notes.empty() ? -1LL : (long long) c.notes[0].start, c.notes.empty() ? -1LL : (long long) c.notes[0].length);
+            check (c.start == 0 && c.length == 4 * Tempo::ticksPerBeat, "the clip covers the bar played in");
+            check (c.notes.size() == 1 && c.notes[0].pitch == 60 && c.notes[0].velocity == 100, "the note and its velocity");
+            check (c.notes.size() == 1 && std::abs (c.notes[0].start - 1920) <= 20 && std::abs (c.notes[0].length - 960) <= 20,
+                   "at 1 s (beat 3), half a second long, to a block");
+        }
+    }
+
+    void testMidiSession()
+    {
+        std::puts ("MIDI page: tracks and clips are saved with the session");
+        TestEngine a;
+        const int k = a.midi.addTrack ("Bass");
+        a.midi.addTrack ("Pad");
+        a.midi.removeTrack (1);
+        const int k3 = a.midi.addTrack ("Strings");
+        a.midi.setMuted (k, true);
+        a.midi.setInput (k3, "");
+        Midi::Clip c;
+        c.name = "Riff";
+        c.start = 7680;
+        c.length = 3840;
+        c.notes = { { 0, 480, 40, 90 }, { 960, 240, 43, 70 } };
+        a.midi.setClips (k, { c });
+        const auto saved = juce::JSON::toString (a.midi.toVar());
+
+        TestEngine b;
+        b.midi.fromVar (juce::JSON::parse (saved), {});
+        check (b.midi.usedSlots() == juce::Array<int> { 0, 1 } && b.midi.getName (1) == "Strings", "the tracks come back in their slots");
+        check (b.midi.isMuted (0) && b.midi.getInput (1).isEmpty() && b.midi.getInput (0) == MidiEngine::allInputs, "mute and inputs");
+        const auto& clips = b.midi.getClips (0);
+        check (clips.size() == 1 && clips[0].name == "Riff" && clips[0].start == 7680 && clips[0].length == 3840
+               && clips[0].notes == c.notes, "the clip and its notes");
+    }
+
     void testWowFlutter()
     {
         std::puts ("Tape: wow and flutter");
@@ -2792,6 +3026,10 @@ int main (int argc, char** argv)
     testWinding();
     testShuttleJogScrub();
     testTempoAndClick();
+    testMidiPlayback();
+    testMidiRouting();
+    testMidiRecording();
+    testMidiSession();
     testScenes();
     testWowFlutter();
     testTapeFiles();

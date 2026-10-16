@@ -110,6 +110,7 @@ Session::Result Session::write (AudioEngine& e, const juce::File& folder, TrackR
         controls->setProperty (p->id, p->get());
     root->setProperty ("controls", juce::var (controls));
     root->setProperty ("scenes", e.scenes.toVar());
+    root->setProperty ("midi", e.midi.toVar());   // the MIDI page: tracks, clips, instruments (routing is in the patch)
 
     auto* names = new juce::DynamicObject();
     forEachStrip (e, [&] (ChannelStrip& s) { names->setProperty (s.idPrefix, s.name); });
@@ -123,7 +124,7 @@ Session::Result Session::write (AudioEngine& e, const juce::File& folder, TrackR
     juce::Array<juce::var> cables;
     for (int d = 0; d < AudioEngine::Patch::numDestinations; ++d)
         for (int s = 0; s < AudioEngine::Patch::numSources; ++s)
-            if ((e.getPatch (d) >> s) & 1u)
+            if (e.getPatch (d).test (s))
                 cables.add (juce::Array<juce::var> { s, d });
     root->setProperty ("patch", cables);
 
@@ -207,6 +208,7 @@ void Session::reset (AudioEngine& e)
     forEachStrip (e, [] (ChannelStrip& s) { s.name = defaultStripName (s); });
     e.resetBusNames();
     e.clearPatch();
+    e.midi.removeAllTracks();
     forEachChain (e, [] (InsertChain& c) { c.clearAll(); });
     e.tape.eraseAll();
     e.tape.setInPoint (0);
@@ -291,7 +293,7 @@ Session::Result Session::load (AudioEngine& e, PluginManager* plugins, const juc
             {
                 const int s = c[0], d = c[1];
                 if (juce::isPositiveAndBelow (s, AudioEngine::Patch::numSources))
-                    e.setPatch (d, e.getPatch (d) | (std::uint64_t (1) << s));
+                    e.setPatch (d, e.getPatch (d) | PatchMask::bit (s));
             }
 
     auto* device = e.getDeviceManager().getCurrentAudioDevice();
@@ -312,6 +314,19 @@ Session::Result Session::load (AudioEngine& e, PluginManager* plugins, const juc
                 for (auto& missing : plugins->restore (c, *xml, deviceRate, Config::maxBlock))
                     r.warnings.add ("Missing plugin: " + missing);
         });
+    }
+
+    // The MIDI page (sessions from before it have none).
+    if (json.hasProperty ("midi"))
+    {
+        const auto create = [&] (const juce::PluginDescription& d, juce::String& error) -> std::unique_ptr<juce::AudioPluginInstance>
+        {
+            if (plugins == nullptr)
+                return nullptr;
+            return plugins->create (d, deviceRate, Config::maxBlock, error);
+        };
+        for (auto& missing : e.midi.fromVar (json["midi"], create))
+            r.warnings.add ("Missing plugin: " + missing);
     }
 
     // Sessions from before the aux main assigns: an aux return reached main whenever it had a plugin on it.

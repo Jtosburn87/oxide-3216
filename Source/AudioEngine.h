@@ -14,6 +14,8 @@
 #include "InsertChain.h"
 #include "Talkback.h"
 #include "Tempo.h"
+#include "MidiEngine.h"
+#include "PatchMask.h"
 
 /** Owns the audio device, the console's parameters and its DSP, and runs the real-time callback.
 
@@ -66,8 +68,10 @@ public:
     {
         // Sources
         static constexpr int channelOut = 0, returnOut = 16, tapeOut = 32, auxOut = 48, subOut = 56, mainL = 60, mainR = 61, oscillator = 62,
-                             tbLimiterOut = 63;
-        static constexpr int numSources = 64;   // every bit of a 64-bit cable mask
+                             tbLimiterOut = 63,
+                             instrumentOut = 64;   // MIDI track slot k's instrument: instrumentOut + 2k (left), + 2k + 1 (right)
+        static constexpr int numSources = instrumentOut + 2 * Config::numMidiTracks;
+        static_assert (numSources <= PatchMask::numBits, "the cable mask has room for every source");
         // Destinations
         static constexpr int tapeIn = 0, returnIn = 16, channelIn = 32, talkbackIn = 48, tbLimiterIn = 49, tbSend = 50,
                              interfaceOut = 51;   // interface outputs 1..numInterfaceOuts: whatever is patched in is added to them
@@ -82,9 +86,23 @@ public:
     int  getInterfaceInput (int destination) const;
 
     /** Which sources are plugged into a destination (bit n = source n). Message thread. */
-    void setPatch (int destination, std::uint64_t sources);
-    std::uint64_t getPatch (int destination) const;
+    void setPatch (int destination, PatchMask sources);
+    PatchMask getPatch (int destination) const;
     void clearPatch();
+
+    /** Routes MIDI track `slot`'s instrument (the MIDI page's routing button): into input strips or tape ins,
+        one for a mono instrument, an odd/even pair for a stereo one (which also links a pair of input strips).
+        It is patching, so the patch bay shows the cables. Whatever those inputs had (cables, interface input,
+        the strip link) is kept and comes back when the instrument is routed elsewhere or to none. Another track
+        routed into the same inputs is unrouted first. Message thread. */
+    void routeInstrument (int slot, Midi::Route);
+    /** Where a track's instrument is routed, read from the patch (a cable pulled in the patch bay counts). */
+    Midi::Route getInstrumentRoute (int slot) const;
+    /** The MIDI track routed into a destination by its routing button, or -1. */
+    int instrumentRoutedInto (int destination) const;
+    /** Unroutes a MIDI track, pulls any cable from its instrument and removes it. */
+    void removeMidiTrack (int slot);
+    using Restore = MidiEngine::Restore;
     /** The default patch: no cables, no interface inputs wired into the bay, channel strip N from interface input N. */
     void resetPatchToDefault();
 
@@ -107,6 +125,8 @@ public:
     BusCompressor busComp { params };
     /** Tempo, time signature and click (on the main and monitor outs only: never recorded or exported). */
     Tempo tempo { params };
+    /** The MIDI page's tracks and instruments, played in step with the tape. */
+    MidiEngine midi { tempo, tape };
 
     // VST3 inserts: 4 slots on each sub (after the group EQ), each aux return, and the master bus.
     juce::OwnedArray<InsertChain> subInserts, auxInserts;
@@ -250,7 +270,13 @@ private:
     std::array<Block, Config::numAux> aux {};
 
     // Patch bay.
-    std::array<std::atomic<std::uint64_t>, Patch::numDestinations> patch;
+    // Each destination's cable mask, as two words (a 128-bit atomic would not be lock free). A change between the
+    // two stores is at worst one block with half a change in it.
+    std::array<std::array<std::atomic<std::uint64_t>, 2>, Patch::numDestinations> patch;
+    PatchMask loadPatch (int dest) const noexcept
+    {
+        return { patch[(size_t) dest][0].load (std::memory_order_relaxed), patch[(size_t) dest][1].load (std::memory_order_relaxed) };
+    }
     // On the heap: together they are far too big for the stack (the tests build engines as locals).
     std::vector<Block> patchPrevious = std::vector<Block> (Patch::numSources);   // last block of each source, for patches that point backwards
     std::vector<Block> patchInput = std::vector<Block> (Patch::numDestinations); // summed cables into each destination

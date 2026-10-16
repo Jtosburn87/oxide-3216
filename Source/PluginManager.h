@@ -20,6 +20,8 @@ public:
 
     /** Effects only (no instruments), sorted for menus. */
     juce::Array<juce::PluginDescription> effects() const;
+    /** Instruments only (for the MIDI page's tracks). */
+    juce::Array<juce::PluginDescription> instruments() const;
 
     std::unique_ptr<juce::AudioPluginInstance> create (const juce::PluginDescription&, double sampleRate, int blockSize, juce::String& error);
 

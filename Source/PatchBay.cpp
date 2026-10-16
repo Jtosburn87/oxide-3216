@@ -6,8 +6,8 @@ using namespace ConsoleColours;
 namespace
 {
     constexpr int jackW = 28, groupGap = 16, pad = 14;
-    constexpr int row1Top = 10, row1Bottom = 116, row2Top = 250, row2Bottom = 356, fieldH = 490;   // room below for hanging cables
-    constexpr int dividerY = (row1Bottom + 58 + row2Top) / 2;
+    constexpr int row1Top = 10, row1Bottom = 116, row2Top = 250, row2Bottom = 356, row3Top = 480, fieldH = 620;   // room below for hanging cables
+    constexpr int dividerY = (row1Bottom + 58 + row2Top) / 2, divider2Y = (row2Bottom + 58 + row3Top) / 2;
     const juce::Colour wiringColour { 0xffe8dcc0 };
 
     juce::String sourceName (int s)
@@ -20,6 +20,8 @@ namespace
         if (s < P::mainL)     return "Sub out " + juce::String (s - P::subOut + 1);
         if (s == P::oscillator) return "Oscillator";
         if (s == P::tbLimiterOut) return "TB Limiter Out";
+        if (s >= P::instrumentOut)
+            return "MIDI track " + juce::String ((s - P::instrumentOut) / 2 + 1) + " instrument " + ((s - P::instrumentOut) % 2 == 0 ? "L" : "R");
         return s == P::mainL ? "Main L" : "Main R";
     }
 
@@ -132,6 +134,7 @@ juce::Colour PatchBayField::sourceColour (int s)
 {
     if (s == Patch::oscillator) return juce::Colour (0xff3fc1b8); // oscillator: teal
     if (s == Patch::tbLimiterOut) return juce::Colour (0xffff7a2e); // talkback limiter: orange
+    if (s >= Patch::instrumentOut) return juce::Colour (0xffe07ad4); // MIDI instruments: pink
     if (s < Patch::returnOut) return juce::Colour (0xffd6392d);   // channel: red
     if (s < Patch::tapeOut)   return juce::Colour (0xff3a8fd6);   // return: blue
     if (s < Patch::auxOut)    return juce::Colour (0xffe0a83a);   // tape: amber
@@ -147,7 +150,8 @@ PatchBayField::PatchBayField (AudioEngine& e, std::function<void()> changedCallb
     for (int s = 0; s < Patch::numSources; ++s)
     {
         juce::String number;
-        if (s == Patch::oscillator)     number = "OSC";
+        if (s >= Patch::instrumentOut)  number = juce::String ((s - Patch::instrumentOut) / 2 + 1) + ((s - Patch::instrumentOut) % 2 == 0 ? "L" : "R");
+        else if (s == Patch::oscillator) number = "OSC";
         else if (s == Patch::tbLimiterOut) number = "OUT";
         else if (s >= Patch::mainL)     number = s == Patch::mainL ? "L" : "R";
         else if (s >= Patch::subOut)    number = juce::String (s - Patch::subOut + 1);
@@ -268,6 +272,9 @@ void PatchBayField::rebuild (int interfaceJacks, int outputJacks)
     placeGroup ("Main", sources, P::mainL, 2, x, row2Top);
     placeGroup ("Return strip in", destinations, P::returnIn, 16, pad, row2Bottom);
 
+    // Row 3: the MIDI page's instruments, left and right of each track (a track not in use is dimmed).
+    placeGroup ("Instrument out (MIDI tracks 1-" + juce::String (Config::numMidiTracks) + ")", sources, P::instrumentOut, 2 * Config::numMidiTracks, pad, row3Top);
+
     // Interface outs beside them, as many as the device has.
     placeGroup ("Interface out", destinations, P::interfaceOut, outputJacks, pad + 16 * jackW + groupGap, row2Bottom);
     for (auto* j : destinations)
@@ -294,7 +301,7 @@ bool PatchBayField::isPlugged (Kind kind, int index) const
     if (kind == Kind::source)
     {
         for (int d = 0; d < Patch::numDestinations; ++d)
-            if ((engine.getPatch (d) >> index) & 1u)
+            if (engine.getPatch (d).test (index))
                 return true;
         return false;
     }
@@ -305,7 +312,7 @@ bool PatchBayField::isPlugged (Kind kind, int index) const
                 return true;
         return false;
     }
-    return engine.getPatch (index) != 0 || engine.getInterfaceInput (index) >= 0;
+    return engine.getPatch (index).any() || engine.getInterfaceInput (index) >= 0;
 }
 
 void PatchBayField::refresh()
@@ -337,6 +344,15 @@ void PatchBayField::refresh()
     }
     for (auto* j : interfaceIns)
         j->setEnabled (device != nullptr);
+    for (int k = 0; k < Config::numMidiTracks; ++k)   // instruments: named after their track, dimmed while it is not in use
+        for (int side = 0; side < 2; ++side)
+        {
+            auto* j = sources[Patch::instrumentOut + 2 * k + side];
+            const bool used = engine.midi.isUsed (k);
+            j->setEnabled (used);
+            j->setTooltip (used ? engine.midi.getName (k) + " instrument " + (side == 0 ? "L" : "R") + (engine.midi.isStereo (k) ? juce::String() : " (mono: L and R alike)")
+                                : "MIDI track " + juce::String (k + 1) + " (not in use)");
+        }
 
     for (auto* j : sources)
         j->plugColour = isPlugged (Kind::source, j->index) ? sourceColour (j->index) : juce::Colours::transparentBlack;
@@ -349,7 +365,7 @@ void PatchBayField::refresh()
         if (engine.getInterfaceInput (j->index) >= 0)
             j->plugColour = wiringColour;
         for (int s = 0; s < Patch::numSources; ++s)
-            if ((mask >> s) & 1u) { j->plugColour = sourceColour (s); break; }
+            if (mask.test (s)) { j->plugColour = sourceColour (s); break; }
     }
     repaint();
 }
@@ -378,7 +394,7 @@ void PatchBayField::pullCables (Kind kind, int index)
 {
     if (kind == Kind::source)
         for (int d = 0; d < Patch::numDestinations; ++d)
-            engine.setPatch (d, engine.getPatch (d) & ~(std::uint64_t (1) << index));
+            engine.setPatch (d, engine.getPatch (d) & ~PatchMask::bit (index));
     else if (kind == Kind::interfaceIn)
         for (int d = 0; d < Patch::numDestinations; ++d)
             if (engine.getInterfaceInput (d) == index)
@@ -418,10 +434,10 @@ void PatchBayField::jackClicked (Kind kind, int index)
     }
 
     if (selected && selected->kind == Kind::source)
-        engine.setPatch (index, engine.getPatch (index) ^ (std::uint64_t (1) << selected->index));
+        engine.setPatch (index, engine.getPatch (index) ^ PatchMask::bit (selected->index));
     else if (selected && selected->kind == Kind::interfaceIn)
         engine.setInterfaceInput (index, engine.getInterfaceInput (index) == selected->index ? -1 : selected->index);
-    else if (engine.getPatch (index) != 0)
+    else if (engine.getPatch (index).any())
         engine.setPatch (index, 0);   // patch cables come out first, then the interface input
     else
         engine.setInterfaceInput (index, -1);
@@ -434,6 +450,7 @@ void PatchBayField::paint (juce::Graphics& g)
     g.fillAll (juce::Colour (0xff0e0f10));
     g.setColour (juce::Colour (0xff2a2d30));
     g.fillRect (0, dividerY - 1, getWidth(), 3);
+    g.fillRect (0, divider2Y - 1, getWidth(), 3);
 
     g.setFont (ConsoleLookAndFeel::uiFont (12.0f));
     for (auto& gr : groups)
@@ -455,7 +472,7 @@ void PatchBayField::paintOverChildren (juce::Graphics& g)
         const std::pair<int, int> normals[] = { { Patch::channelOut + i, Patch::tapeIn + i }, { Patch::tapeOut + i, Patch::returnIn + i } };
         for (auto [s, d] : normals)
         {
-            if (engine.getPatch (d) != 0 || engine.getInterfaceInput (d) >= 0)
+            if (engine.getPatch (d).any() || engine.getInterfaceInput (d) >= 0)
                 continue;
             const auto from = holeCentre (*sources[s]).translated (0.0f, 26.0f);
             const auto to = holeCentre (*destinations[d]).translated (0.0f, -11.0f);
@@ -483,7 +500,7 @@ void PatchBayField::paintOverChildren (juce::Graphics& g)
     for (int d = 0; d < Patch::numDestinations; ++d)
         if (destinations[d]->isVisible())   // an interface out the current device does not have
             for (int s = 0; s < Patch::numSources; ++s)
-                if ((engine.getPatch (d) >> s) & 1u)
+                if (engine.getPatch (d).test (s))
                     cables.push_back ({ s, d });
 
     const juce::PathStrokeType shadowStroke (6.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
