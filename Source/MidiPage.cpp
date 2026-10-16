@@ -52,8 +52,8 @@ namespace
                 b.onClick = std::move (fn);
                 addAndMakeVisible (b);
             };
-            setUp (hOut, "−", "Zoom out across (Ctrl + mouse wheel too)", [this] { if (onHorizontal) onHorizontal (-1); });
-            setUp (hIn, "+", "Zoom in across (Ctrl + mouse wheel too)", [this] { if (onHorizontal) onHorizontal (1); });
+            setUp (hOut, "−", "Zoom out across (Ctrl or Alt + mouse wheel too)", [this] { if (onHorizontal) onHorizontal (-1); });
+            setUp (hIn, "+", "Zoom in across (Ctrl or Alt + mouse wheel too)", [this] { if (onHorizontal) onHorizontal (1); });
             setUp (vOut, "−", "Zoom out down: shorter rows", [this] { if (onVertical) onVertical (-1); });
             setUp (vIn, "+", "Zoom in down: taller rows", [this] { if (onVertical) onVertical (1); });
         }
@@ -721,7 +721,7 @@ public:
 
     void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override
     {
-        if (e.mods.isCommandDown())
+        if (e.mods.isCommandDown() || e.mods.isAltDown())
         {
             // Zoom round the mouse.
             const double at = tickForX (e.position.x);
@@ -1407,7 +1407,7 @@ public:
     {
         if (clip() == nullptr)
             return;
-        if (e.mods.isCommandDown())
+        if (e.mods.isCommandDown() || e.mods.isAltDown())
         {
             const double at = tickFor (e.position.x);
             pxPerTick = juce::jlimit (0.005, 2.0, pxPerTick * (wheel.deltaY > 0 ? 1.25 : 0.8));
