@@ -20,6 +20,9 @@ public:
 
     std::function<void()> onPopupMenu;
 
+    /** One red 7-segment digit (0-9, - or a space for all off); the Tempo readouts use it too. */
+    static void paintDigit (juce::Graphics&, juce::Rectangle<float>, juce::juce_wchar);
+
 private:
     SceneMemory& scenes;
     bool flashOn = true, shownEdited = false;
@@ -27,7 +30,6 @@ private:
     int ticks = 0;
 
     void timerCallback() override;
-    static void paintDigit (juce::Graphics&, juce::Rectangle<float>, juce::juce_wchar);
 };
 
 /** The Scene Memory window, after a Yamaha digital console's: scenes 01-99 in a scrolling list (the green dot is

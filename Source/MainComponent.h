@@ -9,6 +9,7 @@
 #include "PluginWindows.h"
 #include "InsertsUI.h"
 #include "RackWindow.h"
+#include "BusCompWindow.h"
 #include "TapeMachineWindow.h"
 #include "SessionController.h"
 #include "ImportAudioDialog.h"
@@ -119,6 +120,7 @@ private:
     juce::Component::SafePointer<juce::DialogWindow> pluginListWindow;
     void openPluginList();
     std::unique_ptr<RackWindow> rackWindow;   // made on first use, then only hidden
+    std::unique_ptr<BusCompWindow> busCompWindow;   // the SBC button; made on first use, then only hidden
     void showSessionMenu();
     void parentHierarchyChanged() override;
     void forEachChain (const std::function<void (InsertChain&)>&);

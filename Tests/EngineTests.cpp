@@ -2166,6 +2166,62 @@ namespace
         check (tape.getWindSpeed() == 0.0f && tape.getShuttle() == 0.0f, "stop ends the shuttle (braking, as from a wind)");
     }
 
+    void testTempoAndClick()
+    {
+        std::puts ("Tempo: bar | beat | tick on the tape, and the click");
+        TestEngine e;
+        e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }));
+        auto& t = e.tempo;
+        check (t.getBeatsPerBar() == 4 && t.getBeatUnit() == 4 && near (t.bpm->get(), 120.0f), "starts at 120 in 4/4");
+        auto p = t.positionAt (48000 * 5 / 2, 48000.0);   // 2.5 s = 5 beats
+        check (p.bar == 2 && p.beat == 2 && p.tick == 0, "2.5 s at 120 in 4/4 is bar 2 beat 2");
+        check (Tempo::format (t.positionAt (0, 48000.0)) == "001 | 1 | 000", "the tape start is bar 1");
+        p = t.positionAt (48000 / 4 * 3 / 2, 48000.0);   // three-eighths of a second = 3/4 of a beat
+        check (p.bar == 1 && p.beat == 1 && p.tick == 720, "ticks count 960 a beat");
+        t.setSignature (6, 8);
+        check (t.signatureText() == "6/8", "6/8");
+        p = t.positionAt (48000 * 5 / 2, 48000.0);        // 2.5 s = 10 eighths
+        check (p.bar == 2 && p.beat == 5, "in 6/8 the eighth note gets the beat");
+        t.setSignature (4, 4);
+
+        // Click while the tape plays: a blip at every beat (0, 0.5 s, 1 s), none while stopped or switched off.
+        Buffers b (1, 2, 480);
+        const auto onsets = [&] (double seconds)
+        {
+            std::vector<int> found;
+            bool inClick = false;
+            int quiet = 0;
+            for (int block = 0; block < (int) (seconds * 100.0); ++block)
+            {
+                b.run (e);
+                for (int i = 0; i < b.n; ++i)
+                {
+                    const bool loud = std::abs (b.out[0][(size_t) i]) > 0.02f;
+                    if (loud && ! inClick)
+                        found.push_back (block * b.n + i);
+                    quiet = loud ? 0 : quiet + 1;
+                    inClick = loud || (inClick && quiet < 2000);
+                }
+            }
+            return found;
+        };
+        t.clickOn->set (1.0f);
+        check (onsets (0.3).empty(), "no click while the tape is stopped");
+        e.tape.arm[0]->set (1.0f);   // a blank tape only plays on while it records
+        e.tape.setRecordEnabled (true);
+        e.tape.play();
+        const auto beats = onsets (1.2);
+        std::printf ("      click onsets (samples):");
+        for (int s : beats) std::printf (" %d", s);
+        std::puts ("");
+        check (beats.size() == 3, "three beats in 1.2 s at 120");
+        check (beats.size() == 3 && beats[1] - beats[0] > 23900 && beats[1] - beats[0] < 24100, "half a second apart");
+        t.clickOn->set (0.0f);
+        check (onsets (0.6).empty(), "click off: silent");
+        e.tape.stop();
+        e.tape.setRecordEnabled (false);
+    }
+
     void testWowFlutter()
     {
         std::puts ("Tape: wow and flutter");
@@ -2735,6 +2791,7 @@ int main (int argc, char** argv)
     testPunchAndLoop();
     testWinding();
     testShuttleJogScrub();
+    testTempoAndClick();
     testScenes();
     testWowFlutter();
     testTapeFiles();

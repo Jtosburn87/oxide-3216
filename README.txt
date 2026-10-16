@@ -31,7 +31,9 @@ Left bank: 16 input channels. Right bank: 16 tape-return channels. Each strip's 
 beside it (after the reference console): Mute, Main and S1-S4 assigns, the channel meter, and Solo with
 its LED. Pan sits at the foot of the knob area.
  Centre: tape machine,
-group EQs, bus compressor, inserts and aux returns, bus faders and the main fader.
+group EQs, Tempo, inserts and aux returns, bus faders and the main fader. The stereo bus
+compressor has a window of its own: the SBC button above the Master insert slots opens it (SBC lights
+while the compressor is in; the GR bar under the slots shows its gain reduction).
 The console stretches to fill the window (the centre section on its own keeps its shape). The Zoom
 slider zooms in evenly, with scroll bars; resizing the window fits it again.
 The small "-" on the EQ, Gate, Comp and Aux sends titles minimises that section on
@@ -90,6 +92,13 @@ fader or knob has moved since. The arrows pick the previous / next stored scene.
 number for Scene Memory: scenes 01-99 with titles, Go, Store (asks before replacing a scene),
 Prev / Next, and Fade (Instant up to 5 s: recalls glide there; grab a control mid-fade and it's
 yours). Scenes and the fade time are saved with the session.
+
+Tempo (top right of the centre section): the tempo (drag up / down, Shift for fine, mouse wheel, or
+double-click to type 20-300), the time signature (click for a menu), Tap (tap the beat four times or
+more), the song position in bar | beat | tick (bar 1 is the start of the tape; 960 ticks a beat), and
+the Click with its level. The click sounds on every beat while the tape plays, higher on the first
+beat of the bar, on the main and monitor outs only: it is never recorded or exported. The tempo is
+saved with the session and is not part of scenes.
 
 Signal flow: input strip -> tape in (normalled) -> tape out -> return strip (normalled).
 Both banks go to main and/or the subs. Subs -> group EQ -> inserts -> sub fader -> main.

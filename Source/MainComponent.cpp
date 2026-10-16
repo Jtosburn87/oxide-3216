@@ -49,6 +49,12 @@ MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionControll
             rackWindow = std::make_unique<RackWindow> (engine, pluginContext, settings);
         rackWindow->show();
     };
+    desk.setOnOpenBusComp ([this]
+    {
+        if (busCompWindow == nullptr)
+            busCompWindow = std::make_unique<BusCompWindow> (engine, settings, [this] { if (saveSettings) saveSettings(); });
+        busCompWindow->show();
+    });
     sessionButton.setTooltip ("New, open, save, save as, export the mix");
     sessionButton.onClick = [this] { showSessionMenu(); };
     sectionsButton.setTooltip ("Sections of the console in windows of their own, plugin scanning, keyboard shortcuts");
@@ -162,6 +168,7 @@ MainComponent::~MainComponent()
     for (auto& w : sectionWindows)
         w = nullptr;
     rackWindow = nullptr;
+    busCompWindow = nullptr;
     if (tapeWindow != nullptr)
         tapeWindow->onShownChanged = nullptr;
     tapeWindow = nullptr;

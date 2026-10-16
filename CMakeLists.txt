@@ -49,6 +49,7 @@ add_library(Oxide3216Core STATIC
     Source/TapeFiles.cpp
     Source/Params.cpp
     Source/Scenes.cpp
+    Source/Tempo.cpp
     Source/TapeMachine.cpp)
 target_include_directories(Oxide3216Core PUBLIC Source)
 if(WIN32)
@@ -108,6 +109,8 @@ target_sources(Oxide3216 PRIVATE
     Source/SessionController.cpp
     Source/InsertsUI.cpp
     Source/RackWindow.cpp
+    Source/BusCompWindow.cpp
+    Source/TempoPanel.cpp
     Source/MeterBridge.cpp
     Source/TapeMachineWindow.cpp
     Source/EraseDialog.cpp

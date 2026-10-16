@@ -405,6 +405,7 @@ void AudioEngine::prepare (double sampleRate, const juce::BigInteger& activeInpu
     monitorSolo.prepare (currentSampleRate, 0.0f, 10.0f);
     monitorGainS.prepare (currentSampleRate, monitorGain (monitorLevel->get()));
     busComp.prepare (currentSampleRate);
+    tempo.prepare (currentSampleRate);
     for (auto* c : subInserts) c->prepare (currentSampleRate, Config::maxBlock);
     for (auto* c : auxInserts) c->prepare (currentSampleRate, Config::maxBlock);
     masterInserts.prepare (currentSampleRate, Config::maxBlock);
@@ -564,7 +565,9 @@ void AudioEngine::render (const float* const* inputs, int numInputs, float* cons
             tapeInPtrs[t] = patchedInput (Patch::tapeIn + t, normal, interfaceAt (Patch::tapeIn + t, start), 1, n);
             tapeOutPtrs[t] = tapeOut[(size_t) t].data();
         }
+        const juce::int64 tapeFrom = tape.getPosition();
         tape.process (tapeInPtrs, tapeOutPtrs, n);
+        const juce::int64 tapeTo = tape.getPosition();
 
         // Return bank: tape outs are normalled to return strip ins; a cable (or an interface input) breaks the normal.
         // An armed track's normal is open (its tape out carries the input, already heard on the channel strip).
@@ -806,6 +809,19 @@ void AudioEngine::render (const float* const* inputs, int numInputs, float* cons
             // Nothing to fade: jump.
             monitorSolo.prepare (currentSampleRate, soloT, 10.0f);
             monitorGainS.prepare (currentSampleRate, levelT);
+        }
+
+        // Click: added to the main and monitor outs after the limiter, so it is heard but never recorded or exported.
+        if (mainLeft == nullptr && mainRight == nullptr
+            && tempo.renderClick (clickOut.data(), n, tapeFrom, tapeTo, tape.getSampleRate(), tape.isPlaying()))
+        {
+            for (int side = 0; side < 2; ++side)
+            {
+                if (mainOut[side] != nullptr)
+                    juce::FloatVectorOperations::add (mainOut[side] + start, clickOut.data(), n);
+                if (monitorOut[side] != nullptr && monitorOut[side] != mainOut[side])
+                    juce::FloatVectorOperations::add (monitorOut[side] + start, clickOut.data(), n);
+            }
         }
 
         // Interface outs on the patch bay: whatever is patched into one (any output, or an interface input)

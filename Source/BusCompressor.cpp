@@ -102,7 +102,10 @@ void BusCompressor::process (float* left, float* right, int n) noexcept
         right[i] = r + (r * g - r) * w;
     }
 
-    auto current = grPeak.load (std::memory_order_relaxed);
     const float shown = blockMax * (wetT > 0.0f ? 1.0f : 0.0f);
-    while (shown > current && ! grPeak.compare_exchange_weak (current, shown, std::memory_order_relaxed)) {}
+    for (auto& peak : grPeak)
+    {
+        auto current = peak.load (std::memory_order_relaxed);
+        while (shown > current && ! peak.compare_exchange_weak (current, shown, std::memory_order_relaxed)) {}
+    }
 }

@@ -246,6 +246,13 @@ InsertsSection::InsertsSection (AudioEngine& e, PluginContext* ctx) : engine (e)
         b.onClick = [this, j] { toggleLink (j); };
         addAndMakeVisible (b);
     }
+
+    // The stereo bus compressor lives in its own window now: SBC, above the master slots, opens it.
+    sbcButton.setTitle ("Stereo bus compressor");
+    sbcButton.setTooltip ("Stereo bus compressor (on the main mix, before the master inserts). Lit while it is in.");
+    sbcButton.setClickingTogglesState (false);
+    sbcButton.onClick = [this] { if (onOpenBusComp) onOpenBusComp(); };
+    addAndMakeVisible (sbcButton);
     startTimerHz (10);
 }
 
@@ -287,6 +294,16 @@ void InsertsSection::timerCallback()
     for (auto& c : cells)
         for (auto& s : c.slots)
             s->refresh();
+
+    sbcButton.setToggleState (engine.busComp.in->on(), juce::dontSendNotification);
+    // The GR bar: falls back slowly, like the needle.
+    const float gr = engine.busComp.takeGainReduction (1);
+    const float next = juce::jmax (gr, shownGr - 1.5f);
+    if (std::abs (next - shownGr) > 0.05f)
+    {
+        shownGr = next;
+        repaint (grBar.expanded (2));
+    }
 }
 
 int InsertsSection::columnX (int i) const
@@ -337,6 +354,14 @@ void InsertsSection::resized()
             c.knob->setBounds (cell.withSizeKeepingCentre (Knob::smallWidth, Knob::smallHeight));
     }
 
+    // Master cell: SBC in the row the aux Link buttons use, the compressor's GR bar under the slots.
+    {
+        auto master = cellBounds (cells.size() - 1).reduced (4, 0);
+        sbcButton.setBounds (master.withTrimmedTop (16).withHeight (16).reduced (2, 0));
+        const int below = 16 + 18 + InsertChain::numSlots * 17 + 6;
+        grBar = master.withTrimmedTop (below).withHeight (10).reduced (6, 0);
+    }
+
     // Each Link button straddles the line between its pair.
     for (int j = 0; j < AudioEngine::numAuxPairs; ++j)
     {
@@ -368,6 +393,24 @@ void InsertsSection::paint (juce::Graphics& g)
             g.setColour (juce::Colour (0xff8e9598).withAlpha (0.6f));
             g.fillRect (columnX ((int) i), 2, 1, getHeight() - 4);
         }
+    }
+
+    // The bus compressor's gain reduction, 0..20 dB growing from the right, and its legend.
+    if (! grBar.isEmpty())
+    {
+        auto bar = grBar.toFloat();
+        const auto legendArea = bar.removeFromRight (20.0f);
+        g.setColour (juce::Colour (0xff0b0c0d));
+        g.fillRoundedRectangle (bar, 2.0f);
+        const float w = bar.getWidth() * juce::jlimit (0.0f, 1.0f, shownGr / 20.0f);
+        if (w > 0.5f)
+        {
+            g.setColour (amber);
+            g.fillRoundedRectangle (bar.withLeft (bar.getRight() - w), 2.0f);
+        }
+        g.setColour (legend);
+        g.setFont (ConsoleLookAndFeel::uiFont (9.0f, true));
+        g.drawText ("GR", legendArea, juce::Justification::centredRight, false);
     }
 }
 

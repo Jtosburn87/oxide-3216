@@ -2,6 +2,7 @@
 
 #include "Params.h"
 #include "Dsp.h"
+#include <array>
 
 /** Stereo bus compressor (after the prototype): stereo-linked feed-forward VCA style,
     peak detector with ~1 ms decay, soft knee ~6 dB, no automatic make-up.
@@ -34,8 +35,10 @@ public:
     void prepare (double sampleRate) noexcept;
     void process (float* left, float* right, int numSamples) noexcept;
 
-    /** Peak gain reduction (dB) since the last call, for the VU needle. */
-    float takeGainReduction() noexcept { return grPeak.exchange (0.0f); }
+    /** Peak gain reduction (dB) since the last call. Each reader keeps its own peak: 0 = the VU needle,
+        1 = the GR bar under the SBC button. */
+    static constexpr int numGrReaders = 2;
+    float takeGainReduction (int reader = 0) noexcept { return grPeak[(size_t) juce::jlimit (0, numGrReaders - 1, reader)].exchange (0.0f); }
 
 private:
     double sr = 48000.0;
@@ -43,5 +46,5 @@ private:
     Dsp::Biquad scL, scR;
     int scHpfIndex = -1;
     Dsp::Smoothed wet, makeupGain;
-    std::atomic<float> grPeak { 0.0f };
+    std::array<std::atomic<float>, numGrReaders> grPeak {};
 };

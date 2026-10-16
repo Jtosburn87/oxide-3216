@@ -594,7 +594,7 @@ CentreSection::CentreSection (AudioEngine& e, PluginContext* plugins)
       pitchKnob (*e.tape.pitch, "Pitch", juce::Colour (0xffd9d6cc)),
       wowButton (*e.tape.wowFlutter, "W&F"),
       mainFader (*e.mainFader),
-      busPanel (e.busComp),
+      tempoPanel (e),
       inserts (e, plugins),
       shuttle (e.tape),
       monitorLevel (*e.monitorLevel, "Level", juce::Colour (0xffd9d6cc)),
@@ -730,8 +730,9 @@ CentreSection::CentreSection (AudioEngine& e, PluginContext* plugins)
     for (auto& m : mainMeters)
         addAndMakeVisible (m);
 
-    addAndMakeVisible (busPanel);
+    addAndMakeVisible (tempoPanel);
     addAndMakeVisible (inserts);
+    inserts.onOpenBusComp = [this] { if (onOpenBusComp) onOpenBusComp(); };
     addAndMakeVisible (shuttle);
 
     for (int i = 0; i < Config::numSubs + Config::numAux; ++i)
@@ -779,8 +780,8 @@ void CentreSection::openErase()
 
 void CentreSection::resized()
 {
-    // Meter panel under the bus compressor: stereo subs, mono auxes, stereo main (the console has no meter bridge).
-    meterBox = { 330, 12 + BusCompPanel::height + 8, centreW - 12 - 330, 72 };
+    // Meter panel under the Tempo box: stereo subs, mono auxes, stereo main (the console has no meter bridge).
+    meterBox = { 330, 12 + tempoBoxH + 8, centreW - 12 - 330, 72 };
     const int my = meterBox.getY() + 8, mh = 46;
     for (int k = 0; k < Config::numSubs; ++k)
     {
@@ -865,11 +866,12 @@ void CentreSection::resized()
     shuttleBox = { groupEqBox.getRight() + 18, groupEqBox.getY(), centreW - 10 - (groupEqBox.getRight() + 18), groupEqBox.getHeight() };
     shuttle.setBounds (shuttleBox.reduced (1));
 
-    // Bus compressor faceplate, at the right edge.
-    busPanel.setBounds (centreW - 12 - BusCompPanel::width, 12, BusCompPanel::width, BusCompPanel::height);
+    // Tempo, at the right edge (where the bus compressor faceplate was).
+    tempoBox = { centreW - 12 - tempoBoxW, 12, tempoBoxW, tempoBoxH };
+    tempoPanel.setBounds (tempoBox.reduced (10).withTrimmedTop (20));
 
-    // Between the tape machine and the bus compressor: the app buttons, then the monitor (headphone) level.
-    const int panelX = deckBox.getRight() + 18, panelW = busPanel.getX() - 18 - panelX;
+    // Between the tape machine and the Tempo box: the app buttons, then the monitor (headphone) level.
+    const int panelX = deckBox.getRight() + 18, panelW = tempoBox.getX() - 18 - panelX;
     const int numButtons = appButtons.getNumChildComponents();
     appBox = { panelX, 12, panelW, 28 + appButtons.heightFor (numButtons) + 10 };
     appButtons.setBounds (appBox.reduced (10).withTrimmedTop (18));
@@ -966,7 +968,7 @@ void CentreSection::paint (juce::Graphics& g)
                 deckBox.reduced (10).withHeight (24), juce::Justification::centredLeft, false);
 
     // App buttons and monitor level panels, in the same style.
-    for (auto [box, title] : { std::pair { appBox, "Console" }, std::pair { sceneBox, "Scene" }, std::pair { monitorBox, "Monitor / TB" } })
+    for (auto [box, title] : { std::pair { appBox, "Console" }, std::pair { sceneBox, "Scene" }, std::pair { monitorBox, "Monitor / TB" }, std::pair { tempoBox, "Tempo" } })
     {
         g.setColour (faderArea);
         g.fillRoundedRectangle (box.toFloat(), 2.0f);
@@ -1028,7 +1030,6 @@ void CentreSection::paint (juce::Graphics& g)
 
 void CentreSection::update()
 {
-    busPanel.update();
     talkButton.update();
 
     // Names can change underneath (a session was opened).

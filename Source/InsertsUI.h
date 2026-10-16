@@ -84,6 +84,9 @@ public:
         0: cells share the width evenly. */
     void setColumnWidth (float w) { columnW = w; resized(); repaint(); }
 
+    /** The SBC button (above the master slots) was clicked: open the stereo bus compressor's window. */
+    std::function<void()> onOpenBusComp;
+
     void paint (juce::Graphics&) override;
     void resized() override;
 
@@ -124,6 +127,9 @@ private:
     std::array<juce::TextButton, AudioEngine::numAuxPairs> linkButtons;
     std::array<bool, AudioEngine::numAuxPairs> shownLink {};
     float columnW = 0.0f;
+    juce::TextButton sbcButton { "SBC" };   // lit while the bus compressor is in
+    float shownGr = 0.0f;                    // dB, on the bar under the master slots
+    juce::Rectangle<int> grBar;
 
     int columnX (int index) const;
     juce::Rectangle<int> cellBounds (size_t index) const;

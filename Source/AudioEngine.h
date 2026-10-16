@@ -13,6 +13,7 @@
 #include "BusCompressor.h"
 #include "InsertChain.h"
 #include "Talkback.h"
+#include "Tempo.h"
 
 /** Owns the audio device, the console's parameters and its DSP, and runs the real-time callback.
 
@@ -104,6 +105,8 @@ public:
     std::array<Param*, Config::numSubs> subFader {};       // 0..100, unity at 80 (faders arrive in stage 5)
     std::array<Param*, Config::numAux> auxMaster {};       // 0..100, unity at 80
     BusCompressor busComp { params };
+    /** Tempo, time signature and click (on the main and monitor outs only: never recorded or exported). */
+    Tempo tempo { params };
 
     // VST3 inserts: 4 slots on each sub (after the group EQ), each aux return, and the master bus.
     juce::OwnedArray<InsertChain> subInserts, auxInserts;
@@ -241,6 +244,7 @@ private:
     Block mixL {}, mixR {};
     Block oscOut {};
     Block tbLimOut {};
+    Block clickOut {};
     Block soloL {}, soloR {};
     std::array<Block, Config::numSubs> subL {}, subR {};
     std::array<Block, Config::numAux> aux {};

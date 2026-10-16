@@ -4,7 +4,7 @@
 #include "AudioEngine.h"
 #include "Widgets.h"
 #include "Cassette.h"
-#include "BusCompPanel.h"
+#include "TempoPanel.h"
 #include "InsertsUI.h"
 #include "CompressorPanel.h"
 #include "ShuttlePanel.h"
@@ -192,6 +192,9 @@ public:
     void setCassetteFrozen (bool f) { cassette.setFrozen (f); }
     ShuttlePanel& getShuttle() { return shuttle; }
 
+    /** The SBC button over the master inserts was clicked. */
+    std::function<void()> onOpenBusComp;
+
 private:
     AudioEngine& engine;
     TapeMachine& tape;
@@ -220,7 +223,9 @@ private:
     std::array<LedMeter, 2> mainMeters;
     Fader mainFader;
     juce::Label mainScribble;
-    BusCompPanel busPanel;
+    TempoPanel tempoPanel;         // where the bus compressor was (that is in its own window now: SBC)
+    juce::Rectangle<int> tempoBox;
+    static constexpr int tempoBoxW = 300, tempoBoxH = 476;   // the size the bus compressor had, so nothing else moves
     InsertsSection inserts;
     ShuttlePanel shuttle;          // jog / shuttle, In / Out keys and locate memories, right of the group EQ
     juce::Rectangle<int> shuttleBox;
@@ -348,6 +353,8 @@ public:
     void setCassetteFrozen (bool f) { centre.setCassetteFrozen (f); }
     /** The Jog / shuttle box (its keys have keyboard shortcuts). */
     ShuttlePanel& getShuttle() { return centre.getShuttle(); }
+    /** The SBC button (over the master inserts) opens the stereo bus compressor window. */
+    void setOnOpenBusComp (std::function<void()> f) { centre.onOpenBusComp = std::move (f); }
 
     /** Lets every channel's EQ, gate and compressor be reordered (Options > Unlock chain order). */
     void setChainUnlocked (bool);

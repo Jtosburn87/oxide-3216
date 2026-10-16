@@ -8,7 +8,8 @@ SceneMemory::SceneMemory (ParamSet& p) : params (p)
 bool SceneMemory::isSceneControl (const Param& p)
 {
     return (p.scale == Param::Scale::linear || p.scale == Param::Scale::log)
-        && ! p.id.startsWith ("tape.") && ! p.id.startsWith ("osc.") && ! p.id.startsWith ("scene.");
+        && ! p.id.startsWith ("tape.") && ! p.id.startsWith ("osc.") && ! p.id.startsWith ("scene.")
+        && ! p.id.startsWith ("tempo.") && ! p.id.startsWith ("click.");   // the song's tempo is not a mix setting
 }
 
 bool SceneMemory::isStored (int s) const
