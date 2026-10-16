@@ -2250,6 +2250,8 @@ namespace
                 const auto msg = meta.getMessage();
                 if (msg.isNoteOn()) { level = msg.getFloatVelocity(); held = msg.getNoteNumber(); ++noteOns; }
                 else if (msg.isNoteOff() && msg.getNoteNumber() == held) level = 0.0f;
+                else if (msg.isController()) controllers.push_back ({ msg.getControllerNumber(), msg.getControllerValue() });
+                else if (msg.isProgramChange()) program = msg.getProgramChangeNumber();
             }
             fill (b.getNumSamples());
         }
@@ -2269,6 +2271,8 @@ namespace
 
         float level = 0.0f;
         int held = -1, noteOns = 0;
+        std::vector<std::pair<int, int>> controllers;   // number, value, as they came
+        int program = -1;
         const int outs;
     };
 
@@ -2429,6 +2433,67 @@ namespace
         }
     }
 
+    void testMidiControllers()
+    {
+        std::puts ("MIDI page: CC and program change automation, chased when the tape starts part-way");
+        TestEngine e;
+        e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }));
+        auto& m = e.midi;
+        const int k = m.addTrack();
+        auto synth = std::make_unique<TestSynth> (true);
+        auto* raw = synth.get();
+        m.setInstrument (k, std::move (synth), {});
+
+        // Program 5 and sustain down on beat 1, volume 100 on beat 2, sustain up on beat 3 (120 bpm: 0.5 s a beat).
+        Midi::Clip clip;
+        clip.length = 4 * Tempo::ticksPerBeat;
+        clip.controls = { { 2 * Tempo::ticksPerBeat, 64, 0 }, { 0, 64, 127 }, { Tempo::ticksPerBeat, 7, 100 }, { 0, Midi::programChange, 4 } };
+        m.setClips (k, { clip });
+        check (m.getClips (k)[0].controls[0].tick == 0 && m.getClips (k)[0].controls.back().tick == 2 * Tempo::ticksPerBeat, "points are kept in time order");
+        m.tick();
+        Buffers b (1, 2, 480);
+        e.tape.play();
+        for (int i = 0; i < 160; ++i) b.run (e);   // 1.6 s
+        check (raw->program == 4, "the program change plays");
+        const std::vector<std::pair<int, int>> expected { { 64, 127 }, { 7, 100 }, { 64, 0 } };
+        check (raw->controllers == expected, "the controllers play in order");
+
+        // Start again from 0.75 s: the program and the last value of each controller come first.
+        e.tape.stop();
+        b.run (e);
+        raw->controllers.clear();
+        raw->program = -1;
+        e.tape.locate (36000);   // 0.75 s: after the volume, before the pedal comes up
+        e.tape.play();
+        b.run (e);
+        const std::vector<std::pair<int, int>> chased { { 7, 100 }, { 64, 127 } };   // CC numbers in order
+        check (raw->program == 4 && raw->controllers == chased, "chased: program 5, volume 100, sustain down");
+        e.tape.stop();
+
+        // Recording catches the sustain pedal.
+        m.setArmed (k, true);
+        e.tape.setRecordEnabled (true);
+        e.tape.locate (0);
+        e.tape.play();
+        for (int i = 0; i < 50; ++i) b.run (e);
+        m.injectLive (k, juce::MidiMessage::controllerEvent (1, 64, 127));
+        for (int i = 0; i < 20; ++i) b.run (e);
+        m.injectLive (k, juce::MidiMessage::controllerEvent (1, 64, 0));
+        b.run (e);
+        e.tape.stop();
+        e.tape.setRecordEnabled (false);
+        m.tick();
+        const auto& clips = m.getClips (k);
+        check (clips.size() == 2 && clips[1].controls.size() == 2 && clips[1].controls[0].number == 64 && clips[1].controls[0].value == 127,
+               "a take with only the pedal in it becomes a clip");
+
+        // Saved with the session.
+        const auto saved = juce::JSON::toString (m.toVar());
+        TestEngine other;
+        other.midi.fromVar (juce::JSON::parse (saved), {});
+        check (other.midi.getClips (0).size() == 2 && other.midi.getClips (0)[0].controls == m.getClips (k)[0].controls, "the points are saved");
+    }
+
     void testMidiFiles()
     {
         std::puts ("MIDI page: a MIDI file (a plugin's groove dragged out) becomes a clip");
@@ -2438,6 +2503,7 @@ namespace
         seq.addEvent (juce::MidiMessage::noteOff (10, 36), 240.0);
         seq.addEvent (juce::MidiMessage::noteOn (10, 38, (juce::uint8) 90), 480.0);
         seq.addEvent (juce::MidiMessage::noteOff (10, 38), 720.0);
+        seq.addEvent (juce::MidiMessage::controllerEvent (10, 4, 90), 480.0);   // hi-hat pedal
         seq.updateMatchedPairs();
         juce::MidiFile mf;
         mf.setTicksPerQuarterNote (480);
@@ -2454,6 +2520,7 @@ namespace
         check (clip.notes.size() == 2 && clip.notes[0].start == 0 && clip.notes[1].start == 960 && clip.notes[0].length == 480
                && clip.notes[0].pitch == 36 && clip.notes[1].velocity == 90, "notes on our grid (960 a quarter in 4/4)");
         check (clip.length == 3840, "the clip is one bar long");
+        check (clip.controls.size() == 1 && clip.controls[0].number == 4 && clip.controls[0].value == 90 && clip.controls[0].tick == 960, "its controllers come too");
         clip = MidiEngine::readMidiFile (file, 8, 6, 1920.0, error);
         check (clip.notes.size() == 2 && clip.notes[1].start == 1920, "in 6/8 a quarter note is two of our beats");
         file.deleteFile();
@@ -3061,6 +3128,7 @@ int main (int argc, char** argv)
     testMidiPlayback();
     testMidiRouting();
     testMidiRecording();
+    testMidiControllers();
     testMidiFiles();
     testMidiSession();
     testScenes();

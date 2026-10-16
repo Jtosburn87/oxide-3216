@@ -840,6 +840,14 @@ public:
                         kept.push_back (n);
                 }
                 c.notes = kept;
+                std::vector<Midi::Control> keptControls;
+                for (auto ctl : original.controls)
+                {
+                    ctl.tick -= shift;
+                    if (ctl.tick >= 0 && ctl.tick < c.length)
+                        keptControls.push_back (ctl);
+                }
+                c.controls = keptControls;
             }
         });
         page.refreshAll();
@@ -1278,6 +1286,7 @@ public:
         shownTrack = page.selectedTrack;
         shownClip = page.selectedClip;
         selection.clear();
+        selectedControl = -1;
         if (auto* c = clip())
         {
             // Fit the clip across, and centre its notes (or C3) down.
@@ -1310,6 +1319,8 @@ public:
             if (pitch < 0)
                 break;
             const int y = rulerH2 + row * rowH;
+            if (y >= notesBottom)
+                break;   // the keyboard stops at the lane
             g.setColour (isBlackKey (pitch) ? juce::Colour (0xff1f2225) : juce::Colour (0xff26292c));
             g.fillRect (keysW, y, getWidth() - keysW, rowH);
             g.setColour (isBlackKey (pitch) ? juce::Colour (0xff222222) : juce::Colour (0xffe8e8e8));
@@ -1360,24 +1371,35 @@ public:
             g.setColour (sel ? juce::Colours::white : colour.darker (0.8f));
             g.drawRoundedRectangle (r.reduced (0.5f), 2.0f, 1.0f);
         }
-        // Velocity lane.
+        // The lane under the notes: velocities, a controller or program changes.
         g.setColour (juce::Colour (0xff1d1f22));
         g.fillRect (keysW, notesBottom, getWidth() - keysW, velocityH);
         g.setColour (juce::Colour (0xff111111));
         g.fillRect (keysW, notesBottom, getWidth() - keysW, 1);
-        for (int i = 0; i < (int) c->notes.size(); ++i)
-        {
-            const auto& n = c->notes[(size_t) i];
-            const float x = xFor ((double) n.start);
-            const float h = (float) (velocityH - 14) * (float) n.velocity / 127.0f;
-            g.setColour (selection.count (i) > 0 ? colour.brighter (0.6f) : colour);
-            g.fillRect (x, (float) areaH() - 4.0f - h, 4.0f, h);
-            g.fillEllipse (x - 1.0f, (float) areaH() - 7.0f - h, 6.0f, 6.0f);
-        }
+        if (laneMode < 0)
+            for (int i = 0; i < (int) c->notes.size(); ++i)
+            {
+                const auto& n = c->notes[(size_t) i];
+                const float x = xFor ((double) n.start);
+                const float h = (float) (velocityH - 14) * (float) n.velocity / 127.0f;
+                g.setColour (selection.count (i) > 0 ? colour.brighter (0.6f) : colour);
+                g.fillRect (x, (float) areaH() - 4.0f - h, 4.0f, h);
+                g.fillEllipse (x - 1.0f, (float) areaH() - 7.0f - h, 6.0f, 6.0f);
+            }
+        else
+            paintControls (g, *c, colour);
         g.restoreState();
-        g.setColour (textDim);
+        // The lane's name, as a button: click for Velocity, Program change or any CC.
+        g.setColour (juce::Colour (0xff1d1f22));
+        g.fillRect (0, notesBottom, keysW, velocityH);
+        const auto laneButton = juce::Rectangle<float> (3.0f, (float) notesBottom + 5.0f, (float) keysW - 6.0f, 30.0f);
+        g.setColour (juce::Colour (0xff4a4e53));
+        g.fillRoundedRectangle (laneButton, 3.0f);
+        g.setColour (legend);
         g.setFont (ConsoleLookAndFeel::uiFont (10.0f, true));
-        g.drawText ("VEL", 0, notesBottom + 4, keysW - 4, 12, juce::Justification::centredRight, false);
+        g.drawFittedText (laneName (laneMode) + "\n" + juce::String (juce::CharPointer_UTF8 ("\xe2\x96\xbe")), laneButton.toNearestInt(),
+                          juce::Justification::centred, 2, 0.7f);
+        g.setColour (textDim);
         g.drawText ("BAR", 0, 2, keysW - 4, 14, juce::Justification::centredRight, false);
     }
 
@@ -1403,10 +1425,20 @@ public:
         grabKeyboardFocus();
         drag = Drag::none;
         const auto* c = clip();
-        if (c == nullptr || e.position.x < keysW)
+        if (c == nullptr)
             return;
         const int notesBottom = areaH() - velocityH;
-
+        if (e.position.x < keysW)
+        {
+            if (e.position.y >= notesBottom && e.position.y < areaH())
+                showLaneMenu();
+            return;
+        }
+        if (e.position.y >= notesBottom && laneMode >= 0)
+        {
+            controlMouseDown (e);
+            return;
+        }
         if (e.position.y >= notesBottom)
         {
             // Velocity: the bar nearest the mouse (all the selected notes if it is one of them).
@@ -1472,6 +1504,11 @@ public:
             setVelocity (e.position.y);
             return;
         }
+        if (drag == Drag::control)
+        {
+            controlDrag (e);
+            return;
+        }
         if (drag == Drag::none || clip() == nullptr)
             return;
         const double tick = tickFor (e.position.x);
@@ -1512,7 +1549,10 @@ public:
     {
         if (k == juce::KeyPress::deleteKey || k == juce::KeyPress::backspaceKey)
         {
-            deleteSelected();
+            if (laneMode >= 0 && selectedControl >= 0)
+                deleteSelectedControl();
+            else
+                deleteSelected();
             return true;
         }
         if (k == juce::KeyPress ('a', juce::ModifierKeys::commandModifier, 0))
@@ -1605,7 +1645,195 @@ private:
     ZoomButtons zoom;
     double pxPerTick = 0.1, scrollTicks = 0.0;
     int topPitch = 72;
-    enum class Drag { none, move, resize, velocity } drag = Drag::none;
+    enum class Drag { none, move, resize, velocity, control } drag = Drag::none;
+
+    // The controller lane (laneMode: -1 velocity, 0-127 a CC, Midi::programChange).
+    int laneMode = -1;
+    int selectedControl = -1;   // index into the clip's controls
+
+    static juce::String ccName (int cc)
+    {
+        switch (cc)
+        {
+            case 1: return "Mod wheel";  case 2: return "Breath";      case 4: return "Foot";      case 7: return "Volume";
+            case 10: return "Pan";       case 11: return "Expression"; case 64: return "Sustain";  case 65: return "Portamento";
+            case 66: return "Sostenuto"; case 67: return "Soft pedal"; case 71: return "Resonance"; case 74: return "Brightness";
+            default: return {};
+        }
+    }
+
+    static juce::String laneName (int mode)
+    {
+        if (mode < 0) return "VEL";
+        if (mode == Midi::programChange) return "PROG";
+        return "CC " + juce::String (mode);
+    }
+
+    float yForValue (int v) const { return (float) areaH() - 4.0f - (float) (velocityH - 14) * (float) v / 127.0f; }
+    int valueForY (float y) const { return juce::jlimit (0, 127, juce::roundToInt (((float) areaH() - 4.0f - y) / (float) (velocityH - 14) * 127.0f)); }
+
+    void paintControls (juce::Graphics& g, const Midi::Clip& c, juce::Colour colour)
+    {
+        // A step line through the values (each holds until the next change), a dot on each change.
+        const bool program = laneMode == Midi::programChange;
+        float lastX = xFor (0.0), lastY = -1.0f;
+        g.setFont (ConsoleLookAndFeel::uiFont (10.0f, true));
+        for (int i = 0; i < (int) c.controls.size(); ++i)
+        {
+            const auto& ctl = c.controls[(size_t) i];
+            if (ctl.number != laneMode)
+                continue;
+            const float x = xFor ((double) ctl.tick), y = yForValue (ctl.value);
+            g.setColour (colour.withAlpha (0.8f));
+            if (! program && lastY >= 0.0f)
+            {
+                g.fillRect (lastX, lastY, x - lastX, 1.5f);
+                g.fillRect (x, juce::jmin (lastY, y), 1.5f, std::abs (y - lastY) + 1.0f);
+            }
+            g.setColour (i == selectedControl ? juce::Colours::white : colour);
+            if (program)
+            {
+                g.fillRect (x, y, 2.0f, (float) areaH() - 4.0f - y);
+                g.drawText ("P" + juce::String (ctl.value + 1), juce::Rectangle<float> (x + 5.0f, y - 2.0f, 40.0f, 12.0f), juce::Justification::centredLeft, false);
+            }
+            g.fillEllipse (x - 3.5f, y - 3.5f, 7.0f, 7.0f);
+            lastX = x;
+            lastY = y;
+        }
+        if (! program && lastY >= 0.0f)
+        {
+            g.setColour (colour.withAlpha (0.8f));
+            g.fillRect (lastX, lastY, xFor ((double) c.length) - lastX, 1.5f);
+        }
+    }
+
+    int controlAt (float x) const
+    {
+        if (auto* c = clip())
+            for (int i = (int) c->controls.size() - 1; i >= 0; --i)
+                if (c->controls[(size_t) i].number == laneMode && std::abs (xFor ((double) c->controls[(size_t) i].tick) - x) <= 5.0f)
+                    return i;
+        return -1;
+    }
+
+    juce::int64 laneTick (float x) const
+    {
+        const auto* c = clip();
+        const double t = juce::jmax (0.0, tickFor (x));
+        const auto snapped = page.snapOn ? (juce::int64) page.snap ((double) c->start + t) - c->start : (juce::int64) t;
+        return juce::jlimit ((juce::int64) 0, juce::jmax ((juce::int64) 0, c->length - 1), snapped);
+    }
+
+    /** Puts a value at a tick on the current lane (replacing one already on that tick). Returns its index. */
+    int setControlAt (juce::int64 tick, int value, int replacing = -1)
+    {
+        const Midi::Control ctl { tick, laneMode, value };
+        const int mode = laneMode;
+        edit ([&] (Midi::Clip& c)
+        {
+            if (juce::isPositiveAndBelow (replacing, (int) c.controls.size()))
+                c.controls.erase (c.controls.begin() + replacing);
+            c.controls.erase (std::remove_if (c.controls.begin(), c.controls.end(),
+                                              [&] (const Midi::Control& o) { return o.number == mode && o.tick == tick; }),
+                              c.controls.end());
+            c.controls.push_back (ctl);
+        }, false);
+        if (auto* c = clip())   // setClips sorted them
+            for (int i = 0; i < (int) c->controls.size(); ++i)
+                if (c->controls[(size_t) i] == ctl)
+                    return i;
+        return -1;
+    }
+
+    void controlMouseDown (const juce::MouseEvent& e)
+    {
+        const int hit = controlAt (e.position.x);
+        if (e.mods.isPopupMenu())
+        {
+            if (hit >= 0)
+            {
+                selectedControl = hit;
+                deleteSelectedControl();
+            }
+            return;
+        }
+        drag = Drag::control;
+        if (hit >= 0 && page.tool == Tool::pointer)
+            selectedControl = hit;   // drag it
+        else
+            selectedControl = setControlAt (laneTick (e.position.x), valueForY (e.position.y));   // a new point (the pencil draws on)
+        repaint();
+    }
+
+    void controlDrag (const juce::MouseEvent& e)
+    {
+        const auto* c = clip();
+        if (c == nullptr)
+            return;
+        if (page.tool == Tool::pencil)
+            selectedControl = setControlAt (laneTick (e.position.x), valueForY (e.position.y));
+        else if (juce::isPositiveAndBelow (selectedControl, (int) c->controls.size()))
+            selectedControl = setControlAt (laneTick (e.position.x), valueForY (e.position.y), selectedControl);   // time on the grid, value up and down
+    }
+
+    void deleteSelectedControl()
+    {
+        const int index = selectedControl;
+        selectedControl = -1;
+        edit ([index] (Midi::Clip& c) { if (juce::isPositiveAndBelow (index, (int) c.controls.size())) c.controls.erase (c.controls.begin() + index); }, false);
+    }
+
+    void showLaneMenu()
+    {
+        // The lanes the clip already has something on are marked with a dot.
+        std::set<int> used;
+        if (auto* c = clip())
+            for (auto& ctl : c->controls)
+                used.insert (ctl.number);
+        const auto label = [&] (int mode)
+        {
+            auto text = mode == Midi::programChange ? juce::String ("Program change")
+                                                    : "CC " + juce::String (mode) + (ccName (mode).isNotEmpty() ? "  " + ccName (mode) : juce::String());
+            return used.count (mode) > 0 ? text + juce::String (juce::CharPointer_UTF8 ("  \xe2\x80\xa2")) : text;
+        };
+        juce::PopupMenu menu, other;
+        menu.addItem (1000, "Velocity", true, laneMode < 0);
+        menu.addItem (1001 + Midi::programChange, label (Midi::programChange), true, laneMode == Midi::programChange);
+        menu.addSeparator();
+        for (int cc : { 1, 2, 4, 7, 10, 11, 64, 71, 74 })
+            menu.addItem (1001 + cc, label (cc), true, laneMode == cc);
+        for (int block = 0; block < 128; block += 32)
+        {
+            juce::PopupMenu sub;
+            for (int cc = block; cc < block + 32; ++cc)
+                sub.addItem (1001 + cc, label (cc), true, laneMode == cc);
+            other.addSubMenu ("CC " + juce::String (block) + "-" + juce::String (block + 31), sub);
+        }
+        menu.addSubMenu ("Other CC", other);
+        if (laneMode >= 0)
+        {
+            menu.addSeparator();
+            menu.addItem (1, "Clear this lane in the clip");
+        }
+        menu.showMenuAsync (juce::PopupMenu::Options(), [safe = juce::Component::SafePointer<PianoRoll> (this)] (int r)
+        {
+            if (safe == nullptr || r == 0)
+                return;
+            if (r == 1)
+            {
+                const int mode = safe->laneMode;
+                safe->edit ([mode] (Midi::Clip& c)
+                {
+                    c.controls.erase (std::remove_if (c.controls.begin(), c.controls.end(), [mode] (const Midi::Control& o) { return o.number == mode; }),
+                                      c.controls.end());
+                }, false);
+            }
+            else
+                safe->laneMode = r - 1001;
+            safe->selectedControl = -1;
+            safe->repaint();
+        });
+    }
     std::vector<Midi::Note> original;
     double downTick = 0.0;
     int downPitch = 60, anchor = 0;
@@ -1790,7 +2018,8 @@ public:
         auto help = getLocalBounds().reduced (10).withTrimmedTop (170);
         g.setFont (ConsoleLookAndFeel::uiFont (11.0f));
         g.drawFittedText ("Pointer: click a note to select (Shift adds), drag to move, drag its right end to resize, "
-                          "double-click to add, right-click or Delete to remove. Drag the velocity bars. "
+                          "double-click to add, right-click or Delete to remove. Drag the velocity bars. Click VEL (left of the lane) for CC and "
+                          "program change lanes: click or drag to add and move points, right-click to remove. "
                           "Pencil: click and drag to draw. Ctrl + wheel zooms, Shift + wheel scrolls.",
                           help, juce::Justification::topLeft, 8, 0.9f);
     }

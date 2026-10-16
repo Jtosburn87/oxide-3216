@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iterator>
+#include <limits>
 
 namespace
 {
@@ -14,6 +15,27 @@ namespace
         for (auto& n : notes)
             s << n.start << ' ' << n.length << ' ' << n.pitch << ' ' << n.velocity << ';';
         return s;
+    }
+
+    juce::String controlList (const std::vector<Midi::Control>& controls)
+    {
+        juce::String s;
+        for (auto& c : controls)
+            s << c.tick << ' ' << c.number << ' ' << c.value << ';';
+        return s;
+    }
+
+    std::vector<Midi::Control> parseControls (const juce::String& s)
+    {
+        std::vector<Midi::Control> controls;
+        for (auto& item : juce::StringArray::fromTokens (s, ";", ""))
+        {
+            const auto f = juce::StringArray::fromTokens (item, " ", "");
+            if (f.size() < 3)
+                continue;
+            controls.push_back ({ f[0].getLargeIntValue(), juce::jlimit (0, Midi::programChange, f[1].getIntValue()), juce::jlimit (0, 127, f[2].getIntValue()) });
+        }
+        return controls;
     }
 
     std::vector<Midi::Note> parseNotes (const juce::String& s)
@@ -329,6 +351,7 @@ void MidiEngine::setClips (int k, std::vector<Midi::Clip> clips)
     {
         c.start = juce::jmax ((juce::int64) 0, c.start);
         c.length = juce::jmax ((juce::int64) 1, c.length);
+        std::stable_sort (c.controls.begin(), c.controls.end(), [] (const Midi::Control& a, const Midi::Control& b) { return a.tick < b.tick; });
         std::sort (c.notes.begin(), c.notes.end(), [] (const Midi::Note& a, const Midi::Note& b) { return a.start < b.start; });
     }
     s.clips = std::move (clips);
@@ -352,17 +375,29 @@ void MidiEngine::compile (Slot& s)
     // same tick, so a repeated note sounds again.
     std::vector<Event> events;
     for (auto& c : s.clips)
+    {
         for (auto& n : c.notes)
         {
             if (n.start < 0 || n.start >= c.length)
                 continue;
             const auto on = c.start + n.start, off = c.start + juce::jmin (n.start + n.length, c.length);
-            events.push_back ({ on, (std::uint8_t) n.pitch, (std::uint8_t) juce::jlimit (1, 127, n.velocity) });
-            events.push_back ({ off, (std::uint8_t) n.pitch, 0 });
+            events.push_back ({ on, Event::noteOn, (std::uint8_t) n.pitch, (std::uint8_t) juce::jlimit (1, 127, n.velocity) });
+            events.push_back ({ off, Event::noteOff, (std::uint8_t) n.pitch, 0 });
         }
-    std::sort (events.begin(), events.end(), [] (const Event& a, const Event& b)
+        for (auto& ctl : c.controls)
+        {
+            if (ctl.tick < 0 || ctl.tick >= c.length)
+                continue;
+            if (ctl.number == Midi::programChange)
+                events.push_back ({ c.start + ctl.tick, Event::program, (std::uint8_t) juce::jlimit (0, 127, ctl.value), 0 });
+            else if (juce::isPositiveAndBelow (ctl.number, 128))
+                events.push_back ({ c.start + ctl.tick, Event::controller, (std::uint8_t) ctl.number, (std::uint8_t) juce::jlimit (0, 127, ctl.value) });
+        }
+    }
+    // Same tick: program, then controllers, then note offs, then note ons (a repeated note sounds again).
+    std::stable_sort (events.begin(), events.end(), [] (const Event& a, const Event& b)
     {
-        return a.tick != b.tick ? a.tick < b.tick : (a.velocity == 0) > (b.velocity == 0);
+        return a.tick != b.tick ? a.tick < b.tick : a.kind < b.kind;
     });
     {
         const juce::SpinLock::ScopedLockType sl (s.lock);
@@ -461,9 +496,14 @@ void MidiEngine::process (int n, juce::int64 from, double rate, bool rolling, bo
             for (const auto meta : midi)
             {
                 const auto m = meta.getMessage();
+                const auto tick = (juce::int64) std::floor (t0 + (t1 - t0) * meta.samplePosition / (double) n);
+                using R = Midi::RecordedEvent;
                 if (m.isNoteOnOrOff())
-                    pushRecorded ({ k, (juce::int64) std::floor (t0 + (t1 - t0) * meta.samplePosition / (double) n),
-                                    (std::uint8_t) m.getNoteNumber(), (std::uint8_t) (m.isNoteOn() ? juce::jmax (1, (int) m.getVelocity()) : 0) });
+                    pushRecorded ({ k, tick, R::note, (std::uint8_t) m.getNoteNumber(), (std::uint8_t) (m.isNoteOn() ? juce::jmax (1, (int) m.getVelocity()) : 0) });
+                else if (m.isController())
+                    pushRecorded ({ k, tick, R::controller, (std::uint8_t) m.getControllerNumber(), (std::uint8_t) m.getControllerValue() });
+                else if (m.isProgramChange())
+                    pushRecorded ({ k, tick, R::program, (std::uint8_t) m.getProgramChangeNumber(), 0 });
             }
 
         // The clips, while the tape plays. A jump (locate, loop) or a stop ends whatever they had sounding.
@@ -480,18 +520,43 @@ void MidiEngine::process (int n, juce::int64 from, double rate, bool rolling, bo
         {
             auto it = std::lower_bound (s.events.begin(), s.events.end(), (juce::int64) std::ceil (t0),
                                         [] (const Event& e, juce::int64 tick) { return e.tick < tick; });
+
+            // Starting (or jumping) part-way: send the last program and controller values before here first.
+            if (s.expectedFrom < 0 || jumped)
+            {
+                std::array<int, 129> last;
+                last.fill (-1);
+                for (auto back = it; back != s.events.begin();)
+                {
+                    --back;
+                    if (back->kind == Event::controller && last[back->a] < 0) last[back->a] = back->b;
+                    if (back->kind == Event::program && last[128] < 0)         last[128] = back->a;
+                }
+                if (last[128] >= 0)
+                    midi.addEvent (juce::MidiMessage::programChange (1, last[128]), 0);
+                for (int c = 0; c < 128; ++c)
+                    if (last[(size_t) c] >= 0)
+                        midi.addEvent (juce::MidiMessage::controllerEvent (1, c, last[(size_t) c]), 0);
+            }
+
             for (; it != s.events.end() && (double) it->tick < t1; ++it)
             {
                 const int at = juce::jlimit (0, n - 1, (int) (((double) it->tick - t0) / (t1 - t0) * (double) n));
-                if (it->velocity > 0)
+                switch (it->kind)
                 {
-                    midi.addEvent (juce::MidiMessage::noteOn (1, it->pitch, (juce::uint8) it->velocity), at);
-                    s.sounding[it->pitch] = true;
-                }
-                else if (s.sounding[it->pitch])
-                {
-                    midi.addEvent (juce::MidiMessage::noteOff (1, it->pitch), at);
-                    s.sounding[it->pitch] = false;
+                    case Event::noteOn:
+                        midi.addEvent (juce::MidiMessage::noteOn (1, it->a, (juce::uint8) it->b), at);
+                        s.sounding[it->a] = true;
+                        break;
+                    case Event::noteOff:
+                        if (s.sounding[it->a])
+                        {
+                            midi.addEvent (juce::MidiMessage::noteOff (1, it->a), at);
+                            s.sounding[it->a] = false;
+                        }
+                        break;
+                    case Event::controller: midi.addEvent (juce::MidiMessage::controllerEvent (1, it->a, it->b), at); break;
+                    case Event::program:    midi.addEvent (juce::MidiMessage::programChange (1, it->a), at); break;
                 }
             }
         }
@@ -522,16 +587,21 @@ void MidiEngine::finishTake (Slot& s, juce::int64 endTick)
             s.recordHeld[(size_t) p] = -1;
         }
     s.recordingTake = false;
-    if (s.recorded.empty())
+    if (s.recorded.empty() && s.recordedControls.empty())
         return;
 
-    // The new clip runs from the bar of the first note to the end of the bar of the last one.
+    // The new clip runs from the bar of the first event to the end of the bar of the last one.
     const juce::int64 bar = (juce::int64) tempo.getBeatsPerBar() * Tempo::ticksPerBeat;
-    juce::int64 first = s.recorded.front().start, last = 0;
+    juce::int64 first = std::numeric_limits<juce::int64>::max(), last = 0;
     for (auto& nt : s.recorded)
     {
         first = juce::jmin (first, nt.start);
         last = juce::jmax (last, nt.start + nt.length);
+    }
+    for (auto& ctl : s.recordedControls)
+    {
+        first = juce::jmin (first, ctl.tick);
+        last = juce::jmax (last, ctl.tick + 1);
     }
     Midi::Clip clip;
     clip.start = first / bar * bar;
@@ -542,6 +612,12 @@ void MidiEngine::finishTake (Slot& s, juce::int64 endTick)
         nt.start -= clip.start;
         clip.notes.push_back (nt);
     }
+    for (auto ctl : s.recordedControls)
+    {
+        ctl.tick -= clip.start;
+        clip.controls.push_back (ctl);
+    }
+    s.recordedControls.clear();
     std::sort (clip.notes.begin(), clip.notes.end(), [] (const Midi::Note& a, const Midi::Note& b) { return a.start < b.start; });
     s.recorded.clear();
     s.clips.push_back (std::move (clip));
@@ -568,18 +644,29 @@ void MidiEngine::timerCallback()
                 {
                     s.recordingTake = true;
                     s.recorded.clear();
+                    s.recordedControls.clear();
                     s.recordHeld.fill (-1);
                 }
-                auto& held = s.recordHeld[e.pitch];
+                if (e.kind == Midi::RecordedEvent::controller)
+                {
+                    s.recordedControls.push_back ({ e.tick, e.a, e.b });
+                    continue;
+                }
+                if (e.kind == Midi::RecordedEvent::program)
+                {
+                    s.recordedControls.push_back ({ e.tick, Midi::programChange, e.a });
+                    continue;
+                }
+                auto& held = s.recordHeld[e.a];
                 if (held >= 0)   // a note on while held, or its note off: the held note ends here
                 {
-                    s.recorded.push_back ({ held, juce::jmax ((juce::int64) 1, e.tick - held), e.pitch, s.recordVelocity[e.pitch] });
+                    s.recorded.push_back ({ held, juce::jmax ((juce::int64) 1, e.tick - held), e.a, s.recordVelocity[e.a] });
                     held = -1;
                 }
-                if (e.velocity > 0)
+                if (e.b > 0)
                 {
                     held = e.tick;
-                    s.recordVelocity[e.pitch] = e.velocity;
+                    s.recordVelocity[e.a] = e.b;
                 }
             }
         };
@@ -638,6 +725,8 @@ juce::var MidiEngine::toVar() const
             o->setProperty ("start", c.start);
             o->setProperty ("length", c.length);
             o->setProperty ("notes", noteList (c.notes));   // "start length pitch velocity;" each
+            if (! c.controls.empty())
+                o->setProperty ("controls", controlList (c.controls));   // "tick number value;" each (number 128 = program)
             clips.add (juce::var (o));
         }
         t->setProperty ("clips", clips);
@@ -684,6 +773,7 @@ juce::StringArray MidiEngine::fromVar (const juce::var& v,
                     clip.start = (juce::int64) c["start"];
                     clip.length = (juce::int64) c["length"];
                     clip.notes = parseNotes (c["notes"].toString());
+                    clip.controls = parseControls (c["controls"].toString());
                     clips.push_back (std::move (clip));
                 }
             setClips (k, std::move (clips));
@@ -751,6 +841,16 @@ Midi::Clip MidiEngine::readMidiFile (const juce::File& file, int beatUnit, int b
     for (int i = 0; i < all.getNumEvents(); ++i)
     {
         const auto* e = all.getEventPointer (i);
+        if (e->message.isController() || e->message.isProgramChange())
+        {
+            const auto tick = (juce::int64) std::llround (e->message.getTimeStamp() * scale);
+            if (e->message.isController())
+                clip.controls.push_back ({ tick, e->message.getControllerNumber(), e->message.getControllerValue() });
+            else
+                clip.controls.push_back ({ tick, Midi::programChange, e->message.getProgramChangeNumber() });
+            last = juce::jmax (last, tick + 1);
+            continue;
+        }
         if (! e->message.isNoteOn())
             continue;
         Midi::Note n;
@@ -762,7 +862,7 @@ Midi::Clip MidiEngine::readMidiFile (const juce::File& file, int beatUnit, int b
         clip.notes.push_back (n);
         last = juce::jmax (last, n.start + n.length);
     }
-    if (clip.notes.empty())
+    if (clip.notes.empty() && clip.controls.empty())
     {
         error = file.getFileName() + " has no notes in it.";
         return clip;

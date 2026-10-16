@@ -154,6 +154,8 @@ public:
     bool isRecordEnabled() const noexcept   { return recordEnabled.load(); }
     bool isRecording (int track) const noexcept;
     juce::int64 getPosition() const noexcept { return position.load(); }
+    /** A locate asked for and not yet done (the next block starts there), or -1. */
+    juce::int64 getPendingLocate() const noexcept { return locateRequest.load(); }
     juce::int64 getLength() const noexcept   { return length.load(); }
     /** Play goes on past the end of the recording up to here (tape samples): the end of the MIDI page's last clip. */
     void setPlayOnUntil (juce::int64 samples) noexcept { playOnUntil.store (samples); }

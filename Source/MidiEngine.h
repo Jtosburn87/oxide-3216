@@ -21,11 +21,21 @@ namespace Midi
         bool operator== (const Note& o) const { return start == o.start && length == o.length && pitch == o.pitch && velocity == o.velocity; }
     };
 
+    /** A controller change (CC 0-127) or a program change (number programChange) in a clip. */
+    struct Control
+    {
+        juce::int64 tick = 0;   // from the clip's start
+        int number = 1, value = 0;
+        bool operator== (const Control& o) const { return tick == o.tick && number == o.number && value == o.value; }
+    };
+    constexpr int programChange = 128;   // Control::number of a program change (value = program 0-127)
+
     struct Clip
     {
         juce::String name;
         juce::int64 start = 0, length = 0;   // ticks from the start of the tape
         std::vector<Note> notes;
+        std::vector<Control> controls;        // CC and program changes, sorted by tick
         juce::int64 end() const noexcept { return start + length; }
     };
 
@@ -38,12 +48,15 @@ namespace Midi
         bool operator== (const Route& o) const { return kind == o.kind && (kind == none || first == o.first); }
     };
 
-    /** A note on or off from a MIDI keyboard while recording, at the tick it arrived (audio thread -> message thread). */
+    /** A note on or off, a CC or a program change from a MIDI keyboard while recording, at the tick it arrived
+        (audio thread -> message thread). */
     struct RecordedEvent
     {
+        enum Kind : std::uint8_t { note, controller, program };
         int track = 0;
         juce::int64 tick = 0;
-        std::uint8_t pitch = 0, velocity = 0;   // velocity 0 = note off
+        Kind kind = note;
+        std::uint8_t a = 0, b = 0;   // note: pitch, velocity (0 = off); controller: number, value; program: program
     };
 }
 
@@ -155,7 +168,14 @@ public:
     void tick() { timerCallback(); }
 
 private:
-    struct Event { juce::int64 tick; std::uint8_t pitch, velocity; };   // velocity 0 = off
+    /** The clips compiled for playback. Kinds sort in this order on the same tick: program, controller, off, on. */
+    struct Event
+    {
+        enum Kind : std::uint8_t { program = 0, controller = 1, noteOff = 2, noteOn = 3 };
+        juce::int64 tick;
+        Kind kind;
+        std::uint8_t a, b;   // note: pitch, velocity; controller: number, value; program: program
+    };
 
     struct Slot
     {
@@ -169,6 +189,7 @@ private:
         std::array<juce::int64, 128> recordHeld {};   // tick of the note on, -1 = up
         std::array<int, 128> recordVelocity {};
         std::vector<Midi::Note> recorded;             // absolute ticks
+        std::vector<Midi::Control> recordedControls;  // absolute ticks
         bool recordingTake = false;
 
         // Shared, swapped under the lock.

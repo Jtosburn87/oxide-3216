@@ -545,7 +545,8 @@ void AudioEngine::render (const float* const* inputs, int numInputs, float* cons
         if (osc)
             oscillator.process (oscOut.data(), n, oscTypeNow, oscFreqNow, oscGain);
         // The MIDI page's instruments, first: their outputs can be patched anywhere.
-        midi.process (n, tape.getPosition(), tape.getPlaybackRate(), tape.isPlaying(), tape.isRecordEnabled() && tape.isPlaying());
+        const auto pendingLocate = tape.getPendingLocate();   // a locate lands this block: the MIDI starts there too
+        midi.process (n, pendingLocate >= 0 ? pendingLocate : tape.getPosition(), tape.getPlaybackRate(), tape.isPlaying(), tape.isRecordEnabled() && tape.isPlaying());
         juce::FloatVectorOperations::clear (mixL.data(), n);
         juce::FloatVectorOperations::clear (mixR.data(), n);
         juce::FloatVectorOperations::clear (soloL.data(), n);
