@@ -2429,6 +2429,38 @@ namespace
         }
     }
 
+    void testMidiFiles()
+    {
+        std::puts ("MIDI page: a MIDI file (a plugin's groove dragged out) becomes a clip");
+        juce::MidiMessageSequence seq;
+        // 480 ticks a quarter: a kick on 1 and a snare on 2, an eighth note each, on the drum channel.
+        seq.addEvent (juce::MidiMessage::noteOn (10, 36, (juce::uint8) 110), 0.0);
+        seq.addEvent (juce::MidiMessage::noteOff (10, 36), 240.0);
+        seq.addEvent (juce::MidiMessage::noteOn (10, 38, (juce::uint8) 90), 480.0);
+        seq.addEvent (juce::MidiMessage::noteOff (10, 38), 720.0);
+        seq.updateMatchedPairs();
+        juce::MidiFile mf;
+        mf.setTicksPerQuarterNote (480);
+        mf.addTrack (seq);
+        const auto file = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("Oxide groove test.mid");
+        file.deleteFile();
+        {
+            juce::FileOutputStream out (file);
+            mf.writeTo (out);
+        }
+        juce::String error;
+        auto clip = MidiEngine::readMidiFile (file, 4, 4, 1920.0, error);
+        check (error.isEmpty() && clip.name == "Oxide groove test", "read, named after the file");
+        check (clip.notes.size() == 2 && clip.notes[0].start == 0 && clip.notes[1].start == 960 && clip.notes[0].length == 480
+               && clip.notes[0].pitch == 36 && clip.notes[1].velocity == 90, "notes on our grid (960 a quarter in 4/4)");
+        check (clip.length == 3840, "the clip is one bar long");
+        clip = MidiEngine::readMidiFile (file, 8, 6, 1920.0, error);
+        check (clip.notes.size() == 2 && clip.notes[1].start == 1920, "in 6/8 a quarter note is two of our beats");
+        file.deleteFile();
+        MidiEngine::readMidiFile (file, 4, 4, 1920.0, error);
+        check (error.isNotEmpty(), "a missing file is an error, not a crash");
+    }
+
     void testMidiSession()
     {
         std::puts ("MIDI page: tracks and clips are saved with the session");
@@ -3029,6 +3061,7 @@ int main (int argc, char** argv)
     testMidiPlayback();
     testMidiRouting();
     testMidiRecording();
+    testMidiFiles();
     testMidiSession();
     testScenes();
     testWowFlutter();

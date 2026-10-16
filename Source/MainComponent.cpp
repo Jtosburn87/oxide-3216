@@ -80,6 +80,11 @@ MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionControll
         applyCassetteAnimation();
     };
     addAndMakeVisible (tapeMachineButton);
+    midiButton.setTooltip ("The MIDI page: MIDI tracks with VST3 instruments on a timeline, in step with the tape");
+    midiButton.setColour (juce::TextButton::buttonOnColourId, ConsoleColours::amber);
+    midiButton.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1b1b1b));
+    midiButton.onClick = [this] { showMidiPage (midiPage == nullptr || ! midiPage->isVisible()); };
+    addAndMakeVisible (midiButton);
     viewSwitch.onChange = [this] (int v) { showView (v); };
     desk.setCollapsed (Desk::inputSection, settings.getIntValue ("collapsed.input"));
     desk.setCollapsed (Desk::returnSection, settings.getIntValue ("collapsed.return"));
@@ -331,13 +336,38 @@ void MainComponent::resized()
         b.setBounds (bar.removeFromLeft (76));
     bar.removeFromLeft (16);
     tapeMachineButton.setBounds (bar.removeFromLeft (120));
+    bar.removeFromLeft (6);
+    midiButton.setBounds (bar.removeFromLeft (64));
     bar.removeFromLeft (16);
     statusLabel.setBounds (bar);
 
     viewport.setBounds (getLocalBounds().withTrimmedTop (topBarH));
+    if (midiPage != nullptr)
+        midiPage->setBounds (getLocalBounds().withTrimmedTop (topBarH));
     patchBay.setBounds (getLocalBounds());
 
     fitToWindow();   // the console scales with the window
+}
+
+void MainComponent::showMidiPage (bool show)
+{
+    if (midiPage == nullptr)
+    {
+        midiPage = std::make_unique<MidiPage> (engine, pluginContext);
+        midiPage->onShowConsole = [this] { showMidiPage (false); };
+        addChildComponent (*midiPage);
+        patchBay.toFront (false);     // the patch bay pops up over the page too
+        topEdgeBar.toFront (false);
+        midiPage->setBounds (getLocalBounds().withTrimmedTop (topBarH));
+    }
+    midiPage->setVisible (show);
+    viewport.setVisible (! show);
+    for (auto& b : viewSwitch.buttons)
+        b.setEnabled (! show);
+    zoomSlider.setEnabled (! show);
+    midiButton.setToggleState (show, juce::dontSendNotification);
+    if (show)
+        midiPage->grabKeyboardFocus();
 }
 
 void MainComponent::forEachChain (const std::function<void (InsertChain&)>& fn)
@@ -429,7 +459,7 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
     ids.addArray ({ playStop, play, stop, record, rewind, fastForward, returnToZero,
                     newSession, openSession, saveSession, saveSessionAs, exportMix, importAudio,
                     recordViewCmd, mixViewCmd, fullViewCmd, nextViewCmd, fullScreenCmd,
-                    tapeMachineCmd, rackCmd, patchBayCmd, talkbackCmd });
+                    tapeMachineCmd, midiPageCmd, rackCmd, patchBayCmd, talkbackCmd });
     for (int t = 0; t < TapeMachine::numTracks; ++t)
         ids.add (armTrack1 + t);
     ids.add (disarmAllCmd);
@@ -518,6 +548,8 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
                             info.addDefaultKeypress (juce::KeyPress::F11Key, 0); break;
         case tapeMachineCmd: info.setInfo ("Tape Machine", "Opens the Tape Machine window (transport, cassette and meters)", "Windows", 0);
                             info.addDefaultKeypress ('t', cmd); break;
+        case midiPageCmd:   info.setInfo ("MIDI page", "Shows the MIDI page in place of the console, or the console again", "Windows", 0);
+                            info.addDefaultKeypress ('m', cmd); break;
         case rackCmd:       info.setInfo ("Rack", "Opens the effects rack", "Windows", 0);
                             info.addDefaultKeypress ('r', cmd); break;
         case patchBayCmd:   info.setInfo ("Patch bay", "Opens the patch bay", "Windows", 0);
@@ -576,6 +608,7 @@ bool MainComponent::perform (const InvocationInfo& info)
         case nextViewCmd:   showView ((desk.getView() + 1) % 3); return true;
         case fullScreenCmd: if (onToggleFullScreen) onToggleFullScreen(); return true;
         case tapeMachineCmd: tapeMachineButton.onClick(); return true;
+        case midiPageCmd:   midiButton.onClick(); return true;
         case rackCmd:       rackButton.onClick(); return true;
         case patchBayCmd:   patchButton.onClick(); return true;
         case talkbackCmd:   TalkbackSettings::show (engine); return true;
@@ -587,6 +620,8 @@ bool MainComponent::perform (const InvocationInfo& info)
 
 void MainComponent::showView (int v)
 {
+    if (midiPage != nullptr && midiPage->isVisible())
+        showMidiPage (false);   // a console view brings the console back
     desk.setView ((Desk::View) v);
     viewSwitch.setView (v);
     settings.setValue ("deskView", v);

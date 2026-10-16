@@ -111,6 +111,7 @@ target_sources(Oxide3216 PRIVATE
     Source/InsertsUI.cpp
     Source/RackWindow.cpp
     Source/BusCompWindow.cpp
+    Source/MidiPage.cpp
     Source/TempoPanel.cpp
     Source/MeterBridge.cpp
     Source/TapeMachineWindow.cpp

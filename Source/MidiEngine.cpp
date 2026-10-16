@@ -721,3 +721,54 @@ juce::StringArray MidiEngine::fromVar (const juce::var& v,
     changed();
     return missing;
 }
+
+//==============================================================================
+Midi::Clip MidiEngine::readMidiFile (const juce::File& file, int beatUnit, int beatsPerBar, double ticksPerSecond, juce::String& error)
+{
+    Midi::Clip clip;
+    clip.name = file.getFileNameWithoutExtension();
+    juce::FileInputStream in (file);
+    juce::MidiFile mf;
+    if (! in.openedOk() || ! mf.readFrom (in))
+    {
+        error = file.getFileName() + " is not a MIDI file Oxide can read.";
+        return clip;
+    }
+
+    // File ticks -> ours: a quarter note is beatUnit / 4 of our beats (960 ticks each). SMPTE files go through seconds.
+    const short format = mf.getTimeFormat();
+    const bool smpte = format <= 0;
+    if (smpte)
+        mf.convertTimestampTicksToSeconds();
+    const double scale = smpte ? ticksPerSecond : Tempo::ticksPerBeat * (beatUnit / 4.0) / (double) format;
+
+    juce::MidiMessageSequence all;
+    for (int t = 0; t < mf.getNumTracks(); ++t)
+        all.addSequence (*mf.getTrack (t), 0.0);
+    all.updateMatchedPairs();
+
+    juce::int64 last = 0;
+    for (int i = 0; i < all.getNumEvents(); ++i)
+    {
+        const auto* e = all.getEventPointer (i);
+        if (! e->message.isNoteOn())
+            continue;
+        Midi::Note n;
+        n.start = (juce::int64) std::llround (e->message.getTimeStamp() * scale);
+        const double off = e->noteOffObject != nullptr ? e->noteOffObject->message.getTimeStamp() : e->message.getTimeStamp() + (smpte ? 0.1 : format / 4.0);
+        n.length = juce::jmax ((juce::int64) 1, (juce::int64) std::llround (off * scale) - n.start);
+        n.pitch = e->message.getNoteNumber();
+        n.velocity = juce::jlimit (1, 127, (int) e->message.getVelocity());
+        clip.notes.push_back (n);
+        last = juce::jmax (last, n.start + n.length);
+    }
+    if (clip.notes.empty())
+    {
+        error = file.getFileName() + " has no notes in it.";
+        return clip;
+    }
+    std::sort (clip.notes.begin(), clip.notes.end(), [] (const Midi::Note& a, const Midi::Note& b) { return a.start < b.start; });
+    const juce::int64 bar = (juce::int64) beatsPerBar * Tempo::ticksPerBeat;
+    clip.length = juce::jmax (bar, (last + bar - 1) / bar * bar);
+    return clip;
+}

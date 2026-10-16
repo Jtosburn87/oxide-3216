@@ -97,6 +97,12 @@ public:
     /** The MIDI inputs on this computer (opened as they appear). */
     static juce::Array<juce::MidiDeviceInfo> availableInputs() { return juce::MidiInput::getAvailableDevices(); }
 
+    /** A standard MIDI file (dragged from a plugin's groove browser, or from Explorer) as a clip starting at 0: its
+        notes (every track and channel merged) in this tempo's ticks, the length rounded up to whole bars, named after
+        the file. beatUnit: the time signature's beat (4 = quarter notes). Empty clip and an error if it can't be read. */
+    static Midi::Clip readMidiFile (const juce::File&, int beatUnit, int beatsPerBar, double ticksPerSecond, juce::String& error);
+    static bool isMidiFile (const juce::String& path) { return path.endsWithIgnoreCase (".mid") || path.endsWithIgnoreCase (".midi") || path.endsWithIgnoreCase (".smf"); }
+
     // Instruments (message thread) --------------------------------------------
     /** Takes a created plugin (PluginManager::create), prefers stereo out, prepares it and swaps it in. */
     void setInstrument (int slot, std::unique_ptr<juce::AudioPluginInstance>, const juce::PluginDescription&);

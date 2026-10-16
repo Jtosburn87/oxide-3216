@@ -10,6 +10,7 @@
 #include "InsertsUI.h"
 #include "RackWindow.h"
 #include "BusCompWindow.h"
+#include "MidiPage.h"
 #include "TapeMachineWindow.h"
 #include "SessionController.h"
 #include "ImportAudioDialog.h"
@@ -52,6 +53,7 @@ private:
         tapeMachineCmd, rackCmd, patchBayCmd, talkbackCmd, disarmAllCmd, fullScreenCmd,
         jogScrubCmd, storeCmd, setInCmd, setOutCmd, loopCmd, goInCmd, goOutCmd, punchCmd,   // the Jog / shuttle box
         jogBackCmd, jogForwardCmd, shuttleBackCmd, shuttleForwardCmd,
+        midiPageCmd,
         armTrack1 = 100,  // armTrack1 + t arms / disarms tape track t + 1
         memory1 = 200     // memory1 + m: locate memory m + 1 (or stores there after Store)
     };
@@ -85,6 +87,9 @@ private:
     void showView (int view);   // switches the desk, lights its button and remembers it
     juce::TextButton tapeMachineButton { "Tape Machine" };
     std::unique_ptr<TapeMachineWindow> tapeWindow;   // made on first use, then only hidden
+    juce::TextButton midiButton { "MIDI" };      // the MIDI page in place of the console (lit while it shows)
+    std::unique_ptr<MidiPage> midiPage;
+    void showMidiPage (bool);
     /** The console's cassette moves (Options setting) unless the Tape machine window is showing it. */
     void applyCassetteAnimation();
     juce::Slider zoomSlider;
