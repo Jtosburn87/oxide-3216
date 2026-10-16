@@ -2,6 +2,7 @@
 
 #include <juce_audio_devices/juce_audio_devices.h>
 #include <juce_data_structures/juce_data_structures.h>
+#include <juce_audio_formats/juce_audio_formats.h>
 #include <array>
 #include <atomic>
 #include "Config.h"
@@ -160,6 +161,16 @@ public:
         and every output (aux and sub outs, the click, the solo bus on the monitors) is held back to stay in step with
         main. Off: nothing waits (lowest latency for tracking), so bus plugins with latency come out late. */
     Param* pdcOn = nullptr;
+
+    /** Bounce Song (real time): the main mix after the limiter (what the main outs carry, without the click) goes to
+        a writer from the audio thread while the song plays and you mix. skip: samples left out first (the plugin delay,
+        so the file starts on the song); total: samples to write, after which isBounceDone(). The writer stays the
+        caller's: stopBounce() before deleting it. Message thread. */
+    void startBounce (juce::AudioFormatWriter::ThreadedWriter*, juce::int64 skip, juce::int64 total);
+    void stopBounce();
+    bool isBouncing() const noexcept { return bouncing.load(); }
+    bool isBounceDone() const noexcept { return bounceDone.load(); }
+    juce::int64 getBounced() const noexcept { return bounceWritten.load(); }
     Param* mainFader = nullptr;
     Param* monitorLevel = nullptr;   // dB, -60 (off) .. +10: level of the monitor outs (headphones)
     static float monitorGain (float db) noexcept { return db <= -59.5f ? 0.0f : Dsp::dbToGain (db); }
@@ -292,6 +303,10 @@ private:
     std::array<Dsp::DelayLine, Config::numSubs * 2> subOutDelay;
     Dsp::DelayLine clickDelay, soloDelayL, soloDelayR;
     int clickTail = 0;    // samples of delayed click still to come out after it stops
+    juce::SpinLock bounceLock;
+    juce::AudioFormatWriter::ThreadedWriter* bounceWriter = nullptr;
+    std::atomic<bool> bouncing { false }, bounceDone { false };
+    std::atomic<juce::int64> bounceSkip { 0 }, bounceRemaining { 0 }, bounceWritten { 0 };
     Block subOutTemp {};
     std::array<Dsp::DelayLine, Config::numSubs * 2> subDelay;
     std::array<Dsp::DelayLine, Config::numAux * 2> returnDelay;

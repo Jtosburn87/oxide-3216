@@ -25,7 +25,9 @@ public:
     void openFolder (const juce::File& folder);
     void save();
     void saveAs();
-    void exportMix();
+    /** Session > Export tracks: Bounce Song (real time, mix as it plays) and Export From Tape (tracks straight off the tape). */
+    void bounceSong();
+    void exportFromTape();
 
     /** At start-up: reopens the last session, or asks for a name for a new one. */
     void startUp();

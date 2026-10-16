@@ -114,6 +114,7 @@ target_sources(Oxide3216 PRIVATE
     Source/MidiPage.cpp
     Source/TempoPanel.cpp
     Source/ClickSettings.cpp
+    Source/ExportDialogs.cpp
     Source/MeterBridge.cpp
     Source/TapeMachineWindow.cpp
     Source/EraseDialog.cpp

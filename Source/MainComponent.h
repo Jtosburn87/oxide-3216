@@ -53,7 +53,7 @@ private:
         tapeMachineCmd, rackCmd, patchBayCmd, talkbackCmd, disarmAllCmd, fullScreenCmd,
         jogScrubCmd, storeCmd, setInCmd, setOutCmd, loopCmd, goInCmd, goOutCmd, punchCmd,   // the Jog / shuttle box
         jogBackCmd, jogForwardCmd, shuttleBackCmd, shuttleForwardCmd,
-        midiPageCmd,
+        midiPageCmd, exportTapeCmd,
         armTrack1 = 100,  // armTrack1 + t arms / disarms tape track t + 1
         memory1 = 200     // memory1 + m: locate memory m + 1 (or stores there after Store)
     };

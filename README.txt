@@ -137,7 +137,7 @@ Jog / shuttle (right of the group EQ):
                  the tape there. RTZ winds back to zero.
 
 Keyboard: Space play/stop, Home rewind, End fast forward, Ctrl+N new, Ctrl+O open, Ctrl+S save,
-Ctrl+Shift+S save as, Ctrl+E export. Jog / shuttle: J Jog/Scrub, M Store, 1-6 memories, 0 RTZ,
+Ctrl+Shift+S save as, Ctrl+E Bounce Song, Ctrl+Shift+E Export From Tape. Jog / shuttle: J Jog/Scrub, M Store, 1-6 memories, 0 RTZ,
 I / O Set In / Out, Shift+I / Shift+O Go In / Out, L Loop, P Punch, , and . jog a notch back /
 forward, [ and ] step the shuttle ring back / forward (it stays there until Stop).
 Options > "Keyboard shortcuts" changes any of these and adds keys for Play, Stop and Record.
@@ -180,8 +180,12 @@ at once. Session > Save as copies the session to a new folder and carries on in 
 the old folder stays as it was, safe from new recording. Session > Open: choose the
 session.json inside a session folder. The last session reopens at start-up.
 
-Session > Export mix renders the main bus (after the limiter) from the start of the tape to
-its end plus 3 seconds, to a 24-bit WAV.
+Session > Export tracks, both into the session's Bounced Audio folder:
+- Bounce Song (Ctrl+E): plays the song in real time and records the main mix (after the limiter,
+  without the click) to a 24-bit stereo WAV, so you can mix as it plays. Whole song (to the end of the
+  tape or the last MIDI clip, plus 3 s) or In to Out. Finish or Stop ends it early; Cancel throws it away.
+- Export From Tape (Ctrl+Shift+E): the tape tracks you tick, whole tape or In to Out, straight off the
+  tape, one mono 24-bit WAV each ("<name> Track 01.wav", plus the return strip's name if renamed).
 
 
 WHERE THINGS ARE KEPT

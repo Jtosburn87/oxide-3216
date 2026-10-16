@@ -857,6 +857,32 @@ void AudioEngine::render (const float* const* inputs, int numInputs, float* cons
             monitorGainS.prepare (currentSampleRate, levelT);
         }
 
+        // Bounce Song: the main mix, after the limiter and before the click, into the bounce file.
+        if (mainLeft == nullptr && mainRight == nullptr && bouncing.load (std::memory_order_relaxed))
+        {
+            const juce::SpinLock::ScopedTryLockType tl (bounceLock);
+            if (tl.isLocked() && bounceWriter != nullptr && ! bounceDone.load (std::memory_order_relaxed))
+            {
+                int offset = 0;
+                if (const auto skip = bounceSkip.load (std::memory_order_relaxed); skip > 0)
+                {
+                    offset = (int) juce::jmin ((juce::int64) n, skip);
+                    bounceSkip.store (skip - offset, std::memory_order_relaxed);
+                }
+                const auto remaining = bounceRemaining.load (std::memory_order_relaxed);
+                const int count = (int) juce::jmin ((juce::int64) (n - offset), remaining);
+                if (count > 0)
+                {
+                    const float* channels[] = { mixL.data() + offset, mixR.data() + offset };
+                    bounceWriter->write (channels, count);
+                    bounceRemaining.store (remaining - count, std::memory_order_relaxed);
+                    bounceWritten.fetch_add (count, std::memory_order_relaxed);
+                }
+                if (bounceRemaining.load (std::memory_order_relaxed) <= 0)
+                    bounceDone.store (true);
+            }
+        }
+
         // Click, with its main send on: added to the main and monitor outs after the limiter, so it is heard but never
         // recorded or exported.
         if (clickNow && tempo.clickMain->on())
@@ -1063,4 +1089,23 @@ void AudioEngine::removeMidiTrack (int slot)
         if ((getPatch (d) & instrumentBits (slot)).any())
             setPatch (d, getPatch (d) & ~instrumentBits (slot));
     midi.removeTrack (slot);
+}
+
+//==============================================================================
+void AudioEngine::startBounce (juce::AudioFormatWriter::ThreadedWriter* writer, juce::int64 skip, juce::int64 total)
+{
+    const juce::SpinLock::ScopedLockType sl (bounceLock);
+    bounceWriter = writer;
+    bounceSkip = juce::jmax ((juce::int64) 0, skip);
+    bounceRemaining = juce::jmax ((juce::int64) 0, total);
+    bounceWritten = 0;
+    bounceDone = false;
+    bouncing = writer != nullptr;
+}
+
+void AudioEngine::stopBounce()
+{
+    const juce::SpinLock::ScopedLockType sl (bounceLock);   // the audio thread is not writing once this is held
+    bounceWriter = nullptr;
+    bouncing = false;
 }

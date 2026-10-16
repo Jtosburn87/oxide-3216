@@ -474,3 +474,80 @@ Session::Result Session::exportMix (AudioEngine& e, const juce::File& file, juce
     }
     return r;
 }
+
+//==============================================================================
+juce::String Session::tapeExportName (AudioEngine& e, const juce::String& prefix, int track)
+{
+    auto name = prefix.trim() + (prefix.trim().isNotEmpty() ? " " : "") + "Track " + juce::String (track + 1).paddedLeft ('0', 2);
+    if (juce::isPositiveAndBelow (track, e.returnStrips.size()))
+    {
+        const auto& strip = *e.returnStrips[track];
+        if (strip.name.isNotEmpty() && strip.name != defaultStripName (strip))
+            name << " " << strip.name;
+    }
+    return juce::File::createLegalFileName (name) + ".wav";
+}
+
+Session::Result Session::exportTapeTracks (AudioEngine& e, const juce::File& folder, const juce::String& prefix, const juce::Array<int>& tracks,
+                                           juce::int64 start, juce::int64 end, const std::function<bool (double)>& progress,
+                                           juce::Array<juce::File>* written)
+{
+    Result r;
+    auto& tape = e.tape;
+    start = juce::jmax ((juce::int64) 0, start);
+    if (tracks.isEmpty() || end <= start)
+    {
+        r.ok = false;
+        r.error = tracks.isEmpty() ? juce::String ("No tracks chosen.") : juce::String ("The Out point must be after the In point.");
+        return r;
+    }
+    folder.createDirectory();
+    const double sr = tape.getSampleRate();
+    const auto length = end - start;
+    std::vector<float> buffer ((size_t) TapeMachine::chunkSize);
+    juce::WavAudioFormat wav;
+    const double total = (double) length * tracks.size();
+    double done = 0.0;
+
+    for (int t : tracks)
+    {
+        if (! juce::isPositiveAndBelow (t, TapeMachine::numTracks))
+            continue;
+        const auto file = folder.getChildFile (tapeExportName (e, prefix, t));
+        file.deleteFile();
+        auto stream = file.createOutputStream();
+        std::unique_ptr<juce::AudioFormatWriter> writer (stream != nullptr ? wav.createWriterFor (stream.get(), sr, 1, 24, {}, 0) : nullptr);
+        if (writer == nullptr)
+        {
+            r.ok = false;
+            r.error = "Could not write " + file.getFullPathName();
+            return r;
+        }
+        stream.release();
+
+        for (juce::int64 pos = start; pos < end;)
+        {
+            const int n = (int) juce::jmin ((juce::int64) buffer.size(), end - pos);
+            {
+                const juce::ScopedLock sl (tape.getStorageLock());
+                tape.readTrack (t, pos, buffer.data(), n);
+            }
+            const float* channels[] = { buffer.data() };
+            writer->writeFromFloatArrays (channels, 1, n);
+            pos += n;
+            done += n;
+            if (progress && ! progress (done / total))
+            {
+                writer.reset();
+                file.deleteFile();
+                r.ok = false;
+                r.error = "Export cancelled.";
+                return r;
+            }
+        }
+        writer.reset();
+        if (written != nullptr)
+            written->add (file);
+    }
+    return r;
+}

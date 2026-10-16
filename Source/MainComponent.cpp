@@ -425,7 +425,10 @@ void MainComponent::showSessionMenu()
     m.addCommandItem (&commands, saveSessionAs, "Save as...");
     m.addSeparator();
     m.addCommandItem (&commands, importAudio, "Import audio...");
-    m.addCommandItem (&commands, exportMix, "Export mix to WAV...");
+    juce::PopupMenu exports;
+    exports.addCommandItem (&commands, exportMix, "Bounce Song...");
+    exports.addCommandItem (&commands, exportTapeCmd, "Export From Tape...");
+    m.addSubMenu ("Export tracks", exports);
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (sessionButton));
 }
 
@@ -463,7 +466,7 @@ bool MainComponent::AssignedKeysFirst::keyPressed (const juce::KeyPress& k, juce
 void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
 {
     ids.addArray ({ playStop, play, stop, record, rewind, fastForward, returnToZero,
-                    newSession, openSession, saveSession, saveSessionAs, exportMix, importAudio,
+                    newSession, openSession, saveSession, saveSessionAs, exportMix, exportTapeCmd, importAudio,
                     recordViewCmd, mixViewCmd, fullViewCmd, nextViewCmd, fullScreenCmd,
                     tapeMachineCmd, midiPageCmd, rackCmd, patchBayCmd, talkbackCmd });
     for (int t = 0; t < TapeMachine::numTracks; ++t)
@@ -538,8 +541,10 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
                             info.addDefaultKeypress ('s', cmd); break;
         case saveSessionAs: info.setInfo ("Save as", "Copies the session to a new folder and carries on in the copy", "Session", 0);
                             info.addDefaultKeypress ('s', cmd | juce::ModifierKeys::shiftModifier); break;
-        case exportMix:     info.setInfo ("Export mix", "Exports the whole session or In to Out as a WAV in the session's Bounced Audio folder", "Session", 0);
+        case exportMix:     info.setInfo ("Bounce Song", "Plays the song in real time and records the main mix to a WAV in Bounced Audio (mix as it plays)", "Session", 0);
                             info.addDefaultKeypress ('e', cmd); break;
+        case exportTapeCmd: info.setInfo ("Export From Tape", "Writes the chosen tape tracks straight off the tape, one mono WAV each, into Bounced Audio", "Session", 0);
+                            info.addDefaultKeypress ('e', cmd | juce::ModifierKeys::shiftModifier); break;
         case importAudio:   info.setInfo ("Import audio", "Imports an audio file onto one tape track (a stereo file onto two)", "Session", 0);
                             info.addDefaultKeypress ('i', cmd); break;
         case recordViewCmd: info.setInfo ("Record view", "Shows input channels 1-16 and the centre section", "View", 0);
@@ -606,7 +611,8 @@ bool MainComponent::perform (const InvocationInfo& info)
         case openSession:   sessions.openSession(); return true;
         case saveSession:   sessions.save(); return true;
         case saveSessionAs: sessions.saveAs(); return true;
-        case exportMix:     sessions.exportMix(); return true;
+        case exportMix:     sessions.bounceSong(); return true;
+        case exportTapeCmd: sessions.exportFromTape(); return true;
         case importAudio:   ImportAudioDialog::show (engine, settings); return true;
         case recordViewCmd: showView (Desk::recordView); return true;
         case mixViewCmd:    showView (Desk::mixView); return true;

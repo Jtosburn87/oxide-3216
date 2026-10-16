@@ -2657,6 +2657,78 @@ namespace
                "the click EQ is there and stays out of scenes");
     }
 
+    void testExports()
+    {
+        std::puts ("Exports: Bounce Song records the main mix in real time; Export From Tape writes tracks straight off the tape");
+        const auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("Oxide export test");
+        dir.deleteRecursively();
+        {
+            TestEngine e;
+            e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }));
+            // Track 2: a ramp, track 5: a constant; track 1 stays blank.
+            std::vector<float> ramp (48000), level (48000, 0.25f);
+            for (size_t i = 0; i < ramp.size(); ++i)
+                ramp[i] = (float) i / 48000.0f;
+            e.tape.writeTrack (1, 0, ramp.data(), (int) ramp.size());
+            e.tape.writeTrack (4, 0, level.data(), (int) level.size());
+            e.returnStrips[4]->name = "Bass";
+            juce::Array<juce::File> written;
+            const auto r = Session::exportTapeTracks (e, dir, "Song", { 1, 4 }, 12000, 36000, {}, &written);
+            check (r.ok && written.size() == 2, "two tracks written");
+            check (written.size() == 2 && written[0].getFileName() == "Song Track 02.wav" && written[1].getFileName() == "Song Track 05 Bass.wav",
+                   "named by track (and the renamed return strip)");
+            juce::AudioFormatManager fm;
+            fm.registerBasicFormats();
+            if (written.size() == 2)
+            {
+                std::unique_ptr<juce::AudioFormatReader> reader (fm.createReaderFor (written[0]));
+                check (reader != nullptr && reader->numChannels == 1 && reader->lengthInSamples == 24000 && reader->bitsPerSample == 24,
+                       "mono, 24-bit, In to Out long");
+                if (reader != nullptr)
+                {
+                    juce::AudioBuffer<float> b (1, 24000);
+                    reader->read (&b, 0, 24000, 0, true, false);
+                    check (std::abs (b.getSample (0, 0) - 0.25f) < 1.0e-5f && std::abs (b.getSample (0, 23999) - 35999.0f / 48000.0f) < 1.0e-5f,
+                           "the audio exactly as it is on the tape");
+                }
+            }
+        }
+        {
+            // Bounce: an interface input through strip 1 to main, captured from the audio callback.
+            TestEngine e;
+            e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }));
+            mapOnly (e, 0, 0);
+            const auto file = dir.getChildFile ("Bounce.wav");
+            juce::TimeSliceThread thread ("test writer");
+            thread.startThread();
+            juce::WavAudioFormat wav;
+            auto stream = file.createOutputStream();
+            auto* writer = wav.createWriterFor (stream.get(), 48000.0, 2, 24, {}, 0);
+            stream.release();
+            auto threaded = std::make_unique<juce::AudioFormatWriter::ThreadedWriter> (writer, thread, 1 << 16);
+            e.startBounce (threaded.get(), 0, 4800);
+            Buffers b (1, 2, 480);
+            std::fill (b.in[0].begin(), b.in[0].end(), 0.5f);
+            for (int k = 0; k < 20; ++k)
+                b.run (e);
+            check (e.isBounceDone() && e.getBounced() == 4800, "stops after the samples it was asked for");
+            e.stopBounce();
+            threaded = nullptr;
+            thread.stopThread (2000);
+            juce::AudioFormatManager fm;
+            fm.registerBasicFormats();
+            std::unique_ptr<juce::AudioFormatReader> reader (fm.createReaderFor (file));
+            check (reader != nullptr && reader->numChannels == 2 && reader->lengthInSamples == 4800, "a stereo file of that length");
+            if (reader != nullptr)
+            {
+                juce::AudioBuffer<float> got (2, 4800);
+                reader->read (&got, 0, 4800, 0, true, true);
+                check (std::abs (got.getSample (0, 4000) - 0.5f * pan) < 1.0e-4f, "the main mix, as the main outs carry it");
+            }
+        }
+        dir.deleteRecursively();
+    }
+
     void testWowFlutter()
     {
         std::puts ("Tape: wow and flutter");
@@ -3229,6 +3301,7 @@ int main (int argc, char** argv)
     testShuttleJogScrub();
     testTempoAndClick();
     testClickStrip();
+    testExports();
     testMidiPlayback();
     testMidiRouting();
     testMidiRecording();

@@ -1,5 +1,6 @@
 #include "SessionController.h"
 #include "PluginManager.h"
+#include "ExportDialogs.h"
 
 namespace
 {
@@ -13,51 +14,6 @@ namespace
 
     std::uint64_t mix (std::uint64_t h, const juce::String& s) noexcept { return mix (h, (std::uint64_t) s.hashCode64()); }
 
-    /** Renders the mix on a worker thread while the audio device is not calling the engine. */
-    class ExportJob : public juce::ThreadWithProgressWindow
-    {
-    public:
-        ExportJob (AudioEngine& e, juce::File f, juce::int64 startSample, juce::int64 endSample, double tail)
-            : juce::ThreadWithProgressWindow ("Exporting " + f.getFileName(), true, true), engine (e), file (std::move (f)),
-              start (startSample), end (endSample), tailSeconds (tail)
-        {
-            setStatusMessage ("Rendering the main mix to a 24-bit WAV...");
-        }
-
-        void run() override
-        {
-            result = Session::exportMix (engine, file, start, end, tailSeconds, [this] (double p)
-            {
-                setProgress (p);
-                return ! threadShouldExit();
-            });
-        }
-
-        void threadComplete (bool) override
-        {
-            engine.getDeviceManager().addAudioCallback (&engine);   // live audio again
-            if (result.ok)
-                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Export finished",
-                                                        "The mix was saved to\n" + file.getFullPathName());
-            else
-                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Export", result.error);
-            delete this;
-        }
-
-    private:
-        AudioEngine& engine;
-        juce::File file;
-        juce::int64 start, end;
-        double tailSeconds;
-        Session::Result result;
-    };
-
-    juce::String formatTime (juce::int64 samples, double sampleRate)
-    {
-        const double s = (double) samples / juce::jmax (1.0, sampleRate);
-        const int minutes = (int) (s / 60.0);
-        return juce::String (minutes) + ":" + juce::String (s - minutes * 60.0, 1).paddedLeft ('0', 4);
-    }
 }
 
 //==============================================================================
@@ -380,70 +336,6 @@ void SessionController::saveAs()
     });
 }
 
-void SessionController::exportMix()
-{
-    if (engine.tape.getLength() <= 0)
-    {
-        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Export", "The tape is empty: record something first.");
-        return;
-    }
-
-    // Exports go in "Bounced Audio" inside the session folder (or inside the sessions folder before the first save).
-    const auto bounced = Session::bounceFolder (folder != juce::File() ? folder : sessionsFolder());
-    auto& tape = engine.tape;
-    const double sr = tape.getSampleRate();
-    const bool hasRegion = tape.hasRegion();
-
-    auto* w = new juce::AlertWindow ("Export mix", "24-bit WAV of the main mix, saved in\n" + bounced.getFullPathName(),
-                                     juce::MessageBoxIconType::NoIcon);
-    w->addComboBox ("range", { "Whole session",
-                               hasRegion ? "In to Out (" + formatTime (tape.getInPoint(), sr) + " - " + formatTime (tape.getOutPoint(), sr) + ")"
-                                         : juce::String ("In to Out (set In and Out first)") }, "Export");
-    auto* range = w->getComboBoxComponent ("range");
-    range->setItemEnabled (2, hasRegion);
-    range->setSelectedItemIndex (hasRegion && settings.getValue ("exportRange") == "inOut" ? 1 : 0);
-    w->addTextEditor ("name", juce::File::createLegalFileName (engine.projectName.toString()), "File name");
-    w->addButton ("Export", 1, juce::KeyPress (juce::KeyPress::returnKey));
-    w->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
-
-    w->enterModalState (true, juce::ModalCallbackFunction::create ([this, w, bounced] (int button)
-    {
-        if (button != 1)
-            return;
-        const bool inOut = w->getComboBoxComponent ("range")->getSelectedItemIndex() == 1 && engine.tape.hasRegion();
-        settings.setValue ("exportRange", inOut ? "inOut" : "whole");
-
-        auto name = juce::File::createLegalFileName (w->getTextEditorContents ("name").trim());
-        if (name.isEmpty())
-            name = "Mix";
-        auto file = bounced.getChildFile (name);
-        if (! file.hasFileExtension ("wav"))
-            file = bounced.getChildFile (name + ".wav");
-
-        auto& t = engine.tape;
-        const auto start = inOut ? t.getInPoint() : (juce::int64) 0;
-        const auto end = inOut ? t.getOutPoint() : t.getLength();
-        const double tail = inOut ? 0.0 : 3.0;   // a region stops at Out; the whole session lets reverbs ring out
-
-        auto run = [this, file, start, end, tail]
-        {
-            engine.tape.stop();
-            engine.getDeviceManager().removeAudioCallback (&engine);   // the export renders the engine itself
-            (new ExportJob (engine, file, start, end, tail))->launchThread();
-        };
-
-        if (! file.existsAsFile())
-            return run();
-
-        auto options = juce::MessageBoxOptions()
-                           .withIconType (juce::MessageBoxIconType::QuestionIcon)
-                           .withTitle ("Export mix")
-                           .withMessage (file.getFileName() + " is already in Bounced Audio. Replace it?")
-                           .withButton ("Replace")
-                           .withButton ("Cancel");
-        juce::AlertWindow::showAsync (options, [run] (int result) { if (result == 1) run(); });
-    }), true);
-}
 
 //==============================================================================
 void SessionController::startUp()
@@ -460,4 +352,15 @@ void SessionController::shutDown()
     stopTimer();
     engine.tape.stop();
     writeAll (false);
+}
+
+//==============================================================================
+void SessionController::bounceSong()
+{
+    ExportDialogs::bounceSong (engine, Session::bounceFolder (folder != juce::File() ? folder : sessionsFolder()), settings);
+}
+
+void SessionController::exportFromTape()
+{
+    ExportDialogs::exportFromTape (engine, Session::bounceFolder (folder != juce::File() ? folder : sessionsFolder()), settings);
 }

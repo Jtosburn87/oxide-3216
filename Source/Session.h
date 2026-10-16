@@ -39,6 +39,15 @@ namespace Session
     Result exportMix (AudioEngine&, const juce::File& wav, juce::int64 start, juce::int64 end, double tailSeconds,
                       const std::function<bool (double)>& progress);
 
+    /** Export From Tape: each listed tape track (0-based), from start to end (tape samples), straight off the tape into its
+        own mono 24-bit WAV in folder, named "<prefix> Track 01.wav" (plus the return strip's name if it was renamed).
+        Reads under the tape's storage lock, so it runs on a worker thread while audio plays. progress: 0..1, false cancels.
+        written gets the files made. */
+    Result exportTapeTracks (AudioEngine&, const juce::File& folder, const juce::String& prefix, const juce::Array<int>& tracks,
+                             juce::int64 start, juce::int64 end, const std::function<bool (double)>& progress,
+                             juce::Array<juce::File>* written = nullptr);
+    juce::String tapeExportName (AudioEngine&, const juce::String& prefix, int track);
+
     /** Exports go in this subfolder of the session folder. */
     static constexpr const char* bounceFolderName = "Bounced Audio";
     juce::File bounceFolder (const juce::File& sessionFolder);
