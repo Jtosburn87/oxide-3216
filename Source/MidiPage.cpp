@@ -52,10 +52,10 @@ namespace
                 b.onClick = std::move (fn);
                 addAndMakeVisible (b);
             };
-            setUp (hOut, "−", "Zoom out across (Ctrl or Alt + mouse wheel too)", [this] { if (onHorizontal) onHorizontal (-1); });
-            setUp (hIn, "+", "Zoom in across (Ctrl or Alt + mouse wheel too)", [this] { if (onHorizontal) onHorizontal (1); });
-            setUp (vOut, "−", "Zoom out down: shorter rows", [this] { if (onVertical) onVertical (-1); });
-            setUp (vIn, "+", "Zoom in down: taller rows", [this] { if (onVertical) onVertical (1); });
+            setUp (hOut, "−", "Zoom out across (Alt + mouse wheel too)", [this] { if (onHorizontal) onHorizontal (-1); });
+            setUp (hIn, "+", "Zoom in across (Alt + mouse wheel too)", [this] { if (onHorizontal) onHorizontal (1); });
+            setUp (vOut, "−", "Zoom out down: shorter rows (Ctrl + mouse wheel too)", [this] { if (onVertical) onVertical (-1); });
+            setUp (vIn, "+", "Zoom in down: taller rows (Ctrl + mouse wheel too)", [this] { if (onVertical) onVertical (1); });
         }
 
         std::function<void (int)> onHorizontal, onVertical;
@@ -721,13 +721,15 @@ public:
 
     void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override
     {
-        if (e.mods.isCommandDown() || e.mods.isAltDown())
+        if (e.mods.isAltDown())
         {
             // Zoom round the mouse.
             const double at = tickForX (e.position.x);
             pxPerBeat = juce::jlimit (4.0, 400.0, pxPerBeat * (wheel.deltaY > 0 ? 1.25 : 0.8));
             scrollBeats = juce::jmax (0.0, at / Tempo::ticksPerBeat - e.position.x / pxPerBeat);
         }
+        else if (e.mods.isCommandDown())
+            page.zoomLanes (wheel.deltaY > 0 ? 1 : -1);
         else if (e.mods.isShiftDown() || std::abs (wheel.deltaX) > std::abs (wheel.deltaY))
             scrollBeats = juce::jmax (0.0, scrollBeats - (wheel.deltaX != 0.0f ? wheel.deltaX : wheel.deltaY) * 200.0 / pxPerBeat);
         else
@@ -1407,12 +1409,14 @@ public:
     {
         if (clip() == nullptr)
             return;
-        if (e.mods.isCommandDown() || e.mods.isAltDown())
+        if (e.mods.isAltDown())
         {
             const double at = tickFor (e.position.x);
             pxPerTick = juce::jlimit (0.005, 2.0, pxPerTick * (wheel.deltaY > 0 ? 1.25 : 0.8));
             scrollTicks = juce::jmax (0.0, at - (e.position.x - keysW) / pxPerTick);
         }
+        else if (e.mods.isCommandDown())
+            zoomRows (wheel.deltaY > 0 ? 1 : -1);
         else if (e.mods.isShiftDown())
             scrollTicks = juce::jmax (0.0, scrollTicks - wheel.deltaY * 200.0 / pxPerTick);
         else
