@@ -38,7 +38,7 @@ jobs:
         env:
           CMAKE_C_COMPILER_LAUNCHER: ccache
           CMAKE_CXX_COMPILER_LAUNCHER: ccache
-        run: ./build.sh Release
+        run: bash build.sh Release   # build.sh is not executable in git (committed from Windows)
 
       - name: Pack
         run: |
