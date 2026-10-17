@@ -2,7 +2,8 @@ OXIDE-3216
 ==========
 
 A 16-track tape machine fed by a 32-channel console, for Windows 10/11 (64-bit). A macOS
-version (11 Big Sur or later, Apple silicon and Intel) is being tested: see "On a Mac" below.
+version (11 Big Sur or later, Apple silicon and Intel) and a Linux version are being tested: see
+"On a Mac" and "On Linux" below. The Credits button in the top bar says who made it and how to get in touch.
 
 
 RUNNING IT
@@ -23,6 +24,10 @@ registered Apple developer yet, so the first time, right-click it and choose Ope
 Allow microphone access when asked: macOS calls every audio interface input a "microphone", and
 without it every input is silent. Audio device lists your Core Audio interfaces. The plugin scan
 finds VST3 plugins and Audio Units. Wherever this README says Ctrl, use Cmd.
+
+On Linux (in testing; built on Ubuntu 22.04, x64): untar anywhere and run ./Oxide-3216. It uses
+ALSA or JACK (PipeWire serves JACK clients too). It needs the usual desktop libraries (ALSA,
+FreeType, Fontconfig, X11), which any desktop distro already has.
 
 
 THE CONSOLE

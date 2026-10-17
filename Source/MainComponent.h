@@ -17,6 +17,7 @@
 #include "SectionWindow.h"
 #include "ChannelStripWindow.h"
 #include "TopEdgeBar.h"
+#include "CreditsWindow.h"
 
 /** Top bar (name plate, zoom, status) above the zoomable desk. The app buttons live on the desk. */
 class MainComponent : public juce::Component,
@@ -89,6 +90,7 @@ private:
     std::unique_ptr<TapeMachineWindow> tapeWindow;   // made on first use, then only hidden
     juce::TextButton midiButton { "MIDI" };      // the MIDI page in place of the console (lit while it shows)
     std::unique_ptr<MidiPage> midiPage;
+    juce::TextButton creditsButton { "Credits" };   // who made it, and how to get in touch
     void showMidiPage (bool);
     /** The console's cassette moves (Options setting) unless the Tape machine window is showing it. */
     void applyCassetteAnimation();

@@ -4,7 +4,7 @@
 # Has to come before project().
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Oldest macOS the app runs on")
 
-project(Oxide3216 VERSION 0.1.7 LANGUAGES C CXX)
+project(Oxide3216 VERSION 0.1.8 LANGUAGES C CXX)
 
 # Beta builds: bump the version above with each set of changes. The label is what the app and the zip show.
 set(OXIDE_VERSION_LABEL "${PROJECT_VERSION}-beta")
@@ -121,6 +121,7 @@ target_sources(Oxide3216 PRIVATE
     Source/ShuttlePanel.cpp
     Source/SceneWindow.cpp
     Source/TalkbackSettings.cpp
+    Source/CreditsWindow.cpp
     Source/AudioSettingsComponent.cpp
     Source/BusCompPanel.cpp
     Source/Cassette.cpp

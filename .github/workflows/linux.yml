@@ -1,0 +1,58 @@
+# Builds the Linux release zip on GitHub's Ubuntu machines and runs the engine tests there.
+# (The Linux Mint PC still rebuilds itself from main with update-linux.sh; this is for the download.)
+# The tarball is kept as a download on the run's page (Actions > Linux build > the run > Artifacts).
+#
+# Ubuntu 22.04 so the app also runs on older distros (Mint 21 and up): glibc is only forward compatible.
+# Runs by hand (Actions > Linux build > Run workflow), on a tag like v0.1.8, or when this file changes.
+name: Linux build
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+    branches: [main]
+    paths: [".github/workflows/linux.yml"]
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev libjack-jackd2-dev libfreetype6-dev libfontconfig1-dev \
+            libx11-dev libxcomposite-dev libxcursor-dev libxext-dev libxinerama-dev \
+            libxrandr-dev libxrender-dev libgl1-mesa-dev
+
+      - name: Compiler cache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: linux
+          max-size: 2G
+
+      - name: Build and test
+        env:
+          CMAKE_C_COMPILER_LAUNCHER: ccache
+          CMAKE_CXX_COMPILER_LAUNCHER: ccache
+        run: ./build.sh Release
+
+      - name: Pack
+        run: |
+          version="$(sed -nE 's/^project\(Oxide3216 VERSION ([0-9.]+).*/\1/p' CMakeLists.txt)"
+          version+="$(sed -nE 's/.*OXIDE_VERSION_LABEL "\$\{PROJECT_VERSION\}([^"]*)".*/\1/p' CMakeLists.txt)"
+          stage="dist/Oxide-3216-$version"
+          mkdir -p "$stage"
+          cp build-linux/Oxide3216_artefacts/Release/Oxide-3216 "$stage/"
+          strip "$stage/Oxide-3216"
+          cp README.txt Resources/oxide-3216-icon.svg "$stage/"
+          tar -C dist -czf "dist/Oxide-3216-$version-linux-x64.tar.gz" "Oxide-3216-$version"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Oxide-3216-linux
+          path: dist/*.tar.gz
+          if-no-files-found: error

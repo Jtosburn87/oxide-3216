@@ -85,6 +85,9 @@ MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionControll
     midiButton.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1b1b1b));
     midiButton.onClick = [this] { showMidiPage (midiPage == nullptr || ! midiPage->isVisible()); };
     addAndMakeVisible (midiButton);
+    creditsButton.setTooltip ("Who made Oxide-3216, and where to send bugs and feature requests");
+    creditsButton.onClick = [] { CreditsWindow::show(); };
+    addAndMakeVisible (creditsButton);
     viewSwitch.onChange = [this] (int v) { showView (v); };
     desk.setCollapsed (Desk::inputSection, settings.getIntValue ("collapsed.input"));
     desk.setCollapsed (Desk::returnSection, settings.getIntValue ("collapsed.return"));
@@ -340,6 +343,8 @@ void MainComponent::resized()
     tapeMachineButton.setBounds (bar.removeFromLeft (120));
     bar.removeFromLeft (6);
     midiButton.setBounds (bar.removeFromLeft (64));
+    bar.removeFromLeft (6);
+    creditsButton.setBounds (bar.removeFromLeft (76));
     bar.removeFromLeft (16);
     statusLabel.setBounds (bar);
 
