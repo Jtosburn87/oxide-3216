@@ -95,15 +95,32 @@ yours). Scenes and the fade time are saved with the session.
 
 Tempo (top right of the centre section): the tempo (drag up / down, Shift for fine, mouse wheel, or
 double-click to type 20-300), the time signature (click for a menu), Tap (tap the beat four times or
-more), the song position in bar | beat | tick (bar 1 is the start of the tape; 960 ticks a beat), and
+more), the song position in bar | beat | tick (bar 1 is the start of the tape; 960 ticks a quarter note), and
 the Click with its level and Setup: the click's own strip with level, pan, a four-band EQ, sends
 to Aux 1-8 for the headphone mixes (they join after the aux returns, like the talkback) and the Main send on / off. The click sounds on every beat while the tape plays, higher on the first
 beat of the bar, on the main and monitor outs only: it is never recorded or exported. The tempo is
 saved with the session and is not part of scenes.
+Tempo map: Session > Import tempo map... (or Tempo map on the MIDI page) reads the tempo and time
+signature changes from a MIDI file. The click, the bars, the grid and the MIDI follow them from bar 1;
+audio on tape does not move. While a map is in, the Tempo box shows the tempo and signature where the
+tape is (the legend turns amber) and can't be changed by hand: Session > Clear tempo map goes back to
+one tempo (the map's opening one).
 
 Signal flow: input strip -> tape in (normalled) -> tape out -> return strip (normalled).
 Both banks go to main and/or the subs. Subs -> group EQ -> inserts -> sub fader -> main.
 Main: bus compressor -> master inserts -> main fader -> limiter at -3 dBFS -> outputs.
+
+
+MIDI PAGE
+---------
+
+The MIDI button (Ctrl+M) shows the MIDI page in place of the console: MIDI tracks (each with one VST3
+instrument, a MIDI input and Out: routing into the input section or the tape), a timeline of clips in
+Bars or Min:Sec with snap, and the piano roll of the selected clip. The timeline runs with the tape.
+Mouse wheel: scrolls up and down; Shift + wheel scrolls across; Alt + wheel zooms across; Ctrl + wheel
+zooms down (taller or shorter tracks, or piano roll rows). Alt + drag duplicates a clip.
+Drag a MIDI file onto the timeline to make a clip; if the file has a tempo map, a menu asks whether to
+bring the map too (it starts where the clip lands).
 
 
 TAPE
