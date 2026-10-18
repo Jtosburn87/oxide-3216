@@ -116,9 +116,11 @@ public:
     ParamSet params;
     SceneMemory scenes { params };   // 99 scenes of the faders and knobs (saved with the session)
     juce::OwnedArray<ChannelStrip> inputStrips, returnStrips;
-    /** Stereo links between neighbouring strips (1+2, 3+4, ...): everything follows, pan mirrors. See StripLink. */
-    std::array<Param*, Config::numInputStrips / 2> inputLink {};
-    std::array<Param*, Config::numReturnStrips / 2> returnLink {};
+    /** Stereo links between any two strips of a bank: everything follows, pan mirrors. See BankLinks. */
+    BankLinks inputLinks { params, inputStrips }, returnLinks { params, returnStrips };
+    /** A stereo file went onto tape tracks left and right: links their return strips (the lower one's settings
+        copied onto the other) and pans them hard left / hard right. */
+    void linkStereoReturns (int left, int right);
     TapeMachine tape { params };
     juce::OwnedArray<FourBandEq> groupEq;                  // one stereo group EQ per sub
     std::array<Param*, Config::numSubs> subFader {};       // 0..100, unity at 80 (faders arrive in stage 5)
@@ -258,12 +260,16 @@ private:
     std::array<std::array<std::atomic<float>, 2>, Config::numSubs> subPeak;
     std::array<std::atomic<float>, Config::numAux> auxPeak;
     std::atomic<std::uint64_t> callbackCount { 0 };
+    double callbackTimeMs = -1.0;   // when the device callback came in (for the MIDI outputs); -1 rendering offline
+    int deviceOutputLatency = 0;     // samples, as the device reports it
+    int lastOutputDelay = 0;         // samples every output waits for the plugins (previous block)
     double currentSampleRate = 48000.0;
     Dsp::Oscillator oscillator;
     TalkbackLimiter tbLimiter;
     Dsp::Smoothed talkbackGain;
     Dsp::Smoothed mainGainL;
     Dsp::Smoothed monitorSolo;   // 0 = monitor outs carry main, 1 = the solo bus
+    Dsp::Smoothed mainSolo;      // the same for the main outs (never while exporting or bouncing)
     Dsp::Smoothed monitorGainS;
     std::array<Dsp::Smoothed, Config::numSubs> subGain;
     std::array<Dsp::Smoothed, Config::numAux> auxGain;

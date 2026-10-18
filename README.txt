@@ -34,7 +34,8 @@ THE CONSOLE
 -----------
 Left bank: 16 input channels. Right bank: 16 tape-return channels. Each strip's fader has a column
 beside it (after the reference console): Mute, Main and S1-S4 assigns, the channel meter, and Solo with
-its LED. Pan sits at the foot of the knob area.
+its LED. Solo goes to the monitor outs and to the main outs (there is no separate monitor out on
+the patch bay); exports and Bounce Song ignore it and always take the full mix. Pan sits at the foot of the knob area.
  Centre: tape machine,
 group EQs, Tempo, inserts and aux returns, bus faders and the main fader. The stereo bus
 compressor has a window of its own: the SBC button above the Master insert slots opens it (SBC lights
@@ -62,6 +63,19 @@ Every strip: phase (Ø), gain (drives the preamp), trim (after the preamp), gain
 so you drive the preamp harder or cleaner at the same level), high-pass filter, 4-band EQ, gate (Fast atk = fast attack with the pop),
 compressor, 8 aux sends (P = pre-fader), sub assigns S1-S4, main assign, pan,
 mute, solo, fader. Double-click a scribble strip to rename it.
+Channel colours: click a scribble strip to select it (Shift+click selects the ones between, Ctrl+click
+adds or removes one), then click the colour box left of a name: Red, Orange, Yellow, Green, Blue,
+Indigo, Violet, White or Black for every selected channel. The name is written in the opposite colour
+(made dark or light enough to read). Channels of one colour in the same bank are a group: their faders
+move together from where they stood when coloured. White is no group. Right-click drag a grouped
+fader to move it alone (a stereo-linked partner still follows). Mute, Main, Solo and S1-S4 switch the
+selected channels (when the one clicked is selected) and the whole colour group the same way.
+Input and return banks never group together; colours are saved with the session.
+Stereo link: any two channels of one bank can be linked. Click Link beside one channel's pan (it
+blinks), then Link on the other: both light up and show their partner (e.g. "↔7"). Every control
+then moves both, and the pans turn in opposite directions (the lower-numbered channel is the left
+side). Linking copies the lower-numbered channel's settings onto the higher one. Click a lit Link
+to unlink both. A channel has one partner: linking it elsewhere breaks its old link.
 
 THE CHANNEL WINDOW: double-click any knob on a channel strip to open that channel big, laid out
 like a channel-strip plugin (Input, Equaliser, Gate / Compressor, Aux sends, Output). Everything in
@@ -96,7 +110,17 @@ the selected scene; it flashes until you press GO to recall it, and the amber do
 fader or knob has moved since. The arrows pick the previous / next stored scene. Right-click the
 number for Scene Memory: scenes 01-99 with titles, Go, Store (asks before replacing a scene),
 Prev / Next, and Fade (Instant up to 5 s: recalls glide there; grab a control mid-fade and it's
-yours). Scenes and the fade time are saved with the session.
+yours). Store keeps the Fade with the scene as its fade out: going from that scene to any other
+glides over it, so a scene's fade in is the fade of the scene you leave. Recalling a scene sets
+the Fade knob to that scene's fade (scenes stored before fades were kept use the knob). The list
+shows each scene's fade before the date. The window stays on top and the console works behind it.
+MIDI control (bottom of Scene Memory): each scene has a controller that selects it (scene NN on
+CC NN to start; any value above 0) and one program change presses Go (Program 1 to start). Pick
+the MIDI input (None, All MIDI inputs or one device) and/or MIDI page tracks (tracks whose Out
+menu has Send to scene control on: their clips' controllers and program changes drive the scenes
+in time with the song), and a channel (Any or 1-16). Learn takes the next controller for the
+selected scene, or the next program change for Go. Saved with the session.
+Scenes and the fade time are saved with the session.
 
 Tempo (top right of the centre section): the tempo (drag up / down, Shift for fine, mouse wheel, or
 double-click to type 20-300), the time signature (click for a menu), Tap (tap the beat four times or
@@ -125,21 +149,36 @@ Bars or Min:Sec with snap, and the piano roll of the selected clip. The timeline
 Mouse wheel: scrolls up and down; Shift + wheel scrolls across; Alt + wheel zooms across; Ctrl + wheel
 zooms down (taller or shorter tracks, or piano roll rows). Alt + drag duplicates a clip.
 Drag a MIDI file onto the timeline to make a clip; if the file has a tempo map, a menu asks whether to
-bring the map too (it starts where the clip lands).
+bring the map too (it starts where the clip lands). Notes and controllers keep their MIDI channel.
+
+Hardware: the Out: menu also has MIDI out (a MIDI output on this computer; the track plays its clips
+and what you play live to it, with or without an instrument), Channel (1-16, or As recorded: each
+note on the channel it was played or imported on; this applies to the instrument too) and MIDI out
+offset (ms; nudge a synth that speaks late or early). MIDI goes out as the audio it lines up with is
+heard, so a hardware synth patched back into the console lands in time on tape.
+Sync (MIDI page toolbar) sends MIDI clock to the outputs you tick: 24 clocks a quarter note on the
+tempo (and tempo map, and vari-speed), song position + start / continue when the tape plays or
+locates, stop when it stops. Clock offset as above. An output switched on while the tape is running
+joins at the next play or locate.
 
 
 TAPE
 ----
-Arm tracks to monitor and record their input; unarmed tracks play back.
+Arm tracks to monitor and record their input; unarmed tracks play back. Each Record arm button
+steps grey (off) > yellow (armed: the tape plays back to its return strip until Record is on in
+the transport, then it takes the input and records) > red (armed: input only, nothing from tape).
 Rew and FF wind like a real machine: they speed up over 3 seconds to 20x play speed and slow
 down to arrive at the start or the end of the recording. Stop brakes; Play takes over at once.
+Hold Rew or FF down (the keys, or their keyboard shortcuts) and the tape winds up to 40x while held;
+let go and it settles back to 20x.
 Rec arms recording; Play rolls the tape. Recording is shifted by the interface's latency
 (plus any plugin delay) so overdubs line up with what you heard. If they still land early
 or late with your interface, correct it under Audio device > Recording offset.
 
 Speed 7.5 / 15 / 30 ips changes the tape character (saturation, head bump, top end, hiss).
 W&F: subtle wow and flutter (about +/-0.2 ms at 7.5 ips, less at higher speeds; switch it off
-for sample-exact overdubs).
+for sample-exact overdubs). Wow and Flutter knobs (Tape Machine window; right-click W&F on the console)
+set each from 0 to 5x what the tape speed has (100 % = as before); double-click resets to 100 %.
 
 Locate: "Set In" / "Set Out" mark a region at the current position.
   Loop  - play the region round and round.
@@ -157,12 +196,19 @@ Jog / shuttle (right of the group EQ):
                  Go In / Go Out wind the tape there.
   Locate       - Store, then 1-6, keeps the tape position (saved with the session); 1-6 then wind
                  the tape there. RTZ winds back to zero.
+  Window       - right-click the box anywhere (or double-click its background), or Windows > Jog /
+                 shuttle window: a copy of the box with 99 locate memories, six keys at a time (the
+                 mouse wheel over them or the up / down keys move the numbers on), and MIDI control:
+                 an input and channel, Learn for the jog wheel (a controller: relative encoder or
+                 absolute), the shuttle ring (a controller, 64 = centre) and every key. Saved in the
+                 settings, and it works with the window closed.
 
 Keyboard: Space play/stop, Home rewind, End fast forward, Ctrl+N new, Ctrl+O open, Ctrl+S save,
 Ctrl+Shift+S save as, Ctrl+E Bounce Song, Ctrl+Shift+E Export From Tape. Jog / shuttle: J Jog/Scrub, M Store, 1-6 memories, 0 RTZ,
 I / O Set In / Out, Shift+I / Shift+O Go In / Out, L Loop, P Punch, , and . jog a notch back /
 forward, [ and ] step the shuttle ring back / forward (it stays there until Stop).
-Options > "Keyboard shortcuts" changes any of these and adds keys for Play, Stop and Record.
+Options > "Keyboard shortcuts" changes any of these and adds keys for Play, Stop and Record. Its MIDI
+tab gives any command a MIDI note or controller (Learn, then press it), from any MIDI input.
 
 
 PATCH BAY
@@ -196,6 +242,14 @@ cable, plugin and its settings, the project name) and one WAV per tape track. It
 itself, like real tape: recording, importing and erasing go into the track WAVs within half
 a second, and console moves into session.json a moment later. Recording over something
 replaces it for good. There is no undo.
+
+Session > Import audio (Ctrl+I): choose one or more files (Ctrl or Shift click; Add files... adds
+more). Up to 16 tracks: a mono file takes one track, a stereo file any two (L and R boxes in
+the list). Each file gets a free track (an empty one if there is one; a stereo file a neighbouring
+pair while there is one); change it in the list, or select a file and click a track in the row of
+16 (a stereo file's left goes there, its right on the next free track; a file already there moves
+out of the way). A stereo file links the two return channels it lands on and pans them hard left
+and right. They all start at the same place: the start of the tape, the tape position or In.
 
 Session > New asks for a name and creates the folder. Session > Save now writes everything
 at once. Session > Save as copies the session to a new folder and carries on in the copy;

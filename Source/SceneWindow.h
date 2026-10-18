@@ -42,6 +42,8 @@ class SceneMemoryPanel : public juce::Component,
 public:
     /** Opens the window (or brings it to the front), centred on the screen. */
     static void show (SceneMemory&);
+    /** Closes it (the app is shutting down: before the engine goes). */
+    static void closeWindow();
 
     explicit SceneMemoryPanel (SceneMemory&);
     ~SceneMemoryPanel() override;
@@ -58,6 +60,15 @@ private:
     juce::Label status;
     std::uint32_t shownRevision = 0;
     juce::Rectangle<int> titleLabelArea;
+
+    // MIDI control: the input, MIDI page tracks, channel, the selected scene's controller and Go's program change.
+    juce::ComboBox midiInput, midiChannel, sceneCc, goProgram;
+    juce::TextButton fromPage { "MIDI page tracks" }, learnCc { "Learn" }, learnGo { "Learn" };
+    juce::Rectangle<int> midiBox, midiLabelArea, channelLabelArea, ccLabelArea, goLabelArea;
+    juce::StringArray shownDevices;
+    int deviceCheck = 0;
+    void fillInputs();
+    void refreshMidi();
 
     int getNumRows() override { return SceneMemory::numScenes; }
     void paintListBoxItem (int row, juce::Graphics&, int width, int height, bool selected) override;

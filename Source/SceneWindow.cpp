@@ -1,5 +1,6 @@
 #include "SceneWindow.h"
 #include "ConsoleLookAndFeel.h"
+#include <juce_audio_devices/juce_audio_devices.h>
 
 using namespace ConsoleColours;
 
@@ -127,6 +128,30 @@ void SceneReadout::timerCallback()
 //==============================================================================
 juce::Component::SafePointer<juce::DialogWindow> SceneMemoryPanel::window;
 
+namespace
+{
+    /** Not modal (the console stays usable behind it) and on top until closed; closing deletes it. */
+    class SceneMemoryWindow : public juce::DialogWindow
+    {
+    public:
+        explicit SceneMemoryWindow (SceneMemoryPanel* panel)
+            : juce::DialogWindow ("Scene Memory", room, true, true)
+        {
+            setUsingNativeTitleBar (true);
+            setContentOwned (panel, true);
+            setResizable (false, false);
+            setAlwaysOnTop (true);
+            centreWithSize (getWidth(), getHeight());
+        }
+
+        void closeButtonPressed() override
+        {
+            juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<SceneMemoryWindow> (this)] { delete safe.getComponent(); });
+            setVisible (false);
+        }
+    };
+}
+
 void SceneMemoryPanel::show (SceneMemory& scenes)
 {
     if (window != nullptr)
@@ -134,14 +159,14 @@ void SceneMemoryPanel::show (SceneMemory& scenes)
         window->toFront (true);
         return;
     }
-    juce::DialogWindow::LaunchOptions o;
-    o.content.setOwned (new SceneMemoryPanel (scenes));
-    o.dialogTitle = "Scene Memory";
-    o.dialogBackgroundColour = room;
-    o.escapeKeyTriggersCloseButton = true;
-    o.useNativeTitleBar = true;
-    o.resizable = false;
-    window = o.launchAsync();
+    auto* w = new SceneMemoryWindow (new SceneMemoryPanel (scenes));
+    w->setVisible (true);
+    window = w;
+}
+
+void SceneMemoryPanel::closeWindow()
+{
+    delete window.getComponent();
 }
 
 SceneMemoryPanel::SceneMemoryPanel (SceneMemory& s)
@@ -182,7 +207,60 @@ SceneMemoryPanel::SceneMemoryPanel (SceneMemory& s)
     status.setJustificationType (juce::Justification::topLeft);
     addAndMakeVisible (status);
 
-    setSize (540, 470);
+    // MIDI control.
+    midiInput.setTooltip ("The MIDI input scene control listens to (a controller, a foot switch, a sequencer)");
+    midiInput.onChange = [this]
+    {
+        const int id = midiInput.getSelectedId();
+        if (id == 1)       scenes.setMidiInput ({});
+        else if (id == 2)  scenes.setMidiInput (SceneMemory::allInputs);
+        else if (id >= 10) scenes.setMidiInput (shownDevices[id - 10]);
+    };
+    fromPage.setClickingTogglesState (true);
+    fromPage.setColour (juce::TextButton::buttonOnColourId, amber);
+    fromPage.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1b1b1b));
+    fromPage.setTooltip ("Listen to MIDI page tracks whose Out menu has \"Send to scene control\" on: "
+                         "their clips' controllers select scenes and their program changes press Go, in time with the song");
+    fromPage.onClick = [this] { scenes.setMidiFromPage (fromPage.getToggleState()); };
+    midiChannel.addItem ("Any", 1);
+    for (int c = 1; c <= 16; ++c)
+        midiChannel.addItem (juce::String (c), c + 1);
+    midiChannel.setTooltip ("The MIDI channel scene control listens on");
+    midiChannel.onChange = [this] { scenes.setMidiChannel (midiChannel.getSelectedId() - 1); };
+    sceneCc.addItem ("None", 1);
+    for (int c = 0; c < 128; ++c)
+        sceneCc.addItem ("CC " + juce::String (c), c + 2);
+    sceneCc.setTooltip ("The controller that selects this scene (any value above 0). Go then recalls it.");
+    sceneCc.onChange = [this] { scenes.setSceneCc (scenes.getSelected(), sceneCc.getSelectedId() - 2); };
+    for (int p = 0; p < 128; ++p)
+        goProgram.addItem ("Program " + juce::String (p + 1), p + 1);
+    goProgram.setTooltip ("The program change that presses Go (recalls the selected scene)");
+    goProgram.onChange = [this] { scenes.setGoProgram (goProgram.getSelectedId() - 1); };
+    for (auto* b : { &learnCc, &learnGo })
+    {
+        b->setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffd0473c));
+        b->setColour (juce::TextButton::textColourOnId, juce::Colours::white);
+    }
+    learnCc.setTooltip ("Learn: move a controller (from the MIDI input or a MIDI page track) and it selects this scene");
+    learnGo.setTooltip ("Learn: send a program change and it becomes Go");
+    learnCc.onClick = [this]
+    {
+        const bool on = scenes.getLearning() != SceneMemory::Learn::sceneCc;
+        scenes.learn (on ? SceneMemory::Learn::sceneCc : SceneMemory::Learn::none, scenes.getSelected());
+        refresh();
+    };
+    learnGo.onClick = [this]
+    {
+        const bool on = scenes.getLearning() != SceneMemory::Learn::goProgram;
+        scenes.learn (on ? SceneMemory::Learn::goProgram : SceneMemory::Learn::none);
+        refresh();
+    };
+    for (juce::Component* c : { (juce::Component*) &midiInput, (juce::Component*) &fromPage, (juce::Component*) &midiChannel,
+                                (juce::Component*) &sceneCc, (juce::Component*) &learnCc, (juce::Component*) &goProgram, (juce::Component*) &learnGo })
+        addAndMakeVisible (c);
+    fillInputs();
+
+    setSize (560, 470 + 96);
     refresh();
     list.scrollToEnsureRowIsOnscreen (scenes.getSelected());
     startTimerHz (4);
@@ -211,9 +289,15 @@ void SceneMemoryPanel::paintListBoxItem (int row, juce::Graphics& g, int width, 
     g.setFont (ConsoleLookAndFeel::uiFont (14.0f, true));
     g.drawText (SceneMemory::number (row), 26, 0, 30, height, juce::Justification::centredLeft, false);
     g.setFont (ConsoleLookAndFeel::uiFont (14.0f));
-    g.drawText (stored ? scenes.getTitle (row) : juce::String ("(empty)"), 62, 0, width - 62 - 110, height, juce::Justification::centredLeft, true);
+    g.drawText (stored ? scenes.getTitle (row) : juce::String ("(empty)"), 62, 0, width - 62 - 176, height, juce::Justification::centredLeft, true);
     if (stored)
     {
+        // The fade stored with it (its fade out), then when it was stored.
+        const float fade = scenes.getStoredFade (row);
+        g.setColour (legend.withAlpha (fade >= 0.0f ? 0.8f : 0.35f));
+        g.setFont (ConsoleLookAndFeel::uiFont (12.0f));
+        g.drawText (fade < 0.0f ? juce::String (juce::CharPointer_UTF8 ("\xe2\x80\x94")) : fade < 0.05f ? juce::String ("Instant") : juce::String (fade, 1) + " s",
+                    width - 170, 0, 58, height, juce::Justification::centredRight, false);
         g.setColour (legend.withAlpha (0.5f));
         g.setFont (ConsoleLookAndFeel::uiFont (11.0f));
         g.drawText (scenes.getStoredTime (row).formatted ("%d %b %H:%M"), width - 106, 0, 98, height, juce::Justification::centredRight, false);
@@ -243,7 +327,8 @@ void SceneMemoryPanel::storeSelected()
     const auto doStore = [this, s]
     {
         scenes.store (s, title.getText());
-        status.setText ("Stored the console's faders and knobs in " + SceneMemory::number (s) + ".", juce::dontSendNotification);
+        status.setText ("Stored the console's faders and knobs in " + SceneMemory::number (s) + ", fade out "
+                        + (scenes.getStoredFade (s) < 0.05f ? juce::String ("instant") : juce::String (scenes.getStoredFade (s), 1) + " s") + ".", juce::dontSendNotification);
         refresh();
     };
     if (! scenes.isStored (s))
@@ -288,21 +373,94 @@ void SceneMemoryPanel::refresh()
         text = "The console is on " + SceneMemory::number (sel) + (scenes.isEdited() ? ", changed since." : ".");
     else
         text = "Go recalls " + SceneMemory::number (sel) + " " + scenes.getTitle (sel) + ".";
+    if (scenes.getLearning() == SceneMemory::Learn::sceneCc)
+        text = "Learning: move a controller for " + SceneMemory::number (scenes.getLearningScene()) + ".";
+    else if (scenes.getLearning() == SceneMemory::Learn::goProgram)
+        text = "Learning: send the program change for Go.";
     status.setText (text, juce::dontSendNotification);
+    refreshMidi();
     shownRevision = scenes.getRevision();
     list.repaint();
 }
 
+void SceneMemoryPanel::fillInputs()
+{
+    shownDevices.clear();
+    const auto devices = juce::MidiInput::getAvailableDevices();
+    midiInput.clear (juce::dontSendNotification);
+    midiInput.addItem ("None", 1);
+    midiInput.addItem ("All MIDI inputs", 2);
+    for (int i = 0; i < devices.size(); ++i)
+    {
+        shownDevices.add (devices[i].identifier);
+        midiInput.addItem (devices[i].name, 10 + i);
+    }
+    refreshMidi();
+}
+
+void SceneMemoryPanel::refreshMidi()
+{
+    const auto& m = scenes.getMidiSettings();
+    int inputId = m.input.isEmpty() ? 1 : m.input == SceneMemory::allInputs ? 2 : 10 + shownDevices.indexOf (m.input);
+    if (inputId == 9)   // the session's input is not plugged in
+    {
+        if (midiInput.indexOfItemId (9) < 0)
+            midiInput.addItem (m.input + "  (not connected)", 9);
+    }
+    midiInput.setSelectedId (inputId, juce::dontSendNotification);
+    fromPage.setToggleState (m.fromMidiPage, juce::dontSendNotification);
+    midiChannel.setSelectedId (m.channel + 1, juce::dontSendNotification);
+    sceneCc.setSelectedId (m.cc[(size_t) scenes.getSelected()] + 2, juce::dontSendNotification);
+    goProgram.setSelectedId (m.goProgram + 1, juce::dontSendNotification);
+    learnCc.setToggleState (scenes.getLearning() == SceneMemory::Learn::sceneCc, juce::dontSendNotification);
+    learnGo.setToggleState (scenes.getLearning() == SceneMemory::Learn::goProgram, juce::dontSendNotification);
+    repaint (midiBox);
+}
+
 void SceneMemoryPanel::timerCallback()
 {
-    // The console's arrows and Go change the selection too.
+    // The console's arrows and Go change the selection too (and so can MIDI).
     if (scenes.getRevision() != shownRevision)
         refresh();
+    if (++deviceCheck >= 8)   // every 2 s: MIDI inputs plugged in or out
+    {
+        deviceCheck = 0;
+        juce::StringArray now;
+        for (auto& d : juce::MidiInput::getAvailableDevices())
+            now.add (d.identifier);
+        if (now != shownDevices)
+            fillInputs();
+    }
 }
 
 void SceneMemoryPanel::resized()
 {
     auto area = getLocalBounds().reduced (14);
+
+    // MIDI control along the bottom.
+    midiBox = area.removeFromBottom (82);
+    area.removeFromBottom (10);
+    auto rows = midiBox.reduced (10, 8).withTrimmedTop (14);
+    auto row1 = rows.removeFromTop (26);
+    rows.removeFromTop (6);
+    auto row2 = rows.removeFromTop (26);
+    midiLabelArea = row1.removeFromLeft (52);
+    midiInput.setBounds (row1.removeFromLeft (180));
+    row1.removeFromLeft (8);
+    fromPage.setBounds (row1.removeFromLeft (130));
+    row1.removeFromLeft (8);
+    channelLabelArea = row1.removeFromLeft (40);
+    midiChannel.setBounds (row1.removeFromLeft (70));
+    ccLabelArea = row2.removeFromLeft (52);
+    sceneCc.setBounds (row2.removeFromLeft (110));
+    row2.removeFromLeft (4);
+    learnCc.setBounds (row2.removeFromLeft (64));
+    row2.removeFromLeft (16);
+    goLabelArea = row2.removeFromLeft (30);
+    goProgram.setBounds (row2.removeFromLeft (124));
+    row2.removeFromLeft (4);
+    learnGo.setBounds (row2.removeFromLeft (64));
+
     auto side = area.removeFromRight (150);
     area.removeFromRight (14);
     list.setBounds (area);
@@ -330,4 +488,13 @@ void SceneMemoryPanel::paint (juce::Graphics& g)
     g.setColour (legend.withAlpha (0.6f));
     g.setFont (ConsoleLookAndFeel::uiFont (11.0f, true));
     g.drawText ("TITLE", titleLabelArea, juce::Justification::centredLeft, false);
+
+    g.setColour (juce::Colour (0xff2a2d30));
+    g.drawRoundedRectangle (midiBox.toFloat().reduced (0.5f), 3.0f, 1.0f);
+    g.setColour (legend.withAlpha (0.6f));
+    g.drawText ("MIDI CONTROL", midiBox.reduced (10, 4).removeFromTop (14), juce::Justification::centredLeft, false);
+    g.drawText ("INPUT", midiLabelArea, juce::Justification::centredLeft, false);
+    g.drawText ("CH", channelLabelArea.withTrimmedLeft (8), juce::Justification::centredLeft, false);
+    g.drawText (SceneMemory::number (scenes.getSelected()), ccLabelArea, juce::Justification::centredLeft, false);
+    g.drawText ("GO", goLabelArea, juce::Justification::centredLeft, false);
 }

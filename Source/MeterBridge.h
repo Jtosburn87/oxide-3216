@@ -26,7 +26,8 @@ public:
 private:
     TapeMachine& tape;
     std::array<float, TapeMachine::numTracks> shownDb {};
-    std::array<bool, TapeMachine::numTracks> shownArmed {}, shownLed {};
+    std::array<TapeMachine::ArmState, TapeMachine::numTracks> shownArm {};
+    std::array<bool, TapeMachine::numTracks> shownLed {}, shownYellow {};   // yellow: armed, the tape playing back until Record
     int frame = 0;
     bool wasHidden = true;
 

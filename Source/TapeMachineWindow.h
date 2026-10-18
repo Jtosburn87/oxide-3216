@@ -38,7 +38,7 @@ private:
     juce::TextButton setIn { "Set In" }, setOut { "Set Out" }, loopButton { "Loop" }, punchButton { "Punch" };
     ParamButton wowButton;
     juce::OwnedArray<RadioParamButton> speedButtons;
-    Knob pitchKnob, levelKnob;
+    Knob pitchKnob, levelKnob, wowKnob, flutterKnob;
     MeterBridge meters;
 
     juce::Rectangle<int> wellBox, transportBox, controlsBox, ventBox;

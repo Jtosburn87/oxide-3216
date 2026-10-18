@@ -1,6 +1,7 @@
 #include "Widgets.h"
 #include "ConsoleLookAndFeel.h"
 #include "Dsp.h"
+#include "TapeMachine.h"
 
 using namespace ConsoleColours;
 
@@ -158,9 +159,13 @@ void ParamButton::setInverted (bool b)
     paramChanged (param);
 }
 
-void ParamButton::clicked()
+void ParamButton::clicked (const juce::ModifierKeys& mods)
 {
-    param.toggle();
+    // Right-click: this button alone, out of its group (like a right-click fader drag).
+    if (onUserToggle && ! mods.isPopupMenu())
+        onUserToggle (! param.on());
+    else
+        param.toggle();
 }
 
 void ParamButton::flash()
@@ -510,4 +515,76 @@ void XlrSocket::mouseUp (const juce::MouseEvent& e)
 {
     if (e.mods.isPopupMenu() && getLocalBounds().contains (e.getPosition()) && onPopupMenu)
         onPopupMenu();
+}
+
+//==============================================================================
+ArmButton::ArmButton (TapeMachine& t, int k) : juce::TextButton (juce::String (k + 1)), tape (t), track (k)
+{
+    setTitle ("Arm " + juce::String (k + 1));
+    setColour (juce::TextButton::textColourOnId, juce::Colours::white);
+    tape.arm[(size_t) track]->addListener (this);
+    tape.armPlay[(size_t) track]->addListener (this);
+    update();
+}
+
+ArmButton::~ArmButton()
+{
+    tape.arm[(size_t) track]->removeListener (this);
+    tape.armPlay[(size_t) track]->removeListener (this);
+}
+
+void ArmButton::update()
+{
+    const auto s = tape.getArmState (track);
+    const bool yellow = s == TapeMachine::ArmState::playback;
+    setColour (juce::TextButton::buttonOnColourId, yellow ? ConsoleColours::amber : juce::Colour (0xffd0473c));
+    setColour (juce::TextButton::textColourOnId, yellow ? juce::Colour (0xff1b1b1b) : juce::Colours::white);
+    setToggleState (s != TapeMachine::ArmState::off, juce::dontSendNotification);
+    repaint();
+}
+
+void ArmButton::clicked()
+{
+    tape.stepArmState (track);
+}
+
+void ParamButton::mouseDown (const juce::MouseEvent& e)
+{
+    if (onRightClick && e.mods.isPopupMenu())
+    {
+        onRightClick();
+        return;
+    }
+    juce::TextButton::mouseDown (e);
+}
+
+void ParamButton::mouseUp (const juce::MouseEvent& e)
+{
+    if (onRightClick && e.mods.isPopupMenu())
+        return;
+    juce::TextButton::mouseUp (e);
+}
+
+//==============================================================================
+void showWowFlutterPopup (juce::Component& target, Param& wow, Param& flutter)
+{
+    struct Content : juce::Component
+    {
+        Content (Param& w, Param& f) : wowKnob (w, "Wow", juce::Colour (0xffd9d6cc)), flutterKnob (f, "Flutter", juce::Colour (0xffd9d6cc))
+        {
+            setUpWowFlutterKnob (wowKnob, "Wow");
+            setUpWowFlutterKnob (flutterKnob, "Flutter");
+            addAndMakeVisible (wowKnob);
+            addAndMakeVisible (flutterKnob);
+            setSize (2 * Knob::preferredWidth + 40, Knob::preferredHeight + 16);
+        }
+        void resized() override
+        {
+            auto r = getLocalBounds().reduced (8);
+            wowKnob.setBounds (r.removeFromLeft (r.getWidth() / 2).withSizeKeepingCentre (Knob::preferredWidth, Knob::preferredHeight));
+            flutterKnob.setBounds (r.withSizeKeepingCentre (Knob::preferredWidth, Knob::preferredHeight));
+        }
+        Knob wowKnob, flutterKnob;
+    };
+    juce::CallOutBox::launchAsynchronously (std::make_unique<Content> (wow, flutter), target.getScreenBounds(), nullptr);
 }

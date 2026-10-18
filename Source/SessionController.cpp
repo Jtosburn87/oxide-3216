@@ -67,6 +67,10 @@ std::uint64_t SessionController::fingerprint() const
         h = mix (h, engine.getPatch (d).hash());
     for (auto* s : engine.inputStrips)  h = mix (h, s->name);
     for (auto* s : engine.returnStrips) h = mix (h, s->name);
+    for (auto* s : engine.inputStrips)  h = mix (h, (std::uint64_t) s->scribbleColour);
+    for (auto* s : engine.returnStrips) h = mix (h, (std::uint64_t) s->scribbleColour);
+    h = mix (h, (std::uint64_t) engine.inputLinks.getRevision());
+    h = mix (h, (std::uint64_t) engine.returnLinks.getRevision());
     for (auto& n : engine.subNames) h = mix (h, n);
     for (auto& n : engine.auxNames) h = mix (h, n);
     h = mix (h, engine.projectName.toString());

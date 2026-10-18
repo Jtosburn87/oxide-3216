@@ -27,6 +27,17 @@ juce::Time SceneMemory::getStoredTime (int s) const
     return isStored (s) ? scenes[(size_t) s].when : juce::Time();
 }
 
+float SceneMemory::getStoredFade (int s) const
+{
+    return isStored (s) ? scenes[(size_t) s].fade : -1.0f;
+}
+
+float SceneMemory::fadeIntoNext() const
+{
+    const float stored = getStoredFade (current);
+    return stored >= 0.0f ? stored : fadeTime->get();
+}
+
 void SceneMemory::setTitle (int s, const juce::String& title)
 {
     if (! isStored (s))
@@ -51,6 +62,7 @@ void SceneMemory::store (int s, const juce::String& title)
             scene.values[p->id] = p->get();
     scene.stored = true;
     scene.when = juce::Time::getCurrentTime();
+    scene.fade = fadeTime->get();
     scene.title = title.trim().isNotEmpty() ? title.trim() : "Scene " + number (s);
     current = selected = s;
     ++revision;
@@ -61,7 +73,9 @@ bool SceneMemory::recall (int s)
     if (! isStored (s))
         return false;
     stopFade();
-    const double seconds = fadeTime->get();
+    const double seconds = fadeIntoNext();   // the fade out of the scene being left
+    if (const float own = scenes[(size_t) s].fade; own >= 0.0f)
+        fadeTime->set (own);                  // the knob shows (and a re-store keeps) this scene's fade out
     for (const auto& [id, value] : scenes[(size_t) s].values)
         if (auto* p = params.find (id); p != nullptr && isSceneControl (*p))
         {
@@ -169,6 +183,8 @@ juce::var SceneMemory::toVar() const
         o->setProperty ("number", s + 1);
         o->setProperty ("title", scene.title);
         o->setProperty ("stored", scene.when.toISO8601 (true));
+        if (scene.fade >= 0.0f)
+            o->setProperty ("fade", scene.fade);
         auto* values = new juce::DynamicObject();
         for (const auto& [id, value] : scene.values)
             values->setProperty (id, value);
@@ -176,6 +192,17 @@ juce::var SceneMemory::toVar() const
         list.add (juce::var (o));
     }
     root->setProperty ("scenes", list);
+
+    auto* m = new juce::DynamicObject();
+    m->setProperty ("input", midi.input);
+    m->setProperty ("fromMidiPage", midi.fromMidiPage);
+    m->setProperty ("channel", midi.channel);
+    m->setProperty ("goProgram", midi.goProgram);
+    juce::Array<juce::var> cc;
+    for (int c : midi.cc)
+        cc.add (c);
+    m->setProperty ("cc", cc);
+    root->setProperty ("midi", juce::var (m));
     return juce::var (root);
 }
 
@@ -192,6 +219,7 @@ void SceneMemory::fromVar (const juce::var& v)
             scene.stored = true;
             scene.title = o["title"].toString();
             scene.when = juce::Time::fromISO8601 (o["stored"].toString());
+            scene.fade = o.hasProperty ("fade") ? juce::jlimit (0.0f, maxFadeSeconds, (float) (double) o["fade"]) : -1.0f;
             if (auto* values = o["values"].getDynamicObject())
                 for (const auto& prop : values->getProperties())
                     scene.values[prop.name.toString()] = (float) (double) prop.value;
@@ -210,5 +238,93 @@ void SceneMemory::fromVar (const juce::var& v)
         }
     current = isStored ((int) v.getProperty ("current", -1)) ? (int) v["current"] : -1;
     selected = juce::jlimit (0, numScenes - 1, (int) v.getProperty ("selected", 0));
+
+    midi = defaultMidi();
+    if (const auto m = v["midi"]; m.isObject())
+    {
+        midi.input = m["input"].toString();
+        midi.fromMidiPage = (bool) m.getProperty ("fromMidiPage", true);
+        midi.channel = juce::jlimit (0, 16, (int) m["channel"]);
+        midi.goProgram = juce::jlimit (0, 127, (int) m["goProgram"]);
+        if (auto* cc = m["cc"].getArray(); cc != nullptr && cc->size() == numScenes)
+            for (int s = 0; s < numScenes; ++s)
+                midi.cc[(size_t) s] = juce::jlimit (-1, 127, (int) (*cc)[s]);
+    }
     ++revision;
+}
+
+//==============================================================================
+SceneMemory::MidiSettings SceneMemory::defaultMidi()
+{
+    MidiSettings m;
+    for (int s = 0; s < numScenes; ++s)
+        m.cc[(size_t) s] = s + 1;   // scene 01 on CC 1 ... scene 99 on CC 99
+    return m;
+}
+
+void SceneMemory::setMidiInput (const juce::String& id)  { midi.input = id; ++revision; }
+void SceneMemory::setMidiFromPage (bool on)              { midi.fromMidiPage = on; ++revision; }
+void SceneMemory::setMidiChannel (int ch)                { midi.channel = juce::jlimit (0, 16, ch); ++revision; }
+void SceneMemory::setGoProgram (int p)                   { midi.goProgram = juce::jlimit (0, 127, p); ++revision; }
+
+void SceneMemory::setSceneCc (int s, int cc)
+{
+    if (! juce::isPositiveAndBelow (s, numScenes))
+        return;
+    cc = juce::jlimit (-1, 127, cc);
+    if (cc >= 0)
+        for (auto& other : midi.cc)
+            if (other == cc)
+                other = -1;   // one controller, one scene
+    midi.cc[(size_t) s] = cc;
+    ++revision;
+}
+
+void SceneMemory::learn (Learn what, int s)
+{
+    learning = what;
+    learningScene = what == Learn::sceneCc && juce::isPositiveAndBelow (s, numScenes) ? s : -1;
+    if (what == Learn::sceneCc && learningScene < 0)
+        learning = Learn::none;
+    ++revision;
+}
+
+bool SceneMemory::handleMidi (const juce::MidiMessage& m, bool internal, const juce::String& device)
+{
+    if (internal ? ! midi.fromMidiPage : (midi.input.isEmpty() || (midi.input != allInputs && midi.input != device)))
+        return false;
+    if (midi.channel > 0 && m.getChannel() != midi.channel)
+        return false;
+
+    if (m.isController())
+    {
+        const int cc = m.getControllerNumber();
+        if (learning == Learn::sceneCc)
+        {
+            setSceneCc (learningScene, cc);
+            learn (Learn::none);
+            return true;
+        }
+        if (m.getControllerValue() == 0)
+            return false;   // a button let go
+        for (int s = 0; s < numScenes; ++s)
+            if (midi.cc[(size_t) s] == cc)
+            {
+                select (s);
+                return true;
+            }
+        return false;
+    }
+    if (m.isProgramChange())
+    {
+        if (learning == Learn::goProgram)
+        {
+            setGoProgram (m.getProgramChangeNumber());
+            learn (Learn::none);
+            return true;
+        }
+        if (m.getProgramChangeNumber() == midi.goProgram)
+            return recall (selected);   // Go
+    }
+    return false;
 }

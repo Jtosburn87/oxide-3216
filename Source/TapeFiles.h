@@ -31,7 +31,8 @@ private:
     juce::File folder;
     juce::String error;
 
-    struct FileInfo { bool known = false; juce::int64 dataOffset = 0, samples = 0; };
+    // rateOffset: where the header's sample rate is (0 = unknown); rate: what it says.
+    struct FileInfo { bool known = false; juce::int64 dataOffset = 0, samples = 0, rateOffset = 0; int rate = 0; bool rateChecked = false; };
     std::array<FileInfo, TapeMachine::numTracks> info {};
     std::vector<float> buffer;
 
@@ -41,4 +42,5 @@ private:
     bool openLayout (int track, const juce::File&);
     juce::String rewholeTrack (int track, const juce::File&);
     void readChunk (int track, juce::int64 start, int n);
+    juce::String fixRate (int track, const juce::File&);
 };

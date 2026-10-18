@@ -7,6 +7,8 @@ namespace
 
 AudioEngine::AudioEngine()
 {
+    // MIDI scene control: hardware inputs and MIDI page tracks, filtered by the scene memory's settings.
+    midi.onSceneMidi = [this] (const juce::MidiMessage& m, bool internal, const juce::String& device) { scenes.handleMidi (m, internal, device); };
     for (auto& i : interfaceSource)
         i.store (-1);
     for (int c = 0; c < numConsoleInputs; ++c)
@@ -75,21 +77,6 @@ AudioEngine::AudioEngine()
         for (auto* s : *strips)
             s->colour = preampColour;
 
-    // Stereo links, made last so every strip control exists.
-    const auto makeLinks = [this] (juce::OwnedArray<ChannelStrip>& strips, auto& links, const juce::String& bank)
-    {
-        for (int k = 0; k < (int) links.size(); ++k)
-        {
-            auto& a = *strips[2 * k];
-            auto& b = *strips[2 * k + 1];
-            const auto pair = juce::String (2 * k + 1) + "-" + juce::String (2 * k + 2);
-            links[(size_t) k] = &params.addToggle ("link." + a.idPrefix, bank + " " + pair + " link", false);
-            stripLinks.add (new StripLink (params, a, b, *links[(size_t) k]));
-        }
-    };
-    makeLinks (inputStrips, inputLink, "Input");
-    makeLinks (returnStrips, returnLink, "Return");
-
     for (int j = 0; j < numAuxPairs; ++j)
     {
         const int a = 2 * j, b = 2 * j + 1;
@@ -100,6 +87,14 @@ AudioEngine::AudioEngine()
         for (auto* s : returnStrips) s->auxLink[(size_t) j] = auxLink[(size_t) j];
     }
     resetBusNames();
+}
+
+void AudioEngine::linkStereoReturns (int left, int right)
+{
+    if (left == right || ! juce::isPositiveAndBelow (left, returnStrips.size()) || ! juce::isPositiveAndBelow (right, returnStrips.size()))
+        return;
+    returnLinks.link (left, right);
+    returnStrips[left]->controls.pan->set (-1.0f);   // its partner mirrors it: hard right
 }
 
 void AudioEngine::resetBusNames()
@@ -406,6 +401,7 @@ void AudioEngine::prepare (double sampleRate, const juce::BigInteger& activeInpu
     tape.prepare (currentSampleRate, reportedRoundTripLatency + recordOffset.load());
     mainGainL.prepare (currentSampleRate, Dsp::faderGain (mainFader->get()));
     monitorSolo.prepare (currentSampleRate, 0.0f, 10.0f);
+    mainSolo.prepare (currentSampleRate, 0.0f, 10.0f);
     monitorGainS.prepare (currentSampleRate, monitorGain (monitorLevel->get()));
     busComp.prepare (currentSampleRate);
     tempo.prepare (currentSampleRate);
@@ -432,6 +428,7 @@ void AudioEngine::prepare (double sampleRate, const juce::BigInteger& activeInpu
 
 void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
 {
+    deviceOutputLatency = device->getOutputLatencyInSamples();
     prepare (device->getCurrentSampleRate(), device->getActiveInputChannels(), device->getActiveOutputChannels(),
              device->getInputLatencyInSamples() + device->getOutputLatencyInSamples());
 }
@@ -444,7 +441,9 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputs, 
                                                     const juce::AudioIODeviceCallbackContext&)
 {
     callbackCount.fetch_add (1, std::memory_order_relaxed);
+    callbackTimeMs = juce::Time::getMillisecondCounterHiRes();
     render (inputs, numInputs, outputs, numOutputs, numSamples, nullptr, nullptr);
+    callbackTimeMs = -1.0;
 }
 
 void AudioEngine::renderOffline (float* left, float* right, int numSamples)
@@ -547,7 +546,11 @@ void AudioEngine::render (const float* const* inputs, int numInputs, float* cons
             oscillator.process (oscOut.data(), n, oscTypeNow, oscFreqNow, oscGain);
         // The MIDI page's instruments, first: their outputs can be patched anywhere.
         const auto pendingLocate = tape.getPendingLocate();   // a locate lands this block: the MIDI starts there too
-        midi.process (n, pendingLocate >= 0 ? pendingLocate : tape.getPosition(), tape.getPlaybackRate(), tape.isPlaying(), tape.isRecordEnabled() && tape.isPlaying());
+        // Hardware MIDI goes out as this block is heard: after the device's output latency and the plugin delay.
+        const double heardMs = callbackTimeMs < 0.0 ? -1.0
+                             : callbackTimeMs + (double) (start + deviceOutputLatency + lastOutputDelay) * 1000.0 / currentSampleRate;
+        midi.process (n, pendingLocate >= 0 ? pendingLocate : tape.getPosition(), tape.getPlaybackRate(), tape.isPlaying(),
+                      tape.isRecordEnabled() && tape.isPlaying(), heardMs);
         juce::FloatVectorOperations::clear (mixL.data(), n);
         juce::FloatVectorOperations::clear (mixR.data(), n);
         juce::FloatVectorOperations::clear (soloL.data(), n);
@@ -581,7 +584,7 @@ void AudioEngine::render (const float* const* inputs, int numInputs, float* cons
         const bool exportingNow = tape.exporting.load (std::memory_order_relaxed);
         for (int r = 0; r < Config::numReturnStrips; ++r)
         {
-            const bool armed = tape.arm[(size_t) r]->on() && ! exportingNow;
+            const bool armed = tape.takesInput (r) && ! exportingNow;   // yellow: the tape plays here until Record
             returnStrips[r]->process (patchedInput (Patch::returnIn + r, armed ? nullptr : tapeOut[(size_t) r].data(),
                                                     interfaceAt (Patch::returnIn + r, start), 2, n),
                                       returnDirect[(size_t) r].data(), buses, n);
@@ -604,6 +607,7 @@ void AudioEngine::render (const float* const* inputs, int numInputs, float* cons
         compensation = juce::jmin (compensation, Dsp::DelayLine::capacity - 1);
         // Every output waits as long as main does (the compensation, then the master inserts' own delay).
         const int outputDelay = juce::jmin (compensation + masterInserts.getLatency(), Dsp::DelayLine::capacity - 1);
+        lastOutputDelay = outputDelay;
         mainDelayL.process (mixL.data(), n, compensation);
         mainDelayR.process (mixR.data(), n, compensation);
 
@@ -819,29 +823,48 @@ void AudioEngine::render (const float* const* inputs, int numInputs, float* cons
         if (limited)
             limiting.store (true, std::memory_order_relaxed);
 
+        // The solo bus, in step with main.
+        soloDelayL.process (soloL.data(), n, outputDelay);
+        soloDelayR.process (soloR.data(), n, outputDelay);
+        const float soloT = anySolo ? 1.0f : 0.0f;
+
+        // Main outs: the main mix, or the solo bus while anything is soloed (the patch bay has no monitor out of its
+        // own). An export or a bounce always takes the main mix, and so does the meter.
         float* mix[2] = { mixL.data(), mixR.data() };
+        float* solo[2] = { soloL.data(), soloR.data() };
+        const bool exporting = mainLeft != nullptr || mainRight != nullptr || bouncing.load (std::memory_order_relaxed);
+        const float mainSoloT = exporting ? 0.0f : soloT;
+        const bool mainSoloing = ! mainSolo.settled (mainSoloT) || mainSoloT > 0.0f;
         for (int side = 0; side < 2; ++side)
         {
             const auto range = juce::FloatVectorOperations::findMinAndMax (mix[side], n);
             raisePeak (mainPeak[(size_t) side], juce::jmax (range.getEnd(), -range.getStart()));
-
-            if (mainOut[side] != nullptr)
-                juce::FloatVectorOperations::add (mainOut[side] + start, mix[side], n);
         }
-
-        // The solo bus, in step with main.
-        soloDelayL.process (soloL.data(), n, outputDelay);
-        soloDelayR.process (soloR.data(), n, outputDelay);
+        if (mainSoloing && (mainOut[0] != nullptr || mainOut[1] != nullptr))
+        {
+            for (int i = 0; i < n; ++i)
+            {
+                const float b = mainSolo.next (mainSoloT);
+                for (int side = 0; side < 2; ++side)
+                    if (mainOut[side] != nullptr)
+                        mainOut[side][start + i] += mix[side][i] + b * (solo[side][i] - mix[side][i]);
+            }
+        }
+        else
+        {
+            mainSolo.prepare (currentSampleRate, mainSoloT, 10.0f);   // nothing to fade: jump
+            for (int side = 0; side < 2; ++side)
+                if (mainOut[side] != nullptr)
+                    juce::FloatVectorOperations::add (mainOut[side] + start, mix[side], n);
+        }
 
         // Monitor outs: main, or the solo bus while anything is soloed (a short crossfade between them),
         // at the monitor level.
-        const float soloT = anySolo ? 1.0f : 0.0f;
         // Talking dims the control room, as on a real console, so the talkback mic does not feed back.
         const bool dimmed = talkbackOn.load (std::memory_order_relaxed) && tbDim->on();
         const float levelT = monitorGain (monitorLevel->get()) * (dimmed ? Dsp::dbToGain (talkbackDimDb) : 1.0f);
         if (monitorOut[0] != nullptr || monitorOut[1] != nullptr)
         {
-            float* solo[2] = { soloL.data(), soloR.data() };
             for (int i = 0; i < n; ++i)
             {
                 const float b = monitorSolo.next (soloT), g = monitorGainS.next (levelT);
@@ -1040,9 +1063,14 @@ void AudioEngine::routeInstrument (int slot, Midi::Route route)
         setPatch (d, it->mask | (getPatch (d) & ~instrumentBits (slot)));
         if (getInterfaceInput (d) < 0)
             setInterfaceInput (d, it->interfaceInput);
-        if (it->link >= 0)
-            if (auto* link = inputLink[(size_t) juce::jlimit (0, (int) inputLink.size() - 1, (d - Patch::channelIn) / 2)])
-                link->set ((float) it->link);
+        if (const int strip = d - Patch::channelIn; it->link >= 0 && juce::isPositiveAndBelow (strip, Config::numInputStrips))
+        {
+            // 0 = was not linked, 1 = was linked with its neighbour (sessions before any-pair links), else partner + 2.
+            if (it->link == 0)
+                inputLinks.unlink (strip);
+            else
+                inputLinks.link (strip, it->link == 1 ? strip + 1 : it->link - 2, false);
+        }
     }
     list.clear();
 
@@ -1070,14 +1098,14 @@ void AudioEngine::routeInstrument (int slot, Midi::Route route)
     {
         const int d = base + first + i;
         Restore r { d, getPatch (d), getInterfaceInput (d), -1 };
-        if (toInputs && stereo && i == 0)
-            r.link = inputLink[(size_t) (first / 2)]->on() ? 1 : 0;
+        if (toInputs && stereo)
+            r.link = inputLinks.partner (first + i) < 0 ? 0 : inputLinks.partner (first + i) + 2;
         list.push_back (r);
         setPatch (d, PatchMask::bit (Patch::instrumentOut + 2 * slot + i));   // replaces its cables...
         setInterfaceInput (d, -1);                                          // ...and its interface input
     }
     if (toInputs && stereo)
-        inputLink[(size_t) (first / 2)]->set (1.0f);   // a stereo instrument links its two strips
+        inputLinks.link (first, first + 1);   // a stereo instrument links its two strips
 }
 
 void AudioEngine::removeMidiTrack (int slot)

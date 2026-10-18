@@ -32,6 +32,8 @@ TapeMachinePanel::TapeMachinePanel (AudioEngine& e)
       wowButton (*e.tape.wowFlutter, "W&F"),
       pitchKnob (*e.tape.pitch, "Pitch", juce::Colour (0xffd9d6cc)),
       levelKnob (*e.tape.recordLevel, "Level", juce::Colour (0xffd6392d)),
+      wowKnob (*e.tape.wowAmount, "Wow", juce::Colour (0xffd9d6cc)),
+      flutterKnob (*e.tape.flutterAmount, "Flutter", juce::Colour (0xffd9d6cc)),
       meters (e.tape)
 {
     cassette.projectName().referTo (engine.projectName);
@@ -42,13 +44,19 @@ TapeMachinePanel::TapeMachinePanel (AudioEngine& e)
     for (auto* b : { &power, &rew, &ff, &stop, &play, &rec, &erase })
         addAndMakeVisible (b);
     power.setTooltip ("Switches the audio interface on and off (off frees the driver for other programs)");
-    rew.setTooltip ("Rewind: winds back to the start, speeding up like a real tape machine (Stop brakes)");
-    ff.setTooltip ("Fast forward: winds on to the end of the recording (Stop brakes)");
+    rew.setTooltip ("Rewind: winds back to the start, speeding up like a real tape machine to 20x; hold it down for 40x (Stop brakes)");
+    ff.setTooltip ("Fast forward: winds on to the end of the recording, 20x; hold it down for 40x (Stop brakes)");
     rec.setTooltip ("Record enable: armed tracks record while the tape plays");
     erase.setTooltip ("Erase: whole tracks, or a section of them");
     power.onClick = [this] { engine.setPower (! engine.isPowered()); };
     rew.onClick   = [this] { tape.rewind(); };
     ff.onClick    = [this] { tape.fastForward(); };
+    // Rew / FF start as soon as they go down; held down, the tape winds at 40x until they come up.
+    for (auto* k : { &rew, &ff })
+    {
+        k->setTriggeredOnMouseDown (true);
+        k->onStateChange = [this] { tape.setWindHeld (rew.isDown() || ff.isDown()); };
+    }
     stop.onClick  = [this] { tape.stop(); };
     play.onClick  = [this] { tape.play(); };
     rec.onClick   = [this] { tape.setRecordEnabled (! tape.isRecordEnabled()); };
@@ -58,7 +66,8 @@ TapeMachinePanel::TapeMachinePanel (AudioEngine& e)
     setOut.setTooltip ("Set the Out point to the current tape position");
     loopButton.setTooltip ("Loop between In and Out");
     punchButton.setTooltip ("Auto-punch: record armed tracks only between In and Out (you hear the old take outside)");
-    wowButton.setTooltip ("Wow and flutter: subtle tape speed wobble, smaller at higher speeds");
+    wowButton.setTooltip ("Wow and flutter: subtle tape speed wobble, smaller at higher speeds. Right-click for the Wow and Flutter knobs.");
+    wowButton.onRightClick = [this] { showWowFlutterPopup (wowButton, *tape.wowAmount, *tape.flutterAmount); };
     setIn.onClick  = [this] { tape.setInPoint (tape.getPosition()); };
     setOut.onClick = [this] { tape.setOutPoint (tape.getPosition()); };
     loopButton.onClick  = [this] { tape.loopOn = ! tape.loopOn.load(); };
@@ -80,6 +89,10 @@ TapeMachinePanel::TapeMachinePanel (AudioEngine& e)
     levelKnob.setEndLabels ("-12", "+18");
     addAndMakeVisible (pitchKnob);
     addAndMakeVisible (levelKnob);
+    setUpWowFlutterKnob (wowKnob, "Wow");
+    setUpWowFlutterKnob (flutterKnob, "Flutter");
+    addAndMakeVisible (wowKnob);
+    addAndMakeVisible (flutterKnob);
 
     addAndMakeVisible (meters);
     setSize (designW, designH);
@@ -141,8 +154,11 @@ void TapeMachinePanel::resized()
     }
     c.removeFromTop (8);
     auto knobs = c.removeFromTop (Knob::preferredHeight + 10);
-    pitchKnob.setBounds (knobs.removeFromLeft (knobs.getWidth() / 2).withSizeKeepingCentre (Knob::preferredWidth, Knob::preferredHeight));
-    levelKnob.setBounds (knobs.withSizeKeepingCentre (Knob::preferredWidth, Knob::preferredHeight));
+    const int kw4 = knobs.getWidth() / 4;   // Pitch, Level, Wow, Flutter
+    pitchKnob.setBounds (knobs.removeFromLeft (kw4).withSizeKeepingCentre (Knob::preferredWidth, Knob::preferredHeight));
+    levelKnob.setBounds (knobs.removeFromLeft (kw4).withSizeKeepingCentre (Knob::preferredWidth, Knob::preferredHeight));
+    wowKnob.setBounds (knobs.removeFromLeft (kw4).withSizeKeepingCentre (Knob::preferredWidth, Knob::preferredHeight));
+    flutterKnob.setBounds (knobs.withSizeKeepingCentre (Knob::preferredWidth, Knob::preferredHeight));
 
     ventBox = { 20, 594, 300, 76 };
 
@@ -181,7 +197,7 @@ void TapeMachinePanel::paint (juce::Graphics& g)
     g.drawLine (well.getX() + 5.0f, well.getBottom() + 0.5f, well.getRight() - 5.0f, well.getBottom() + 0.5f, 1.0f);
 
     paintFrame (g, transportBox, "TRANSPORT");
-    paintFrame (g, controlsBox, "TAPE SPEED  |  PITCH  |  RECORD LEVEL");
+    paintFrame (g, controlsBox, "SPEED  |  PITCH  |  LEVEL  |  WOW  |  FLUTTER");
 
     // Cooling vents.
     g.setColour (juce::Colours::black.withAlpha (0.7f));

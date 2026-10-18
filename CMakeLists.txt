@@ -4,7 +4,7 @@
 # Has to come before project().
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Oldest macOS the app runs on")
 
-project(Oxide3216 VERSION 0.1.8 LANGUAGES C CXX)
+project(Oxide3216 VERSION 0.1.9 LANGUAGES C CXX)
 
 # Beta builds: bump the version above with each set of changes. The label is what the app and the zip show.
 set(OXIDE_VERSION_LABEL "${PROJECT_VERSION}-beta")
@@ -51,6 +51,8 @@ add_library(Oxide3216Core STATIC
     Source/Scenes.cpp
     Source/Tempo.cpp
     Source/MidiEngine.cpp
+    Source/MidiOut.cpp
+    Source/MidiControl.cpp
     Source/TapeMachine.cpp)
 target_include_directories(Oxide3216Core PUBLIC Source)
 if(WIN32)
@@ -127,7 +129,8 @@ target_sources(Oxide3216 PRIVATE
     Source/Cassette.cpp
     Source/ConsoleLookAndFeel.cpp
     Source/Desk.cpp
-    Source/Widgets.cpp)
+    Source/Widgets.cpp
+    Source/MidiControlUI.cpp)
 
 target_link_libraries(Oxide3216 PRIVATE
     Oxide3216Core

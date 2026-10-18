@@ -8,6 +8,7 @@
 #include "Session.h"
 #include "TapeFiles.h"
 #include "AudioImport.h"
+#include "MidiControl.h"
 #include <cstdio>
 #include <deque>
 #include <vector>
@@ -180,11 +181,10 @@ namespace
 
     void testStripLink()
     {
-        std::puts ("Linked channel pairs: everything follows, pan mirrors");
+        std::puts ("Linked channels: any two in a bank, everything follows, pan mirrors");
         AudioEngine e;
-        auto& a = *e.inputStrips[2];   // channels 3 and 4
-        auto& b = *e.inputStrips[3];
-        auto& link = *e.inputLink[1];
+        auto& a = *e.inputStrips[2];   // channels 3 and 7
+        auto& b = *e.inputStrips[6];
 
         a.controls.trim->set (6.0f);
         a.controls.pan->set (-0.6f);
@@ -193,9 +193,10 @@ namespace
         b.controls.fader->set (30.0f);
         check (b.controls.trim->get() == -4.0f, "unlinked strips are independent");
 
-        link.set (1.0f);
+        e.inputLinks.link (6, 2);   // clicked 7 first: the lower channel's settings still win
+        check (e.inputLinks.partner (2) == 6 && e.inputLinks.partner (6) == 2, "channels 3 and 7 are partners");
         check (b.controls.trim->get() == 6.0f && b.eq.gain[FourBandEq::HF]->get() == 3.0f && b.controls.fader->get() == a.controls.fader->get(),
-               "linking copies channel 3's settings onto channel 4");
+               "linking copies channel 3's settings onto channel 7");
         check (near (b.controls.pan->get(), 0.6f), "linking mirrors the pan");
 
         b.controls.fader->set (65.0f);
@@ -211,16 +212,44 @@ namespace
         a.controls.pan->set (-1.0f);
         check (near (b.controls.pan->get(), 1.0f), "hard left on one is hard right on the other");
 
-        check (e.inputStrips[1]->controls.fader->get() == 0.0f && e.inputStrips[4]->controls.fader->get() == 0.0f, "other strips untouched");
+        check (e.inputStrips[3]->controls.fader->get() == 0.0f && e.inputStrips[4]->controls.fader->get() == 0.0f, "other strips untouched");
 
-        link.set (0.0f);
-        a.controls.trim->set (0.0f);
-        check (b.controls.trim->get() == 6.0f, "unlinking makes them independent again");
+        // Linking one of them elsewhere breaks the old pair.
+        e.inputLinks.link (6, 9);
+        check (e.inputLinks.partner (2) < 0 && e.inputLinks.partner (6) == 9 && e.inputLinks.partner (9) == 6, "a channel has one partner: 7 leaves 3 for 10");
+        a.controls.fader->set (20.0f);
+        check (b.controls.fader->get() == 65.0f, "the old partner no longer follows");
+        check (e.inputStrips[9]->controls.fader->get() == 65.0f, "linking 7 with 10 copies 7 onto 10 (the lower one)");
 
-        // Return strips link too.
-        e.returnLink[0]->set (1.0f);
+        e.inputLinks.unlink (9);
+        b.controls.trim->set (0.0f);
+        check (e.inputLinks.partner (6) < 0 && e.inputStrips[9]->controls.trim->get() == 6.0f, "unlinking makes them independent again");
+
+        // Return strips link too, and a stereo import links its returns hard left / right.
+        e.returnLinks.link (0, 1);
         e.returnStrips[0]->controls.fader->set (50.0f);
         check (e.returnStrips[1]->controls.fader->get() == 50.0f, "return strips 1 and 2 link");
+        e.linkStereoReturns (11, 4);   // left on tape 12, right on tape 5
+        check (e.returnLinks.partner (4) == 11 && e.returnStrips[11]->controls.pan->get() == -1.0f && e.returnStrips[4]->controls.pan->get() == 1.0f,
+               "a stereo import onto tracks 12 (L) + 5 (R) links those returns, panned hard left and right");
+
+        // Sessions: links saved and restored as pairs; older sessions' neighbour switches load as the same links.
+        const auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("Oxide3216TestLinks");
+        folder.deleteRecursively();
+        check (Session::save (e, folder).ok, "session with links saved");
+        AudioEngine back;
+        check (Session::load (back, nullptr, folder).ok, "loaded");
+        check (back.inputLinks.partner (2) < 0 && back.returnLinks.partner (0) == 1 && back.returnLinks.partner (11) == 4
+                   && back.returnStrips[4]->controls.pan->get() == 1.0f && back.returnStrips[11]->controls.pan->get() == -1.0f,
+               "links and their pans come back as saved");
+        auto json = juce::JSON::parse (folder.getChildFile (Session::fileName));
+        json.getDynamicObject()->removeProperty ("stripLinks");
+        json["controls"].getDynamicObject()->setProperty ("link." + back.inputStrips[4]->idPrefix, 1.0);
+        folder.getChildFile (Session::fileName).replaceWithText (juce::JSON::toString (json));
+        AudioEngine old;
+        check (Session::load (old, nullptr, folder).ok && old.inputLinks.partner (4) == 5 && old.returnLinks.partner (0) < 0,
+               "an older session's link switch for 5+6 loads as that link");
+        folder.deleteRecursively();
     }
 
     void testOscillator()
@@ -350,7 +379,10 @@ namespace
         check (near (b.out[2][511], 0.5f) && near (b.out[3][511], 0.0f), "monitor outs copy main when nothing is soloed");
         s2.solo->set (1.0f);   // another (silent) strip soloed
         settle (e, b);
-        check (near (b.out[0][511], 0.5f), "solo never changes main");
+        e.takeMainPeak (0);
+        b.run (e);
+        check (near (e.takeMainPeak (0), 0.5f), "solo never changes the main mix (the main meter still reads it)");
+        check (near (b.out[0][511], 0.0f, 1.0e-5f), "the main outs carry the solo bus too (no monitor out on the patch bay)");
         check (near (b.out[2][511], 0.0f, 1.0e-5f), "monitor outs play only the soloed strip");
         s1.solo->set (1.0f);
         settle (e, b);
@@ -359,6 +391,7 @@ namespace
         s2.solo->set (0.0f);
         settle (e, b);
         check (near (b.out[2][511], 0.5f), "monitor outs back to main when solo is released");
+        check (near (b.out[0][511], 0.5f), "main outs back to the main mix when solo is released");
         e.monitorLevel->set (-6.0206f);
         settle (e, b);
         check (near (b.out[2][511], 0.25f) && near (b.out[0][511], 0.5f), "monitor level -6 dB turns down the monitor outs only");
@@ -1874,7 +1907,7 @@ namespace
             TestEngine e;
             auto& a = e.inputStrips[0]->controls;
             auto& b = e.inputStrips[1]->controls;
-            e.inputLink[0]->set (1.0f);
+            e.inputLinks.link (0, 1);
             a.pan->set (-1.0f);
             check (b.pan->get() == 1.0f, "linked channels: main pans mirror");
             e.setAuxLink (0, true);
@@ -2081,6 +2114,26 @@ namespace
         tape.windTo (from + (juce::int64) (5.0 * sr));
         runUntilStopped();
         check (tape.getPosition() == from + (juce::int64) (5.0 * sr), "autolocate against a running rewind: brakes, then winds forward to the target");
+
+        // Holding FF down: up to 40x; let go and it settles back to 20x, still winding.
+        tape.setLength ((juce::int64) (30.0 * 60.0 * sr));   // half an hour, room to wind
+        tape.locate (0);
+        tape.setWindHeld (true);
+        tape.fastForward();
+        runFor (3.5);
+        std::printf ("      held: %.1fx after 3.5 s\n", tape.getWindSpeed());
+        check (std::abs (tape.getWindSpeed() - 40.0f) < 0.01f, "held down: 40x play speed");
+        tape.setWindHeld (false);
+        runFor (1.5);
+        check (std::abs (tape.getWindSpeed() - 20.0f) < 0.01f && tape.getWindDirection() > 0, "let go: back to 20x, still winding");
+        tape.setWindHeld (true);
+        tape.stop();
+        runUntilStopped();
+        tape.fastForward();
+        runFor (3.5);
+        check (std::abs (tape.getWindSpeed() - 20.0f) < 0.01f, "stop lets go of the hold: the next wind is 20x");
+        tape.stop();
+        runUntilStopped();
     }
 
     void testScenes()
@@ -2116,11 +2169,18 @@ namespace
                "faders and knobs come back");
         check (ch.controls.mute->on() && e.tape.pitch->get() == 4.0f, "switches and the tape machine stay as they are");
 
-        // A 2 s fade from scene 05 (fader 70) to scene 10 (fader 20): halfway there after 1 s, there after 2 s.
+        // Fades are stored with scenes as their fade out. Scene 05 again, now with a 2 s fade; scene 10 has 0 (the
+        // knob when it was stored).
         s.fadeTime->set (2.0f);
+        s.store (4, "Verse");
+        check (s.getStoredFade (4) == 2.0f && s.getStoredFade (9) == 0.0f && s.getStoredFade (0) < 0.0f, "store keeps the fade knob with the scene");
+        s.fadeTime->set (0.0f);   // the knob no longer decides: leaving 05 takes 05's fade out
+
+        // A 2 s fade from scene 05 (fader 70) to scene 10 (fader 20): halfway there after 1 s, there after 2 s.
         const double t0 = juce::Time::getMillisecondCounterHiRes();
         s.recall (9);
-        check (s.isFading() && ch.controls.fader->get() == 70.0f, "with a fade time, Go starts a glide (nothing jumps)");
+        check (s.isFading() && ch.controls.fader->get() == 70.0f, "leaving a scene with a stored fade starts a glide (nothing jumps)");
+        check (s.fadeTime->get() == 0.0f, "the knob shows the recalled scene's own fade out");
         s.advanceFade (t0 + 1000.0);
         const float mid = ch.controls.fader->get();
         std::printf ("      fader halfway through the fade: %.1f\n", mid);
@@ -2131,9 +2191,10 @@ namespace
         check (! s.isFading() && ch.controls.fader->get() == 20.0f && ch.eq.gain[FourBandEq::HF]->get() == -3.0f, "the fade ends exactly on the scene");
         check (e.inputStrips[5]->controls.fader->get() == otherBefore, "a fader moved by hand during the fade stays where it was put");
         check (! SceneMemory::isSceneControl (*s.fadeTime), "the fade time itself is not part of a scene");
-        s.fadeTime->set (0.0f);
+        s.fadeTime->set (4.0f);
         s.recall (4);
-        check (! s.isFading() && ch.controls.fader->get() == 70.0f, "fade all the way left: instant");
+        check (! s.isFading() && ch.controls.fader->get() == 70.0f, "leaving scene 10 (fade 0) is instant, whatever the knob says");
+        check (s.fadeTime->get() == 2.0f, "and the knob shows scene 05's fade");
 
         // Through a session file and back.
         const auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("Oxide3216TestScenes");
@@ -2144,10 +2205,21 @@ namespace
         check (Session::load (b, nullptr, folder).ok, "and loaded");
         check (b.scenes.isStored (4) && b.scenes.isStored (9) && ! b.scenes.isStored (0) && b.scenes.getTitle (4) == "Verse"
                && b.scenes.getCurrent() == 4, "scenes restored");
+        check (b.scenes.getStoredFade (4) == 2.0f && b.scenes.getStoredFade (9) == 0.0f, "stored fades come back");
         b.inputStrips[3]->controls.fader->set (1.0f);
-        b.scenes.recall (9);
+        b.scenes.recall (9);   // from 05: its 2 s fade
+        b.scenes.advanceFade (juce::Time::getMillisecondCounterHiRes() + 3000.0);
         check (b.inputStrips[3]->controls.fader->get() == 20.0f, "a loaded scene recalls");
         folder.deleteRecursively();
+
+        // Scenes from before fades were stored: none of their own, so the knob decides.
+        auto old = b.scenes.toVar();
+        for (auto& o : *old["scenes"].getArray())
+            o.getDynamicObject()->removeProperty ("fade");
+        b.scenes.fromVar (old);
+        check (b.scenes.getStoredFade (4) < 0.0f, "an old scene has no stored fade");
+        b.scenes.fadeTime->set (1.5f);
+        check (b.scenes.fadeIntoNext() == 1.5f, "leaving it uses the fade knob");
     }
 
     void testShuttleJogScrub()
@@ -2488,13 +2560,13 @@ namespace
         check (e.getPatch (P::channelIn + 2).test (P::instrumentOut + 0) && e.getPatch (P::channelIn + 3).test (P::instrumentOut + 1),
                "stereo goes to an odd / even pair");
         check (e.getInputSource (2) == -1 && e.getInputSource (3) == -1, "the strips' interface inputs come out");
-        check (e.inputLink[1]->on(), "the pair is linked");
+        check (e.inputLinks.partner (2) == 3, "the pair is linked");
 
         e.routeInstrument (b, { Midi::Route::input, 3 });   // the mono one takes strip 4: the stereo one gives up the pair
         check (e.getInstrumentRoute (a).kind == Midi::Route::none, "the other track is unrouted");
         check (e.getInputSource (2) == 2, "strip 3 has its interface input back");
         check (e.getPatch (P::channelIn + 3) == PatchMask::bit (P::instrumentOut + 2), "strip 4 now hears the mono instrument (track 2 left)");
-        check (! e.inputLink[1]->on(), "the link is put back as it was");
+        check (e.inputLinks.partner (2) < 0 && e.inputLinks.partner (3) < 0, "the link is put back as it was");
 
         e.routeInstrument (b, {});
         check (e.getInputSource (3) == 3 && ! e.getPatch (P::channelIn + 3).any(), "Not routed: strip 4 is back on interface input 4");
@@ -2646,6 +2718,7 @@ namespace
                && clip.notes[0].pitch == 36 && clip.notes[1].velocity == 90, "notes on our grid (960 a quarter)");
         check (clip.length == 3840, "the clip is one bar long");
         check (clip.controls.size() == 1 && clip.controls[0].number == 4 && clip.controls[0].value == 90 && clip.controls[0].tick == 960, "its controllers come too");
+        check (clip.notes[0].channel == 10 && clip.controls[0].channel == 10, "notes and controllers keep their channel");
         e.tempo.setSignature (6, 8);
         clip = MidiEngine::readMidiFile (file, e.tempo, error);
         check (clip.notes.size() == 2 && clip.notes[1].start == 960 && clip.length == 2880, "in 6/8 a quarter is still 960 ticks; the clip is one 6/8 bar");
@@ -2702,6 +2775,419 @@ namespace
         const auto& clips = b.midi.getClips (0);
         check (clips.size() == 1 && clips[0].name == "Riff" && clips[0].start == 7680 && clips[0].length == 3840
                && clips[0].notes == c.notes, "the clip and its notes");
+    }
+
+    void testMidiControl()
+    {
+        std::puts ("MIDI control: shortcuts and the Jog / shuttle window learn notes and controllers");
+        const auto note = [] (int ch, int n) { return juce::MidiMessage::noteOn (ch, n, (juce::uint8) 100); };
+        const auto cc = [] (int ch, int n, int v) { return juce::MidiMessage::controllerEvent (ch, n, v); };
+
+        // Shortcuts: learn, invoke, one press per command, saved.
+        MidiShortcuts s;
+        std::vector<int> done;
+        s.invoke = [&] (int c) { done.push_back (c); };
+        s.learn (7);
+        check (s.handle (note (2, 60)) && s.get (7) == MidiBinding { MidiBinding::note, 2, 60 } && s.getLearning() == -1, "learn a note (with its channel)");
+        s.handle (note (2, 60));
+        s.handle (note (3, 60));
+        s.handle (juce::MidiMessage::noteOff (2, 60));
+        check (done == std::vector<int> { 7 }, "the note does the command; other channels and note offs don't");
+        s.learn (9);
+        s.handle (cc (1, 20, 127));
+        s.handle (cc (1, 20, 0));
+        s.handle (cc (1, 20, 127));
+        check (done == std::vector<int> { 7, 9 }, "a controller presses on values above 0 only");
+        s.learn (8);
+        s.handle (note (2, 60));
+        check (! s.get (7).isSet() && s.get (8).isSet(), "learning a press already in use moves it");
+        MidiShortcuts loaded;
+        loaded.fromString (s.toString());
+        check (loaded.get (8) == s.get (8) && loaded.get (9) == s.get (9) && ! loaded.get (7).isSet(), "saved and loaded");
+
+        // Jog / shuttle: input and channel, encoder modes, ring, keys.
+        ShuttleMidi m;
+        std::vector<std::pair<int, int>> acts;
+        m.act = [&] (ShuttleMidi::Control c, int amount) { acts.push_back ({ (int) c, amount }); };
+        m.learn (ShuttleMidi::jogWheel);
+        check (! m.handle (cc (1, 16, 1), "jog"), "no input chosen: nothing");
+        m.setInput (ShuttleMidi::allInputs);
+        m.learn (ShuttleMidi::jogWheel);
+        check (! m.handle (note (1, 40), "jog") && m.getLearning() == ShuttleMidi::jogWheel, "the wheel won't learn a note");
+        m.handle (cc (1, 16, 1), "jog");
+        check (m.get (ShuttleMidi::jogWheel).kind == MidiBinding::cc && m.get (ShuttleMidi::jogWheel).number == 16, "the wheel learns a controller");
+        m.handle (cc (1, 16, 3), "jog");
+        m.handle (cc (1, 16, 126), "jog");
+        m.setEncoder (ShuttleMidi::Encoder::offset64);
+        m.handle (cc (1, 16, 66), "jog");
+        m.setEncoder (ShuttleMidi::Encoder::absolute);
+        m.handle (cc (1, 16, 10), "jog");
+        m.handle (cc (1, 16, 14), "jog");
+        const std::vector<std::pair<int, int>> jogs { { 0, 3 }, { 0, -2 }, { 0, 2 }, { 0, 4 } };
+        check (acts == jogs, "relative (+3, -2), around 64 (+2), absolute (first sets, then +4)");
+        acts.clear();
+        m.learn (ShuttleMidi::shuttleRing);
+        m.handle (cc (1, 17, 64), "jog");
+        m.handle (cc (1, 17, 127), "jog");
+        m.handle (cc (1, 17, 0), "jog");
+        m.learn (ShuttleMidi::slot3);
+        m.handle (note (1, 50), "jog");
+        m.handle (note (1, 50), "jog");
+        const std::vector<std::pair<int, int>> rest { { 1, 7 }, { 1, -7 }, { ShuttleMidi::slot3, 1 } };
+        check (acts == rest, "the ring follows its controller (64 = centre, learning sends nothing), a key presses");
+        m.setChannel (2);
+        acts.clear();
+        m.handle (note (1, 50), "jog");
+        check (acts.empty(), "the window's channel only");
+        ShuttleMidi loadedM;
+        loadedM.fromString (m.toString());
+        check (loadedM.input == ShuttleMidi::allInputs && loadedM.channel == 2 && loadedM.encoder == ShuttleMidi::Encoder::absolute
+               && loadedM.get (ShuttleMidi::slot3) == m.get (ShuttleMidi::slot3), "saved and loaded");
+    }
+
+    void testWowFlutterKnobs()
+    {
+        std::puts ("Tape: Wow and Flutter knobs");
+        TestEngine e;
+        auto& tape = e.tape;
+        check (tape.wowAmount->get() == 100.0f && tape.flutterAmount->get() == 100.0f, "both start at 100 % (the machine as it was)");
+        check (! SceneMemory::isSceneControl (*tape.wowAmount) && ! SceneMemory::isSceneControl (*tape.flutterAmount), "not part of scenes (tape machine)");
+        e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }));
+        tape.characterOn = true;
+        Buffers b (1, 2, 256);
+        b.run (e);
+        const auto delayBefore = tape.getRecordDelay();
+        tape.wowAmount->set (500.0f);
+        tape.flutterAmount->set (0.0f);
+        for (int i = 0; i < 4; ++i) b.run (e);
+        check (delayBefore > tape.getLatency() && tape.getRecordDelay() == delayBefore, "turning them never moves the record delay (recordings stay lined up)");
+    }
+
+    void testSceneMidi()
+    {
+        std::puts ("Scenes over MIDI: a controller per scene selects it, a program change is Go");
+        TestEngine e;
+        e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }));
+        auto& s = e.scenes;
+        auto& fader = *e.inputStrips[0]->controls.fader;
+        fader.set (70.0f);
+        s.store (0, "Intro");
+        fader.set (20.0f);
+        s.store (2, "Verse");
+        check (s.getMidiSettings().cc[0] == 1 && s.getMidiSettings().cc[98] == 99 && s.getMidiSettings().goProgram == 0,
+               "defaults: scene NN on CC NN, Go on program 1");
+
+        const auto cc = [] (int ch, int n, int v) { return juce::MidiMessage::controllerEvent (ch, n, v); };
+        check (! s.handleMidi (cc (1, 1, 127), false, "keys"), "no MIDI input chosen: hardware is ignored");
+        s.setMidiInput (SceneMemory::allInputs);
+        check (s.handleMidi (cc (1, 1, 127), false, "keys") && s.getSelected() == 0, "CC 1 selects scene 01");
+        check (! s.handleMidi (cc (1, 3, 0), false, "keys") && s.getSelected() == 0, "value 0 (a button let go) does nothing");
+        check (s.handleMidi (juce::MidiMessage::programChange (1, 0), false, "keys") && s.getCurrent() == 0 && fader.get() == 70.0f,
+               "program 1 is Go: scene 01 recalled");
+        s.setMidiInput ("pedal");
+        check (! s.handleMidi (cc (1, 3, 127), false, "keys") && s.handleMidi (cc (1, 3, 127), false, "pedal") && s.getSelected() == 2,
+               "one input chosen: only it is heard");
+        s.setMidiChannel (2);
+        check (! s.handleMidi (cc (1, 1, 127), false, "pedal") && s.handleMidi (cc (2, 1, 127), false, "pedal"), "channel 2 only");
+        s.setMidiChannel (0);
+
+        // Learn.
+        s.select (0);
+        s.learn (SceneMemory::Learn::sceneCc, 0);
+        s.handleMidi (cc (5, 20, 64), false, "pedal");
+        check (s.getMidiSettings().cc[0] == 20 && s.getMidiSettings().cc[19] == -1 && s.getLearning() == SceneMemory::Learn::none,
+               "learn: CC 20 now selects 01, scene 20 gives it up");
+        s.learn (SceneMemory::Learn::goProgram);
+        s.handleMidi (juce::MidiMessage::programChange (1, 9), false, "pedal");
+        check (s.getMidiSettings().goProgram == 9, "learn: program 10 is Go");
+
+        // From a MIDI page track: a clip selects scene 03 on beat 1 and presses Go on beat 2.
+        auto& m = e.midi;
+        const int k = m.addTrack ("Scenes");
+        Midi::Clip clip;
+        clip.length = 4 * Tempo::ticksPerQuarter;
+        clip.controls = { { 0, 3, 127 }, { Tempo::ticksPerQuarter, Midi::programChange, 9 } };
+        m.setClips (k, { clip });
+        m.setToScenes (k, true);
+        m.tick();
+        s.select (0);
+        e.tape.play();
+        Buffers b (1, 2, 480);
+        for (int i = 0; i < 80; ++i) b.run (e);   // 0.8 s: past beat 2
+        e.tape.stop();
+        m.deliverSceneMidi();
+        check (s.getSelected() == 2 && s.getCurrent() == 2 && fader.get() == 20.0f, "the track selected 03 and pressed Go");
+        s.setMidiFromPage (false);
+        check (! s.handleMidi (cc (1, 3, 127), true, {}), "MIDI page tracks switched off: ignored");
+
+        // Saved with the session.
+        const auto saved = juce::JSON::toString (s.toVar());
+        TestEngine other;
+        other.scenes.fromVar (juce::JSON::parse (saved));
+        const auto& o = other.scenes.getMidiSettings();
+        check (o.input == "pedal" && ! o.fromMidiPage && o.goProgram == 9 && o.cc[0] == 20 && o.cc[19] == -1, "MIDI control is saved");
+        const auto tracks = juce::JSON::toString (m.toVar());
+        other.midi.fromVar (juce::JSON::parse (tracks), {});
+        check (other.midi.sendsToScenes (0), "a track's Send to scene control is saved");
+    }
+
+    void testArmPlayback()
+    {
+        std::puts ("Tape: record arm yellow plays the tape back until Record, red is input only");
+        TestEngine e;
+        e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }));
+        e.setInputSource (0, 0);
+        e.tape.characterOn = false;
+        auto& tape = e.tape;
+        using A = TapeMachine::ArmState;
+
+        tape.stepArmState (0);
+        check (tape.getArmState (0) == A::playback && tape.arm[0]->on(), "a click: grey -> yellow (armed)");
+        tape.stepArmState (0);
+        check (tape.getArmState (0) == A::armed, "then red");
+        tape.stepArmState (0);
+        check (tape.getArmState (0) == A::off && ! tape.arm[0]->on(), "then grey");
+
+        // A take of 0.25 on track 1.
+        Buffers b (1, 2, 256);
+        std::fill (b.in[0].begin(), b.in[0].end(), 0.25f);
+        tape.setArmState (0, A::armed);
+        tape.locate (0);   // makes room on tape for the armed track
+        tape.setRecordEnabled (true);
+        tape.play();
+        for (int i = 0; i < 200; ++i) b.run (e);   // about 1 s
+        tape.stop();
+        tape.setRecordEnabled (false);
+        b.run (e);
+
+        // Now 0.5 at the input, track 1 yellow: the take plays back to tape out and return 1.
+        std::fill (b.in[0].begin(), b.in[0].end(), 0.5f);
+        tape.setArmState (0, A::playback);
+        tape.locate (0);
+        tape.play();
+        for (int i = 0; i < 20; ++i) b.run (e);
+        tape.takeOutputPeak (0);
+        e.returnStrips[0]->takePeak();
+        for (int i = 0; i < 20; ++i) b.run (e);
+        const float played = tape.takeOutputPeak (0);
+        const float onReturn = e.returnStrips[0]->takePeak();
+        std::printf ("      yellow, no Record: tape out %.3f, return 1 %.3f\n", played, onReturn);
+        check (near (played, 0.25f) && onReturn > 0.0f, "yellow without Record: the tape plays back, return 1 hears it");
+        check (! tape.isRecording (0), "and nothing records");
+
+        // Record on: input only, nothing on return 1, and it records.
+        tape.setRecordEnabled (true);
+        for (int i = 0; i < 20; ++i) b.run (e);
+        tape.takeOutputPeak (0);
+        e.returnStrips[0]->takePeak();
+        for (int i = 0; i < 20; ++i) b.run (e);
+        check (near (tape.takeOutputPeak (0), 0.5f) && e.returnStrips[0]->takePeak() == 0.0f && tape.isRecording (0),
+               "yellow with Record: the input goes to tape, return 1 hears nothing, it records");
+        tape.stop();
+        tape.setRecordEnabled (false);
+        b.run (e);
+
+        // Red without Record: input only, as before.
+        tape.setArmState (0, A::armed);
+        tape.locate (0);
+        tape.play();
+        for (int i = 0; i < 20; ++i) b.run (e);
+        tape.takeOutputPeak (0);
+        e.returnStrips[0]->takePeak();
+        for (int i = 0; i < 20; ++i) b.run (e);
+        check (near (tape.takeOutputPeak (0), 0.5f) && e.returnStrips[0]->takePeak() == 0.0f, "red: input only, nothing from tape");
+        tape.stop();
+    }
+
+    void testMidiOut()
+    {
+        std::puts ("MIDI page: a track plays hardware through a MIDI out, on its channel");
+        TestEngine e;
+        e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }));
+        auto& m = e.midi;
+        auto& outs = m.outs();
+        const int k = m.addTrack ("Synth");
+        auto synth = std::make_unique<TestSynth> (true);
+        auto* raw = synth.get();
+        m.setInstrument (k, std::move (synth), {});
+        check (m.getChannel (k) == 1 && m.getOutput (k).isEmpty(), "a new track: channel 1, no MIDI out");
+
+        // A note on channel 10 (as from a groove) at bar 2, and a CC before it.
+        Midi::Clip clip;
+        clip.length = 8 * Tempo::ticksPerQuarter;
+        clip.notes.push_back ({ 4 * Tempo::ticksPerQuarter, Tempo::ticksPerQuarter, 36, 110, 10 });
+        clip.controls.push_back ({ Tempo::ticksPerQuarter, 7, 90, 10 });
+        m.setClips (k, { clip });
+        m.setOutput (k, "test out");
+        const int port = outs.portFor ("test out");
+        check (port == 0 && ! outs.isOpen (port), "the device gets a port (not opened in the tests)");
+        m.tick();
+
+        const auto run = [&] (int blocks) { Buffers b (1, 2, 480); for (int i = 0; i < blocks; ++i) b.run (e); };
+        const auto queued = [&] (int forPort)
+        {
+            std::vector<juce::MidiMessage> v;
+            for (auto& item : outs.takeQueued())
+                if (item.port == forPort)
+                    v.push_back (item.message());
+            return v;
+        };
+        const auto find = [] (const std::vector<juce::MidiMessage>& v, const std::function<bool (const juce::MidiMessage&)>& f)
+        {
+            return std::find_if (v.begin(), v.end(), f) != v.end();
+        };
+
+        // Channel 3: everything goes out on 3.
+        m.setChannel (k, 3);
+        outs.takeQueued();
+        e.tape.play();
+        run (250);   // 2.5 s: the note is on
+        auto sent = queued (port);
+        check (find (sent, [] (const juce::MidiMessage& x) { return x.isNoteOn() && x.getNoteNumber() == 36 && x.getChannel() == 3; }), "the note goes out on channel 3");
+        check (find (sent, [] (const juce::MidiMessage& x) { return x.isController() && x.getControllerNumber() == 7 && x.getChannel() == 3; }), "and the controller");
+        check (raw->noteOns == 1, "the instrument plays it too");
+
+        // Unplugging the track from the device mid-note ends the note there.
+        m.setOutput (k, {});
+        run (1);
+        sent = queued (port);
+        check (find (sent, [] (const juce::MidiMessage& x) { return x.isNoteOff() && x.getNoteNumber() == 36 && x.getChannel() == 3; }),
+               "taking the MIDI out away sends the held note's off to it");
+        e.tape.stop();
+        run (1);
+
+        // As recorded: channel 10, as in the clip. Locate past the CC: it is chased on its channel.
+        m.setOutput (k, "test out");
+        m.setChannel (k, MidiEngine::asRecorded);
+        e.tape.locate (72000);   // 1.5 s
+        outs.takeQueued();
+        e.tape.play();
+        run (100);
+        sent = queued (port);
+        check (! sent.empty() && sent.front().isController() && sent.front().getChannel() == 10 && sent.front().getControllerValue() == 90,
+               "starting part-way: the controller is chased first, on channel 10");
+        check (find (sent, [] (const juce::MidiMessage& x) { return x.isNoteOn() && x.getChannel() == 10; }), "as recorded: the note on channel 10");
+        check (std::is_sorted (sent.begin(), sent.end(), [] (const juce::MidiMessage& a, const juce::MidiMessage& b) { return a.getTimeStamp() < b.getTimeStamp(); }),
+               "queued in time order");
+        e.tape.stop();
+        run (1);
+        sent = queued (port);
+        check (find (sent, [] (const juce::MidiMessage& x) { return x.isNoteOff() && x.getChannel() == 10; }) || raw->level == 0.0f, "stop ends the note on the hardware");
+
+        // Live keyboard on channel 2 through a channel 5 track: plays on 5, records as played (2).
+        m.setChannel (k, 5);
+        m.setArmed (k, true);
+        e.tape.setRecordEnabled (true);
+        e.tape.locate (0);
+        outs.takeQueued();
+        e.tape.play();
+        run (10);
+        m.injectLive (k, juce::MidiMessage::noteOn (2, 64, (juce::uint8) 100));
+        run (20);
+        m.injectLive (k, juce::MidiMessage::noteOff (2, 64));
+        run (5);
+        e.tape.stop();
+        e.tape.setRecordEnabled (false);
+        m.tick();
+        sent = queued (port);
+        check (find (sent, [] (const juce::MidiMessage& x) { return x.isNoteOn() && x.getNoteNumber() == 64 && x.getChannel() == 5; }), "the keyboard plays through on channel 5");
+        const auto& clips = m.getClips (k);
+        check (clips.size() == 2 && clips[1].notes.size() == 1 && clips[1].notes[0].channel == 2, "the take keeps the channel it was played on");
+        m.setArmed (k, false);
+
+        // Saved with the session.
+        m.setOutputOffset (k, -7.5);
+        m.setClockOutput ("clock out", true);
+        m.setClockOffset (3.0);
+        const auto saved = juce::JSON::toString (m.toVar());
+        TestEngine other;
+        other.midi.fromVar (juce::JSON::parse (saved), {});
+        check (other.midi.getOutput (0) == "test out" && other.midi.getChannel (0) == 5 && other.midi.getOutputOffset (0) == -7.5,
+               "MIDI out, channel and offset are saved");
+        check (other.midi.sendsClockTo ("clock out") && other.midi.getClockOffset() == 3.0, "clock outputs and offset are saved");
+        check (other.midi.getClips (0).size() == 2 && other.midi.getClips (0)[1].notes == clips[1].notes
+               && other.midi.getClips (0)[0].controls == clip.controls, "channels in the clips are saved");
+        juce::var old = juce::JSON::parse (saved);
+        old["tracks"][0].getDynamicObject()->removeProperty ("channel");
+        other.midi.fromVar (old, {});
+        check (other.midi.getChannel (0) == 1, "older sessions: channel 1");
+    }
+
+    void testMidiClock()
+    {
+        std::puts ("MIDI clock out: song position, start / continue / stop, 24 clocks a quarter on the tempo");
+        TestEngine e;
+        e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }));
+        auto& m = e.midi;
+        auto& outs = m.outs();
+        m.setClockOutput ("drum machine", true);
+        const int port = outs.portFor ("drum machine");
+        Midi::Clip empty;   // a long clip keeps the blank tape playing
+        empty.length = 64 * 4 * Tempo::ticksPerQuarter;
+        m.setClips (m.addTrack(), { empty });
+        m.tick();
+        const auto run = [&] (int blocks) { Buffers b (1, 2, 480); for (int i = 0; i < blocks; ++i) b.run (e); };
+        const auto bytes = [&]
+        {
+            std::vector<int> v;
+            for (auto& item : outs.takeQueued())
+                if (item.port == port)
+                    v.push_back (item.data[0]);
+            return v;
+        };
+        const auto count = [] (const std::vector<int>& v, int status) { return (int) std::count (v.begin(), v.end(), status); };
+
+        run (2);
+        check (bytes().empty(), "nothing while the tape is stopped");
+
+        // From the top at 120: start, then a clock every 1/48 s.
+        e.tape.play();
+        run (100);   // 1 s
+        auto v = bytes();
+        check (v.size() >= 2 && v[0] == 0xf2 && v[1] == 0xfa, "song position 0, then start");
+        std::printf ("      %d clocks in 1 s at 120\n", count (v, 0xf8));
+        check (count (v, 0xf8) == 48, "48 clocks a second at 120 BPM");
+        e.tape.stop();
+        run (1);
+        v = bytes();
+        check (count (v, 0xfc) == 1, "stop");
+
+        // From part-way (1.1 s = beat 3 + a bit): song position on the next sixteenth, continue.
+        e.tape.locate (52800);
+        e.tape.play();
+        run (1);
+        std::vector<MidiOuts::Item> items = outs.takeQueued();
+        check (items.size() >= 2 && items[0].data[0] == 0xf2 && items[1].data[0] == 0xfb, "song position, then continue");
+        if (! items.empty())
+        {
+            const int spp = items[0].data[1] | (items[0].data[2] << 7);
+            std::printf ("      song position %d sixteenths\n", spp);
+            check (spp == 9, "1.1 s at 120 is 8.8 sixteenths: the next one is 9");
+        }
+        // Locate while playing: stop, then a new position.
+        e.tape.locate (96000);
+        run (2);
+        v = bytes();
+        check (v.size() >= 3 && v[0] == 0xfc && v[1] == 0xf2 && v[2] == 0xfb, "a locate while playing: stop, song position, continue");
+
+        // Twice the tempo, twice the clocks.
+        e.tape.stop();
+        run (1);
+        e.tempo.bpm->set (240.0f);
+        e.tape.locate (0);
+        bytes();
+        e.tape.play();
+        run (100);
+        v = bytes();
+        check (count (v, 0xf8) == 96, "96 clocks a second at 240 BPM");
+
+        // Switched off while running: stop goes out, and nothing after.
+        m.setClockOutput ("drum machine", false);
+        run (5);
+        v = bytes();
+        check (v.size() == 1 && v[0] == 0xfc, "switching the clock off while running sends stop");
+        e.tape.stop();
+        run (1);
     }
 
     void testClickStrip()
@@ -2805,6 +3291,7 @@ namespace
             auto* writer = wav.createWriterFor (stream.get(), 48000.0, 2, 24, {}, 0);
             stream.release();
             auto threaded = std::make_unique<juce::AudioFormatWriter::ThreadedWriter> (writer, thread, 1 << 16);
+            e.inputStrips[1]->controls.solo->set (1.0f);   // a silent strip soloed: ignored by the bounce
             e.startBounce (threaded.get(), 0, 4800);
             Buffers b (1, 2, 480);
             std::fill (b.in[0].begin(), b.in[0].end(), 0.5f);
@@ -2823,6 +3310,7 @@ namespace
                 juce::AudioBuffer<float> got (2, 4800);
                 reader->read (&got, 0, 4800, 0, true, true);
                 check (std::abs (got.getSample (0, 4000) - 0.5f * pan) < 1.0e-4f, "the main mix, as the main outs carry it");
+                check (std::abs (b.out[0][479] - 0.5f * pan) < 1.0e-4f, "while bouncing the main outs ignore solo too");
             }
         }
         dir.deleteRecursively();
@@ -2917,6 +3405,47 @@ namespace
         check (readTape (b.tape, 3, 2500) == track4 && ! b.tape.trackHasAudio (1), "loaded tape matches the files the tape wrote");
     }
 
+    void testTapeFileRate()
+    {
+        std::puts ("Tape files: a track file's header names the tape's sample rate");
+        const auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("Oxide3216TestRate");
+        dir.deleteRecursively();
+        dir.createDirectory();
+        const auto file = dir.getChildFile (Session::trackFileName (0));
+        const auto headerRate = [&]
+        {
+            juce::FileInputStream in (file);
+            in.setPosition (24);
+            return in.readInt();
+        };
+        {
+            // A 48 kHz file (written before the interface changed rate): mono float, 1000 samples.
+            juce::FileOutputStream out (file);
+            out.write ("RIFF", 4); out.writeInt (36 + 4000); out.write ("WAVE", 4);
+            out.write ("fmt ", 4); out.writeInt (16); out.writeShort (3); out.writeShort (1);
+            out.writeInt (48000); out.writeInt (48000 * 4); out.writeShort (4); out.writeShort (32);
+            out.write ("data", 4); out.writeInt (4000);
+            for (int i = 0; i < 1000; ++i) out.writeFloat (0.25f);
+        }
+        {
+            TestEngine e;
+            TapeFiles files (e.tape);
+            files.setFolder (dir);
+            files.flush();
+            check (headerRate() == 48000, "no audio device yet (rate only a default): left alone");
+            e.prepare (44100.0, channels ({ 0 }), channels ({ 0, 1 }));
+            files.flush();
+            check (headerRate() == 44100, "at 44.1 kHz the header says 44100");
+            juce::FileInputStream in (file);
+            in.setPosition (28);
+            const int byteRate = in.readInt();
+            in.setPosition (44);
+            check (byteRate == 44100 * 4 && in.readFloat() == 0.25f && file.getSize() == 44 + 4000, "byte rate too; the audio is untouched");
+            files.setFolder ({});
+        }
+        dir.deleteRecursively();
+    }
+
     void testTapeFiles()
     {
         std::puts ("Tape files: recording goes straight to the session's track WAVs");
@@ -3002,6 +3531,8 @@ namespace
             a.tape.setOutPoint (5000);
             a.tape.loopOn = true;
             a.tape.setMemory (2, 4321);
+            a.tape.setMemory (98, 8765);   // memory 99
+            a.returnStrips[2]->scribbleColour = 4;   // green
             const auto r = Session::save (a, folder, &written);
             check (r.ok, "session saved");
             check (folder.getChildFile ("session.json").existsAsFile() && folder.getChildFile ("Track 05.wav").existsAsFile()
@@ -3027,12 +3558,14 @@ namespace
             check (b.getPatch (AudioEngine::Patch::returnIn + 3) == (std::uint64_t (1) << (AudioEngine::Patch::auxOut + 1)), "patch cables restored");
             check (b.tape.getLength() == (juce::int64) take.size() && b.tape.getInPoint() == 1000 && b.tape.getOutPoint() == 5000 && b.tape.loopOn,
                    "tape length and locators restored");
-            check (b.tape.getMemory (2) == 4321 && b.tape.getMemory (0) == -1, "locate memories restored");
+            check (b.tape.getMemory (2) == 4321 && b.tape.getMemory (98) == 8765 && b.tape.getMemory (0) == -1, "locate memories restored (all 99)");
+            check (b.returnStrips[2]->scribbleColour == 4 && b.inputStrips[2]->scribbleColour == 0, "scribble strip colours restored");
             std::vector<float> got (take.size());
             b.tape.readTrack (4, 0, got.data(), (int) got.size());
             check (got == take, "track audio restored bit for bit (32-bit float WAV)");
 
             // Export the mix (track 5 through return 5, everything else at defaults).
+            b.inputStrips[0]->controls.solo->set (1.0f);   // a silent strip soloed: the export ignores it
             const auto wav = folder.getChildFile ("mix.wav");
             const auto e = Session::exportMix (b, wav, 0, b.tape.getLength(), 1.0, [] (double) { return true; });
             check (e.ok, "export finished");
@@ -3052,6 +3585,7 @@ namespace
                 juce::ignoreUnused (lo, hi);
             }
             check (! b.tape.isPlaying() && b.tape.getPosition() == 0 && ! b.tape.exporting, "transport put back after export");
+            b.inputStrips[0]->controls.solo->set (0.0f);
 
             // In to Out, into the Bounced Audio folder (created by the export).
             const auto bounced = Session::bounceFolder (folder);
@@ -3140,6 +3674,14 @@ namespace
             peakR = juce::jmax (peakR, std::abs (r[(size_t) i]));
         }
         check (std::abs (peakL - 0.5f) < 0.02f && std::abs (peakR - 0.1f) < 0.01f, "left on track 15, right on track 16, levels kept");
+        {
+            // Any two tracks: left on 10, right on 3.
+            AudioImport::place (e.tape, a, 9, 0, 2);
+            std::vector<float> l2 (48000), r2 (48000);
+            e.tape.readTrack (9, 0, l2.data(), 48000);
+            e.tape.readTrack (2, 0, r2.data(), 48000);
+            check (l2 == l && r2 == r && ! e.tape.trackHasAudio (10), "a stereo file onto any two tracks: left on 10, right on 3");
+        }
         int crossings = 0;
         for (int i = 4801; i < 43200; ++i)
             crossings += (l[(size_t) i - 1] < 0.0f) != (l[(size_t) i] < 0.0f) ? 1 : 0;
@@ -3407,10 +3949,17 @@ int main (int argc, char** argv)
     testMidiRecording();
     testMidiControllers();
     testMidiFiles();
+    testArmPlayback();
+    testSceneMidi();
+    testMidiControl();
+    testWowFlutterKnobs();
+    testMidiOut();
+    testMidiClock();
     testMidiSession();
     testScenes();
     testWowFlutter();
     testTapeFiles();
+    testTapeFileRate();
     testSessions();
     testOldCompressorSession();
     testOldTrimSession();

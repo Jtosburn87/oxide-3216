@@ -53,7 +53,20 @@ public:
     Param* speed;                             // 0, 1, 2 = 7.5, 15, 30 ips
     Param* pitch;                             // vari-speed, percent: -12..+12 (0 = the speed switch exactly)
     std::array<Param*, numTracks> arm {};     // armed tracks monitor their input and record
+    std::array<Param*, numTracks> armPlay {}; // with arm: the track plays back the tape until Record is on
     Param* wowFlutter;                        // W&F on/off
+    Param* wowAmount;                         // wow, percent of the speed's own (0..500, 100 = as the machine is)
+    Param* flutterAmount;                     // flutter, the same
+    static constexpr float maxWowFlutterPercent = 500.0f;
+
+    /** The record arm button's three states, in the order a click steps through them. */
+    enum class ArmState { off, playback, armed };   // grey; yellow: tape plays until Record; red: input only
+    ArmState getArmState (int track) const noexcept;
+    void setArmState (int track, ArmState);
+    void stepArmState (int track);   // off -> playback -> armed -> off
+    /** The track is armed and takes its input now (red, or yellow with Record on): its tape out carries the input
+        and its return strip hears nothing. Otherwise it plays the tape back. */
+    bool takesInput (int track) const noexcept;
 
     const Speed& currentSpeed() const noexcept { return speeds[juce::jlimit (0, 2, juce::roundToInt (speed->get()))]; }
     static float ipsOf (int speedIndex) noexcept { return speedIndex <= 0 ? 7.5f : speedIndex == 1 ? 15.0f : 30.0f; }
@@ -92,6 +105,10 @@ public:
     bool isWinding() const noexcept { return windRequest.load() != 0 || windSpeed.load() != 0.0f; }
     float getWindSpeed() const noexcept { return windSpeed.load(); }        // signed, times play speed
     static constexpr double windMaxSpeed = 20.0, windRampSeconds = 3.0, windBrakeSeconds = 0.6;
+    /** Holding Rew or FF down: the tape winds up to windHeldSpeed (in windRampSeconds) while held, and settles back to
+        windMaxSpeed when let go (it keeps winding). Stop, Play and a locate let go too. */
+    static constexpr double windHeldSpeed = 40.0;
+    void setWindHeld (bool held) noexcept { windHeld.store (held); }
 
     /** The shuttle ring: wind at `speed` times play speed (signed; 0 stops). The tape gets there within a
         fraction of a second, and stops at the start or the end of the recording. Takes over from Play, Rew and
@@ -105,7 +122,7 @@ public:
     std::atomic<bool> scrubOn { false };
 
     /** Locate memories (saved with the session): tape positions, -1 = empty. Message thread. */
-    static constexpr int numMemories = 6;
+    static constexpr int numMemories = 99;
     void setMemory (int m, juce::int64 p) { if (juce::isPositiveAndBelow (m, numMemories)) memories[(size_t) m] = p; }
     juce::int64 getMemory (int m) const { return juce::isPositiveAndBelow (m, numMemories) ? memories[(size_t) m] : -1; }
 
@@ -161,7 +178,11 @@ public:
     void setPlayOnUntil (juce::int64 samples) noexcept { playOnUntil.store (samples); }
     juce::int64 getCapacity() const noexcept { return (juce::int64) maxChunks * chunkSize; }   // samples per track
     double getSampleRate() const noexcept    { return sampleRate; }
+    /** An audio device (or a test) has set the sample rate: until then it is only the default. */
+    bool isPrepared() const noexcept         { return prepared.load(); }
     int getLatency() const noexcept          { return latency.load(); }
+    /** How far behind the input recording lands (the latency, oversampling and the wow / flutter delay). */
+    int getRecordDelay() const noexcept      { return recordDelay(); }
     void setLatency (int samples) noexcept   { latency.store (juce::jmax (0, samples)); }
     juce::int64 getDroppedSamples() const noexcept { return dropped.load(); }
 
@@ -189,6 +210,7 @@ public:
 
 private:
     double sampleRate = 48000.0;
+    std::atomic<bool> prepared { false };
     std::atomic<int> latency { 0 };
     int oversamplerLatency = 0;
     const size_t maxChunks;
@@ -200,6 +222,7 @@ private:
     std::atomic<std::uint64_t> blocksProcessed { 0 };
     juce::int64 pos = 0;   // audio thread's own copy of the position
     std::atomic<int> windRequest { 0 };
+    std::atomic<bool> windHeld { false };
     std::atomic<float> windSpeed { 0.0f };
     std::atomic<bool> windReset { false };
     std::atomic<juce::int64> windTarget { -1 };   // windTo: where the wind ends (-1: Rew / F Fwd, to either end)
@@ -265,6 +288,7 @@ private:
     std::array<std::array<float, wowLineSize>, numTracks> wowLine {};
     int wowWrite = 0;
     double wowPhase = 0.0, flutterPhase1 = 0.0, flutterPhase2 = 0.0;
+    double wowScale = 1.0, flutterScale = 1.0;   // the Wow / Flutter knobs, smoothed (audio thread)
     std::array<float, Config::maxBlock> wowDelay {};
     std::array<float, Config::maxBlock> playScratch {};
     std::vector<float> fadeScratch;   // maxFetch

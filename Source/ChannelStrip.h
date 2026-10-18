@@ -22,6 +22,7 @@ public:
 
     const juce::String idPrefix;
     juce::String name;   // scribble strip
+    int scribbleColour = 0;   // scribble strip colour (StripStyle::stripColour): 0 white = no group; others group the bank's faders
 
     struct Controls
     {

@@ -116,6 +116,13 @@ Session::Result Session::write (AudioEngine& e, const juce::File& folder, TrackR
     auto* names = new juce::DynamicObject();
     forEachStrip (e, [&] (ChannelStrip& s) { names->setProperty (s.idPrefix, s.name); });
     root->setProperty ("stripNames", juce::var (names));
+    auto* colours = new juce::DynamicObject();
+    forEachStrip (e, [&] (ChannelStrip& s) { if (s.scribbleColour != 0) colours->setProperty (s.idPrefix, s.scribbleColour); });
+    root->setProperty ("stripColours", juce::var (colours));
+    auto* links = new juce::DynamicObject();
+    links->setProperty ("input", e.inputLinks.toVar());
+    links->setProperty ("return", e.returnLinks.toVar());
+    root->setProperty ("stripLinks", juce::var (links));
 
     auto* busNames = new juce::DynamicObject();
     for (int k = 0; k < Config::numSubs; ++k) busNames->setProperty ("sub" + juce::String (k + 1), e.subNames[(size_t) k]);
@@ -204,9 +211,11 @@ void Session::reset (AudioEngine& e)
 {
     e.tape.stop();
     e.tape.setRecordEnabled (false);
+    e.inputLinks.unlinkAll();   // before the controls reset, so nothing is copied across
+    e.returnLinks.unlinkAll();
     for (auto* p : e.params.all())
         p->reset();
-    forEachStrip (e, [] (ChannelStrip& s) { s.name = defaultStripName (s); });
+    forEachStrip (e, [] (ChannelStrip& s) { s.name = defaultStripName (s); s.scribbleColour = 0; });
     e.resetBusNames();
     e.clearPatch();
     e.midi.removeAllTracks();
@@ -272,6 +281,28 @@ Session::Result Session::load (AudioEngine& e, PluginManager* plugins, const juc
             s.comp.fet.output->set ((float) (double) controls->getProperty (makeup) - drive);
         });
 
+    // Stereo links, after the controls (which already match: nothing is copied). Sessions before any-pair links
+    // had a switch per neighbouring pair, "link.<first strip>".
+    if (const auto links = json["stripLinks"]; links.isObject())
+    {
+        e.inputLinks.fromVar (links["input"]);
+        e.returnLinks.fromVar (links["return"]);
+    }
+    else if (auto* controls = json["controls"].getDynamicObject())
+    {
+        const auto oldLinks = [controls] (juce::OwnedArray<ChannelStrip>& strips, BankLinks& bank)
+        {
+            for (int k = 0; k + 1 < strips.size(); k += 2)
+                if ((double) controls->getProperty ("link." + strips[k]->idPrefix) > 0.5)
+                    bank.link (k, k + 1, false);
+        };
+        oldLinks (e.inputStrips, e.inputLinks);
+        oldLinks (e.returnStrips, e.returnLinks);
+    }
+    {
+        const auto* colours = json["stripColours"].getDynamicObject();   // white (0) when missing
+        forEachStrip (e, [&] (ChannelStrip& s) { s.scribbleColour = colours != nullptr ? juce::jlimit (0, 8, (int) colours->getProperty (s.idPrefix)) : 0; });
+    }
     if (auto* names = json["stripNames"].getDynamicObject())
         forEachStrip (e, [&] (ChannelStrip& s)
         {

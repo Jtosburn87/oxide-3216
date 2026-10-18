@@ -28,7 +28,11 @@ namespace DeskLayout
 class StripComponent : public juce::Component
 {
 public:
-    explicit StripComponent (ChannelStrip&);
+    /** bank: the strips of its bank (input or return), for selecting several scribble strips and for the faders
+        grouped by colour. */
+    StripComponent (ChannelStrip&, const juce::OwnedArray<ChannelStrip>* bank = nullptr);
+    ~StripComponent() override;
+    void mouseDown (const juce::MouseEvent&) override;
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -79,6 +83,26 @@ private:
     ParamButton mute, solo;
     Fader fader;
     juce::Label scribble;
+
+    // Scribble strip colour and selection: click a strip to select it, Shift+click the ones between, Ctrl+click one
+    // more; the colour box (left of the name) colours every selected strip. Same colour = faders move together.
+    struct ColourBox : juce::Component, juce::SettableTooltipClient
+    {
+        juce::Colour colour;
+        std::function<void()> onClick;
+        void paint (juce::Graphics&) override;
+        void mouseDown (const juce::MouseEvent&) override { if (onClick) onClick(); }
+    } colourBox;
+    const juce::OwnedArray<ChannelStrip>* bank;
+    int shownColour = -1;
+    bool shownSelected = false;
+    int bankIndex() const;
+    void chooseColour();
+    void moveFader (float value);
+    /** Mute, main, solo and sub assigns: the selected strips (if this is one) and the colour group switch too. */
+    std::vector<ChannelStrip*> followers() const;
+    void switchFollowers (Param* ChannelStrip::Controls::* which, bool on);
+    void switchSubFollowers (int sub, bool on);
 
     std::uint32_t lastPops = 0;
     Readings readings;   // the last ones taken (or copied from the source)
@@ -211,7 +235,7 @@ private:
                  erase { "Erase", TransportKey::erase, juce::Colours::transparentBlack };
     Knob recordLevel, pitchKnob;
     float shownRecordedIps = -1.0f;   // in the speed box's title
-    juce::OwnedArray<ParamButton> armButtons;
+    juce::OwnedArray<ArmButton> armButtons;
     juce::TextButton setIn { "Set In" }, setOut { "Set Out" }, loopButton { "Loop" }, punchButton { "Punch" };
     ParamButton wowButton;
     juce::Rectangle<int> locateBox;
@@ -259,7 +283,7 @@ private:
 class StripBank : public juce::Component
 {
 public:
-    StripBank (const juce::OwnedArray<ChannelStrip>&, const std::vector<Param*>& links);
+    StripBank (const juce::OwnedArray<ChannelStrip>&, BankLinks& links);
     ~StripBank() override;
 
     /** A second bank of the same strips, for a window of its own: the same controls, starting with this
@@ -284,7 +308,10 @@ public:
 
 private:
     juce::OwnedArray<StripComponent> strips;
-    juce::OwnedArray<ParamButton> linkButtons;   // one per pair of strips, between their pan knobs
+    juce::OwnedArray<juce::TextButton> linkButtons;   // one per strip, beside its pan knob
+    std::vector<int> shownLinkState;                  // per strip: partner, -1 unlinked, -2 waiting for a partner
+    void clickLink (int strip);
+    void updateLinkButtons();
     juce::TextButton meterButton { "Meters In/Out" };   // lit = input; flips the whole bank's meters between input and output
     bool meterInput = false;
     int collapsed = 0;
@@ -292,7 +319,7 @@ private:
     void setMeterInput (bool);
 
     const juce::OwnedArray<ChannelStrip>& channelStrips;
-    const std::vector<Param*> links;
+    BankLinks& links;
     juce::Component::SafePointer<StripBank> original;   // a copy: the bank it copies
     juce::Array<StripBank*> copies;
     void updateFrom (const StripBank& source);

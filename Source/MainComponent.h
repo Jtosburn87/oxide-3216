@@ -16,7 +16,8 @@
 #include "ImportAudioDialog.h"
 #include "SectionWindow.h"
 #include "ChannelStripWindow.h"
-#include "TopEdgeBar.h"
+#include "WindowButtons.h"
+#include "MidiControlUI.h"
 #include "CreditsWindow.h"
 
 /** Top bar (name plate, zoom, status) above the zoomable desk. The app buttons live on the desk. */
@@ -54,7 +55,7 @@ private:
         tapeMachineCmd, rackCmd, patchBayCmd, talkbackCmd, disarmAllCmd, fullScreenCmd,
         jogScrubCmd, storeCmd, setInCmd, setOutCmd, loopCmd, goInCmd, goOutCmd, punchCmd,   // the Jog / shuttle box
         jogBackCmd, jogForwardCmd, shuttleBackCmd, shuttleForwardCmd,
-        midiPageCmd, exportTapeCmd, importTempoMapCmd, clearTempoMapCmd,
+        midiPageCmd, exportTapeCmd, importTempoMapCmd, clearTempoMapCmd, shuttleWindowCmd,
         armTrack1 = 100,  // armTrack1 + t arms / disarms tape track t + 1
         memory1 = 200     // memory1 + m: locate memory m + 1 (or stores there after Store)
     };
@@ -88,6 +89,17 @@ private:
     void showView (int view);   // switches the desk, lights its button and remembers it
     juce::TextButton tapeMachineButton { "Tape Machine" };
     std::unique_ptr<TapeMachineWindow> tapeWindow;   // made on first use, then only hidden
+    // MIDI control: the Jog / shuttle window's controls and the keyboard shortcuts (both saved in the settings).
+    ShuttleMidi shuttleMidi;
+    MidiShortcuts midiShortcuts;
+    std::unique_ptr<ShuttleWindow> shuttleWindow;   // right-click the Jog / shuttle box; made on first use, then only hidden
+    void openShuttleWindow();
+    /** Rew / FF from the keyboard: 40x while a key on that command stays down (like holding the transport key). */
+    void holdWindWhileKeyDown (juce::CommandID);
+    juce::CommandID heldWindCommand = 0;
+    juce::TimedCallback windKeyWatch { [this] { checkWindKey(); } };
+    void checkWindKey();
+    void setUpMidiControl();
     juce::TextButton midiButton { "MIDI" };      // the MIDI page in place of the console (lit while it shows)
     std::unique_ptr<MidiPage> midiPage;
     juce::TextButton creditsButton { "Credits" };   // who made it, and how to get in touch
@@ -103,8 +115,8 @@ private:
     juce::Viewport viewport;
     std::unique_ptr<TouchPanZoom> touch;   // pinch to zoom (touch never scrolls)
     PatchBayPanel patchBay;
-    TopEdgeBar topEdgeBar { [this] { return isFullScreenMode != nullptr && isFullScreenMode(); },
-                            [this] { if (onToggleFullScreen) onToggleFullScreen(); } };   // full screen's drop-down title bar
+    WindowButtons windowButtons { [this] { return isFullScreenMode != nullptr && isFullScreenMode(); },
+                                  [this] { if (onToggleFullScreen) onToggleFullScreen(); } };   // _ / square / X, top bar right
 
     // Sections of the console that are out in windows of their own.
     std::array<std::unique_ptr<SectionWindow>, Desk::numSections> sectionWindows;

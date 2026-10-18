@@ -3,6 +3,8 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "Params.h"
 
+class TapeMachine;
+
 /** Slider bound to a Param, with keyboard control:
     arrows step, Page Up/Down step x5, Home/Delete reset to default. */
 class ParamSlider : public juce::Slider,
@@ -73,6 +75,17 @@ private:
     void updateLegend();
 };
 
+/** The tape machine's Wow and Flutter knobs: 0..500 % of what the tape speed has (100 % = as the machine is). */
+/** A pop-up with the Wow and Flutter knobs beside target (right-click W&F). */
+void showWowFlutterPopup (juce::Component& target, Param& wow, Param& flutter);
+
+inline void setUpWowFlutterKnob (Knob& k, const juce::String& name)
+{
+    k.setEndLabels ("0", "5x");
+    k.setResetValue (100.0f);
+    k.setFormatter ([name] (float v) { return std::abs (v - 100.0f) < 0.5f ? name : v < 0.5f ? name + " off" : juce::String (juce::roundToInt (v)) + " %"; });
+}
+
 /** Latching console button bound to a toggle Param. */
 class ParamButton : public juce::TextButton,
                     private Param::Listener
@@ -89,10 +102,36 @@ public:
     /** Lit while the toggle is off: an In button for a bypass switch. */
     void setInverted (bool);
 
+    /** Set: a click calls this with the state it asks for, instead of toggling (to switch other strips too).
+        A right-click still toggles just this button. */
+    std::function<void (bool on)> onUserToggle;
+
+    /** Set: a right-click calls this (and does not toggle). */
+    std::function<void()> onRightClick;
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+
 private:
     bool flashing = false, inverted = false;
     void paintButton (juce::Graphics&, bool over, bool down) override;
     void paramChanged (Param&) override;
+    void clicked (const juce::ModifierKeys&) override;
+};
+
+/** A tape track's record arm: grey (off), yellow (armed, the tape plays back until Record is on), red (armed,
+    input only). A click steps grey -> yellow -> red -> grey. */
+class ArmButton : public juce::TextButton,
+                  private Param::Listener
+{
+public:
+    ArmButton (TapeMachine&, int track);
+    ~ArmButton() override;
+
+private:
+    TapeMachine& tape;
+    const int track;
+    void update();
+    void paramChanged (Param&) override { update(); }
     void clicked() override;
 };
 

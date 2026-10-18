@@ -113,7 +113,7 @@ juce::String TapeFiles::writeTrack (int t)
         if (tape.takeChunkChanged (t, c))
             changed.push_back (c);
     if (changed.empty())
-        return {};
+        return fixRate (t, file);   // nothing new, but the header may still name another sample rate
 
     const auto putBack = [&] { for (auto c : changed) tape.markChunkChanged (t, c); };
 
@@ -134,7 +134,7 @@ juce::String TapeFiles::writeTrack (int t)
             return "Could not write " + file.getFullPathName();
         }
         writeHeader (out, (int) tape.getSampleRate(), 0);
-        fi = { true, headerBytes, 0 };
+        fi = { true, headerBytes, 0, 24, (int) tape.getSampleRate(), true };
     }
 
     juce::FileOutputStream out (file);   // an existing file is opened for writing in place, not emptied
@@ -186,6 +186,32 @@ juce::String TapeFiles::writeTrack (int t)
         fi = {};   // read the layout afresh next time
         return "Disk full or not writable: " + file.getFullPathName();
     }
+    return fixRate (t, file);
+}
+
+juce::String TapeFiles::fixRate (int t, const juce::File& file)
+{
+    // The file holds the tape's samples, so its header names the tape's sample rate. A file written before the
+    // interface (and so the tape) changed rate, or one from an older Oxide, is put right in place: two numbers.
+    auto& fi = info[(size_t) t];
+    const int rate = (int) tape.getSampleRate();
+    if (! fi.known)
+    {
+        if (fi.rateChecked || ! file.existsAsFile())
+            return {};
+        fi.rateChecked = true;   // a layout we can't patch is left alone until it changes (then it is rewritten whole)
+        if (! openLayout (t, file))
+            return {};
+    }
+    if (fi.rateOffset <= 0 || fi.rate == rate || ! tape.isPrepared())   // no device yet: the rate is only a default
+        return {};
+    juce::FileOutputStream out (file);
+    if (out.failedToOpen() || ! out.setPosition (fi.rateOffset) || ! out.writeInt (rate) || ! out.writeInt (rate * 4))
+        return "Could not write " + file.getFullPathName();
+    out.flush();
+    if (out.getStatus().failed())
+        return "Could not write " + file.getFullPathName();
+    fi.rate = rate;
     return {};
 }
 
@@ -199,6 +225,8 @@ bool TapeFiles::openLayout (int t, const juce::File& file)
         return false;
 
     bool floatMono32 = false;
+    juce::int64 rateOffset = 0;
+    int rate = 0;
     while (! in.isExhausted())
     {
         const auto id = readId (in);
@@ -209,7 +237,8 @@ bool TapeFiles::openLayout (int t, const juce::File& file)
         {
             int tag = (juce::uint16) in.readShort();
             const int channels = in.readShort();
-            in.readInt();
+            rateOffset = pos + 4;
+            rate = in.readInt();
             in.readInt();
             in.readShort();
             const int bits = in.readShort();
@@ -225,7 +254,7 @@ bool TapeFiles::openLayout (int t, const juce::File& file)
             // Only patchable if the audio runs to the end of the file (so it can grow).
             if (! floatMono32 || pos + size != file.getSize())
                 return false;
-            info[(size_t) t] = { true, pos, size / 4 };
+            info[(size_t) t] = { true, pos, size / 4, rateOffset, rate, true };
             return true;
         }
         if (id.isEmpty() || ! in.setPosition (pos + size + (size & 1)))
@@ -257,6 +286,6 @@ juce::String TapeFiles::rewholeTrack (int t, const juce::File& file)
     }
     if (! temp.overwriteTargetFileWithTemporary())
         return "Could not replace " + file.getFullPathName();
-    info[(size_t) t] = { true, headerBytes, end };
+    info[(size_t) t] = { true, headerBytes, end, 24, (int) tape.getSampleRate(), true };
     return {};
 }

@@ -51,8 +51,7 @@ void MeterBridge::mouseDown (const juce::MouseEvent& e)
     const int t = switchAt (e.position);
     if (t >= 0)
     {
-        auto& arm = *tape.arm[(size_t) t];
-        arm.set (arm.on() ? 0.0f : 1.0f);
+        tape.stepArmState (t);   // grey -> yellow (tape plays until Record) -> red, as the Record arm buttons
         timerCallback();
     }
 }
@@ -61,7 +60,7 @@ void MeterBridge::mouseMove (const juce::MouseEvent& e)
 {
     const int t = switchAt (e.position);
     setMouseCursor (t >= 0 ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor);
-    setTooltip (t >= 0 ? "Record function: arm track " + juce::String (t + 1) : juce::String());
+    setTooltip (t >= 0 ? "Record function, track " + juce::String (t + 1) + ": down = off, middle = armed, the tape plays until Record (yellow), up = armed, input only (red)" : juce::String());
 }
 
 void MeterBridge::timerCallback()
@@ -92,8 +91,11 @@ void MeterBridge::timerCallback()
         const bool led = tape.isRecording (t) || (armed && blinkOn);
 
         const auto litCount = [] (float level) { int n = 0; for (float m : marks) n += level >= m ? 1 : 0; return n; };
-        changed = changed || litCount (before) != litCount (shown) || armed != shownArmed[(size_t) t] || led != shownLed[(size_t) t];
-        shownArmed[(size_t) t] = armed;
+        const auto state = tape.getArmState (t);
+        const bool yellow = state == TapeMachine::ArmState::playback && ! tape.isRecordEnabled();   // with Record on it takes the input: red
+        changed = changed || litCount (before) != litCount (shown) || state != shownArm[(size_t) t] || led != shownLed[(size_t) t] || yellow != shownYellow[(size_t) t];
+        shownYellow[(size_t) t] = yellow;
+        shownArm[(size_t) t] = state;
         shownLed[(size_t) t] = led;
     }
     if (changed)
@@ -188,26 +190,31 @@ void MeterBridge::paintColumn (juce::Graphics& g, int t) const
         }
     }
 
-    // Record LED.
+    // Record LED: red, or yellow while the switch is in the middle (armed, the tape playing back until Record).
     const juce::Point<float> led (cx, c.getY() + 238.0f);
+    const bool yellow = shownYellow[(size_t) t];
+    const auto lit = yellow ? juce::Colour (0xffffd23a) : ledRed;
     g.setColour (juce::Colours::black);
     g.fillEllipse (led.x - 4.5f, led.y - 4.5f, 9.0f, 9.0f);
     if (shownLed[(size_t) t])
     {
-        g.setColour (ledRed.withAlpha (0.3f));
+        g.setColour (lit.withAlpha (0.3f));
         g.fillEllipse (led.x - 7.0f, led.y - 7.0f, 14.0f, 14.0f);
     }
-    g.setColour (shownLed[(size_t) t] ? ledRed : juce::Colour (0xff3a1512));
+    g.setColour (shownLed[(size_t) t] ? lit : juce::Colour (yellow ? 0xff3a3212 : 0xff3a1512));
     g.fillEllipse (led.x - 3.2f, led.y - 3.2f, 6.4f, 6.4f);
 
-    // Record function switch: a slot with a grey cap, up = armed.
+    // Record function switch: a slot with a grey cap, three positions: down = off, middle = armed with the tape
+    // playing back until Record (yellow on the console), up = armed, input only (red).
     const auto slot = switchBounds (t);
     g.setColour (juce::Colours::black);
     g.fillRoundedRectangle (slot, 2.0f);
     g.setColour (juce::Colours::white.withAlpha (0.12f));
     g.drawRoundedRectangle (slot.expanded (0.5f), 2.0f, 1.0f);
-    const bool armed = shownArmed[(size_t) t];
-    const auto cap = juce::Rectangle<float> (slot.getX() + 1.5f, armed ? slot.getY() + 1.5f : slot.getBottom() - 17.5f, slot.getWidth() - 3.0f, 16.0f);
+    const auto state = shownArm[(size_t) t];
+    const float capH = 16.0f, top = slot.getY() + 1.5f, bottom = slot.getBottom() - 1.5f - capH;
+    const float capY = state == TapeMachine::ArmState::armed ? top : state == TapeMachine::ArmState::playback ? (top + bottom) * 0.5f : bottom;
+    const auto cap = juce::Rectangle<float> (slot.getX() + 1.5f, capY, slot.getWidth() - 3.0f, capH);
     g.setGradientFill (juce::ColourGradient (juce::Colour (0xff9a9d9f), 0, cap.getY(), juce::Colour (0xff55585a), 0, cap.getBottom(), false));
     g.fillRoundedRectangle (cap, 1.5f);
     g.setColour (juce::Colours::black.withAlpha (0.45f));

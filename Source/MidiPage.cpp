@@ -2,6 +2,7 @@
 #include "PluginManager.h"
 #include "PluginWindows.h"
 #include "ConsoleLookAndFeel.h"
+#include <algorithm>
 #include <cmath>
 #include <map>
 #include <set>
@@ -90,6 +91,56 @@ namespace
     {
         b.setColour (juce::TextButton::buttonOnColourId, amber);
         b.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1b1b1b));
+    }
+
+    juce::String channelText (int channel)
+    {
+        return channel == MidiEngine::asRecorded ? juce::String ("as recorded") : "ch " + juce::String (channel);
+    }
+
+    juce::String offsetText (double ms)
+    {
+        return ms == 0.0 ? juce::String ("0 ms") : (ms > 0.0 ? "+" : "") + juce::String (ms, ms == std::round (ms) ? 0 : 1) + " ms";
+    }
+
+    /** MIDI out offsets offered in a menu (ids base + index; base + 99 = Other...). */
+    const double offsetChoices[] = { -20.0, -10.0, -5.0, -2.0, -1.0, 0.0, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0 };
+
+    juce::PopupMenu offsetMenu (int base, double now)
+    {
+        juce::PopupMenu m;
+        bool listed = false;
+        for (int i = 0; i < (int) std::size (offsetChoices); ++i)
+        {
+            const bool ticked = std::abs (offsetChoices[i] - now) < 0.01;
+            listed = listed || ticked;
+            m.addItem (base + i, offsetText (offsetChoices[i]) + (offsetChoices[i] < 0.0 ? "  (earlier)" : offsetChoices[i] > 0.0 ? "  (later)" : ""), true, ticked);
+        }
+        m.addSeparator();
+        m.addItem (base + 99, "Other..." + (listed ? juce::String() : "  (" + offsetText (now) + ")"), true, ! listed);
+        return m;
+    }
+
+    /** A menu result from offsetMenu: the offset, through `set` (Other... asks for it). */
+    void applyOffsetChoice (int result, int base, double now, const juce::String& what, std::function<void (double)> set)
+    {
+        if (result >= base && result < base + (int) std::size (offsetChoices))
+        {
+            set (offsetChoices[result - base]);
+            return;
+        }
+        if (result != base + 99)
+            return;
+        auto* w = new juce::AlertWindow (what, "Milliseconds, -" + juce::String ((int) MidiEngine::maxOffsetMs) + " to +" + juce::String ((int) MidiEngine::maxOffsetMs)
+                                                   + ".\nLater is positive; earlier only goes as far as the output latency.", juce::MessageBoxIconType::NoIcon);
+        w->addTextEditor ("ms", juce::String (now, 1));
+        w->addButton ("OK", 1, juce::KeyPress (juce::KeyPress::returnKey));
+        w->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+        w->enterModalState (true, juce::ModalCallbackFunction::create ([w, set = std::move (set)] (int r)
+        {
+            if (r == 1)
+                set (w->getTextEditorContents ("ms").getDoubleValue());
+        }), true);
     }
 }
 
@@ -313,6 +364,9 @@ public:
             else
                 page.select (k, -1);
         };
+        sync.setTooltip ("MIDI clock out: drum machines and sequencers follow the tape (tempo map, song position, start / stop)");
+        styleSmall (sync);
+        sync.onClick = [this] { syncMenu(); };
         console.setTooltip ("Back to the console");
         console.onClick = [this] { if (page.onShowConsole) page.onShowConsole(); };
 
@@ -320,8 +374,46 @@ public:
                                     (juce::Component*) &bars, (juce::Component*) &clock, (juce::Component*) &tempoText,
                                     (juce::Component*) &gridBars, (juce::Component*) &gridSecs, (juce::Component*) &snapBox,
                                     (juce::Component*) &snapOn, (juce::Component*) &pointer, (juce::Component*) &pencil,
-                                    (juce::Component*) &addTrack, (juce::Component*) &tempoMap, (juce::Component*) &console })
+                                    (juce::Component*) &addTrack, (juce::Component*) &tempoMap, (juce::Component*) &sync,
+                                    (juce::Component*) &console })
             addAndMakeVisible (c);
+    }
+
+    void syncMenu()
+    {
+        auto& m = page.midi;
+        const auto devices = MidiOuts::availableDevices();
+        juce::PopupMenu menu;
+        menu.addSectionHeader ("Send MIDI clock to");
+        for (int i = 0; i < devices.size() && i < 90; ++i)
+            menu.addItem (10 + i, devices[i].name, true, m.sendsClockTo (devices[i].identifier));
+        juce::StringArray missing;
+        for (auto& id : m.getClockOutputs())
+            if (! std::any_of (devices.begin(), devices.end(), [&] (const juce::MidiDeviceInfo& d) { return d.identifier == id; }))
+                missing.add (id);
+        for (int i = 0; i < missing.size(); ++i)
+            menu.addItem (100 + i, MidiOuts::nameOf (missing[i]) + "  (not connected)", true, true);
+        if (devices.isEmpty() && missing.isEmpty())
+            menu.addItem (-1, "No MIDI outputs on this computer", false);
+        menu.addSeparator();
+        menu.addSubMenu ("Clock offset: " + offsetText (m.getClockOffset()), offsetMenu (500, m.getClockOffset()));
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&sync),
+                            [safe = juce::Component::SafePointer<Toolbar> (this), devices, missing] (int r)
+                            {
+                                if (safe == nullptr || r <= 0)
+                                    return;
+                                auto& midi = safe->page.midi;
+                                if (r >= 500)
+                                    applyOffsetChoice (r, 500, midi.getClockOffset(), "Clock offset", [&midi] (double ms) { midi.setClockOffset (ms); });
+                                else if (r >= 100)
+                                    midi.setClockOutput (missing[r - 100], false);
+                                else
+                                {
+                                    const auto& id = devices[r - 10].identifier;
+                                    midi.setClockOutput (id, ! midi.sendsClockTo (id));
+                                }
+                                safe->update();
+                            });
     }
 
     void tempoMapMenu()
@@ -379,6 +471,7 @@ public:
         clock.setText (juce::String::formatted ("%02d:%02d.%d", (int) (tenths / 600), (int) ((tenths / 10) % 60), (int) (tenths % 10)));
         tempoText.setText (BpmReadout::format ((float) tempo.bpmAt (now)) + " " + Tempo::signatureText (tempo.signatureAt (now)));
         tempoMap.setToggleState (tempo.hasMap(), juce::dontSendNotification);
+        sync.setToggleState (! page.midi.getClockOutputs().isEmpty(), juce::dontSendNotification);
     }
 
     void resized() override
@@ -411,6 +504,8 @@ public:
         console.setBounds (r.removeFromRight (92));
         r.removeFromRight (6);
         addTrack.setBounds (r.removeFromRight (106));
+        r.removeFromRight (6);
+        sync.setBounds (r.removeFromRight (70));
     }
 
     void paint (juce::Graphics& g) override
@@ -432,6 +527,7 @@ private:
     juce::TextButton pointer { "Pointer" }, pencil { "Pencil" };
     juce::TextButton tempoMap { juce::CharPointer_UTF8 ("Tempo map \xe2\x96\xbe") };
     juce::TextButton addTrack { "+ MIDI track" }, console { juce::CharPointer_UTF8 ("Console \xe2\x97\x82") };
+    juce::TextButton sync { juce::CharPointer_UTF8 ("Sync \xe2\x96\xbe") };
     juce::Rectangle<int> snapLabel;
 };
 
@@ -486,15 +582,32 @@ public:
         mute.setToggleState (m.isMuted (slot), juce::dontSendNotification);
         solo.setToggleState (m.isSoloed (slot), juce::dontSendNotification);
         auto* p = m.getInstrument (slot);
-        instrument.setButtonText (p != nullptr ? m.getDescription (slot).name : juce::String (juce::CharPointer_UTF8 ("\xe2\x80\x94 no instrument \xe2\x80\x94")));
-        instrument.setColour (juce::TextButton::textColourOffId, p != nullptr ? amber : textDim);
+        const auto hw = m.getOutput (slot);
+        const auto hwText = hw.isEmpty() ? juce::String() : MidiOuts::nameOf (hw) + " " + channelText (m.getChannel (slot));
+        if (p != nullptr)
+            instrument.setButtonText (m.getDescription (slot).name);
+        else if (hw.isNotEmpty())
+            instrument.setButtonText (juce::String (juce::CharPointer_UTF8 ("\xe2\x86\x92 ")) + hwText);   // a hardware-only track
+        else
+            instrument.setButtonText (juce::CharPointer_UTF8 ("\xe2\x80\x94 no instrument \xe2\x80\x94"));
+        instrument.setColour (juce::TextButton::textColourOffId, p != nullptr || hw.isNotEmpty() ? amber : textDim);
         const auto in = m.getInput (slot);
         juce::String inName = in.isEmpty() ? "None" : in == MidiEngine::allInputs ? "All inputs" : in;
         for (auto& d : MidiEngine::availableInputs())
             if (d.identifier == in)
                 inName = d.name;
         input.setButtonText ("In: " + inName);
-        route.setButtonText ("Out: " + routeText (page.engine, slot) + juce::String (juce::CharPointer_UTF8 (" \xe2\x96\xbe")));
+        const auto audio = page.engine.getInstrumentRoute (slot).kind != Midi::Route::none;
+        juce::String out = routeText (page.engine, slot);
+        if (hw.isNotEmpty())
+            out = (audio ? out + " + " : juce::String()) + MidiOuts::nameOf (hw);
+        if (m.sendsToScenes (slot))
+            out = (audio || hw.isNotEmpty() ? out + " + " : juce::String()) + "Scenes";
+        route.setButtonText ("Out: " + out + juce::String (juce::CharPointer_UTF8 (" \xe2\x96\xbe")));
+        route.setTooltip ("Instrument audio: " + routeText (page.engine, slot) + ". MIDI out: "
+                          + (hw.isEmpty() ? juce::String ("none") : hwText + ", offset " + offsetText (m.getOutputOffset (slot))
+                                                                     + (m.outs().isOpen (m.outs().portFor (hw)) ? juce::String() : " (not connected)"))
+                          + ". Channel: " + channelText (m.getChannel (slot)) + ".");
         repaint();
     }
 
@@ -664,11 +777,60 @@ private:
                          true, nullptr, now.kind == Midi::Route::tape);
         menu.addSeparator();
         menu.addItem (1, "Not routed", true, now.kind == Midi::Route::none);
+
+        // MIDI out to hardware: device, channel (shared with the instrument) and offset.
+        auto& m = page.midi;
+        const auto hw = m.getOutput (slot);
+        const auto devices = MidiOuts::availableDevices();
+        juce::PopupMenu outs, chans;
+        outs.addItem (299, "None", true, hw.isEmpty());
+        bool present = hw.isEmpty();
+        for (int i = 0; i < devices.size() && i < 90; ++i)
+        {
+            outs.addItem (300 + i, devices[i].name, true, devices[i].identifier == hw);
+            present = present || devices[i].identifier == hw;
+        }
+        if (! present)
+            outs.addItem (298, MidiOuts::nameOf (hw) + "  (not connected)", true, true);
+        chans.addItem (400, "As recorded (each note on its own channel)", true, m.getChannel (slot) == MidiEngine::asRecorded);
+        chans.addSeparator();
+        for (int c = 1; c <= 16; ++c)
+            chans.addItem (400 + c, "Channel " + juce::String (c), true, m.getChannel (slot) == c);
+        menu.addSeparator();
+        menu.addSectionHeader ("MIDI");
+        menu.addSubMenu ("MIDI out: " + (hw.isEmpty() ? juce::String ("none") : MidiOuts::nameOf (hw)), outs, true, nullptr, hw.isNotEmpty());
+        menu.addSubMenu ("Channel: " + channelText (m.getChannel (slot)), chans);
+        menu.addSubMenu ("MIDI out offset: " + offsetText (m.getOutputOffset (slot)), offsetMenu (500, m.getOutputOffset (slot)), hw.isNotEmpty());
+        menu.addItem (700, "Send to scene control", true, m.sendsToScenes (slot));   // its controllers select scenes, program changes press Go
         menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&route),
-                            [safe = juce::Component::SafePointer<TrackHeader> (this)] (int result)
+                            [safe = juce::Component::SafePointer<TrackHeader> (this), devices] (int result)
                             {
                                 if (safe == nullptr || result == 0)
                                     return;
+                                auto& pg = safe->page;
+                                const int s = safe->slot;
+                                if (result >= 298)
+                                {
+                                    if (result == 299)
+                                        pg.midi.setOutput (s, {});
+                                    else if (result >= 300 && result < 390)
+                                        pg.midi.setOutput (s, devices[result - 300].identifier);
+                                    else if (result >= 400 && result <= 416)
+                                        pg.midi.setChannel (s, result - 400);
+                                    else if (result == 700)
+                                        pg.midi.setToScenes (s, ! pg.midi.sendsToScenes (s));
+                                    else if (result >= 500)
+                                        applyOffsetChoice (result, 500, pg.midi.getOutputOffset (s), "MIDI out offset",
+                                                           [safe] (double ms)
+                                                           {
+                                                               if (safe == nullptr)
+                                                                   return;
+                                                               safe->page.midi.setOutputOffset (safe->slot, ms);
+                                                               safe->refresh();
+                                                           });
+                                    safe->refresh();
+                                    return;
+                                }
                                 Midi::Route r;
                                 if (result >= 200)      r = { Midi::Route::tape, result - 200 };
                                 else if (result >= 100) r = { Midi::Route::input, result - 100 };

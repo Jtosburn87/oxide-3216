@@ -4,6 +4,8 @@
 #include "PatchBay.h"
 #include "TalkbackSettings.h"
 #include "StripStyle.h"
+#include <map>
+#include <set>
 
 using namespace ConsoleColours;
 using namespace DeskLayout;
@@ -35,7 +37,7 @@ namespace
 }
 
 //==============================================================================
-StripComponent::StripComponent (ChannelStrip& s)
+StripComponent::StripComponent (ChannelStrip& s, const juce::OwnedArray<ChannelStrip>* bankStrips)
     : strip (s),
       gain (*s.controls.gain, "Gain"),
       trim (*s.controls.trim, "Trim"),
@@ -135,8 +137,24 @@ StripComponent::StripComponent (ChannelStrip& s)
 
     setupScribble (scribble, strip.name);
     scribble.setEditable (false, true, false);   // double-click to rename
-    scribble.setTooltip ("Double-click to rename");
+    scribble.setTooltip ("Click to select (Shift+click: the channels between, Ctrl+click: one more), double-click to rename. "
+                         "The colour box on the left colours the selected channels: channels of one colour move their faders together.");
     scribble.onTextChange = [this] { strip.name = scribble.getText(); };
+    bank = bankStrips;
+    scribble.addMouseListener (this, false);   // selection (mouseDown)
+    colourBox.setTooltip ("Colour of the selected channels (White: no group)");
+    colourBox.onClick = [this] { chooseColour(); };
+    colourBox.colour = stripColour (strip.scribbleColour);
+    colourScribble (scribble, strip.scribbleColour);
+    shownColour = strip.scribbleColour;
+    add (colourBox);
+    fader.slider.onUserSet = [this] (float v) { moveFader (v); };
+    // Mute, main, solo and the sub assigns switch the selected channels (if this is one) and the colour group too.
+    mute.onUserToggle       = [this] (bool on) { switchFollowers (&ChannelStrip::Controls::mute, on); };
+    solo.onUserToggle       = [this] (bool on) { switchFollowers (&ChannelStrip::Controls::solo, on); };
+    mainButton.onUserToggle = [this] (bool on) { switchFollowers (&ChannelStrip::Controls::main, on); };
+    for (int k = 0; k < subButtons.size(); ++k)
+        subButtons[k]->onUserToggle = [this, k] (bool on) { switchSubFollowers (k, on); };
 
     // Minimise buttons on the section titles; each one acts on the whole bank.
     const char* const foldNames[] = { "Equaliser", "Gate", "Compressor", "Aux sends" };
@@ -434,7 +452,8 @@ void StripComponent::resized()
 
     // Fader section: the fader on the left; down the right, mute, main and sub assigns, the meter, then solo.
     const int f = getHeight() - stripFaderH + meterRowH;   // the fader area is always at the bottom, under the meter row
-    scribble.setBounds (4, getHeight() - 28, stripW - 8, 22);
+    colourBox.setBounds (4, getHeight() - 28, 16, 22);
+    scribble.setBounds (22, getHeight() - 28, stripW - 26, 22);
     const int colX = 62, columnW = stripW - colX - 6;
     fader.setBounds (2, f + 8, colX - 6, scribble.getY() - 6 - (f + 8));
 
@@ -457,6 +476,11 @@ void StripComponent::resized()
 void StripComponent::paint (juce::Graphics& g)
 {
     paintColumn (g, getLocalBounds(), stripFaderH);
+    if (shownSelected)   // a selected scribble strip (for the colour box)
+    {
+        g.setColour (amber);
+        g.drawRoundedRectangle (colourBox.getBounds().getUnion (scribble.getBounds()).toFloat().expanded (2.0f), 3.0f, 2.0f);
+    }
 
     for (auto& s : sections)
         paintSection (g, s.title, s.box, stripGrey, s.titleIndent);
@@ -491,11 +515,176 @@ void StripComponent::setMeterInput (bool input)
     repaint (meter.getBounds().expanded (12, 12));
 }
 
+//==============================================================================
+namespace
+{
+    /** The selected scribble strips of a bank (shared by the console's bank and its copies). */
+    struct ScribbleSelection
+    {
+        std::set<int> chosen;
+        int anchor = -1;
+    };
+
+    ScribbleSelection& selectionFor (const void* bank)
+    {
+        static std::map<const void*, ScribbleSelection> selections;
+        return selections[bank];
+    }
+}
+
+StripComponent::~StripComponent()
+{
+    scribble.removeMouseListener (this);
+}
+
+int StripComponent::bankIndex() const
+{
+    return bank != nullptr ? bank->indexOf (&strip) : -1;
+}
+
+void StripComponent::mouseDown (const juce::MouseEvent& e)
+{
+    const int i = bankIndex();
+    if (e.eventComponent != &scribble || i < 0 || e.mods.isPopupMenu())
+        return;
+    auto& sel = selectionFor (bank);
+    if (e.mods.isShiftDown() && sel.anchor >= 0)
+    {
+        sel.chosen.clear();   // the anchor to here
+        for (int k = juce::jmin (sel.anchor, i); k <= juce::jmax (sel.anchor, i); ++k)
+            sel.chosen.insert (k);
+    }
+    else if (e.mods.isCommandDown())
+    {
+        if (! sel.chosen.erase (i))
+            sel.chosen.insert (i);
+        sel.anchor = i;
+    }
+    else
+    {
+        sel.chosen = { i };
+        sel.anchor = i;
+    }
+}
+
+void StripComponent::chooseColour()
+{
+    const int i = bankIndex();
+    if (i < 0)
+        return;
+    auto& sel = selectionFor (bank);
+    if (sel.chosen.count (i) == 0)   // a strip that is not selected: just this one
+    {
+        sel.chosen = { i };
+        sel.anchor = i;
+    }
+
+    juce::PopupMenu menu;
+    menu.addSectionHeader (sel.chosen.size() > 1 ? juce::String ((int) sel.chosen.size()) + " channels" : juce::String ("Channel colour"));
+    for (int c = 0; c < numStripColours; ++c)
+    {
+        auto swatch = std::make_unique<juce::DrawableRectangle>();
+        swatch->setRectangle (juce::Parallelogram<float> (juce::Rectangle<float> (0.0f, 0.0f, 16.0f, 16.0f)));
+        swatch->setFill (stripColour (c));
+        swatch->setStrokeFill (juce::Colours::black.withAlpha (0.6f));
+        swatch->setStrokeThickness (1.0f);
+        menu.addItem (juce::PopupMenu::Item (juce::String (stripColourName (c)) + (c == 0 ? "  (no group)" : ""))
+                          .setID (c + 1).setImage (std::move (swatch)).setTicked (strip.scribbleColour == c));
+    }
+    juce::Component::SafePointer<StripComponent> safe (this);
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&colourBox), [safe] (int r)
+    {
+        if (safe == nullptr || r <= 0)
+            return;
+        // Grouped where they stand: from now on each moves by as much as the one moved.
+        for (int k : selectionFor (safe->bank).chosen)
+            if (juce::isPositiveAndBelow (k, safe->bank->size()))
+                (*safe->bank)[k]->scribbleColour = r - 1;
+    });
+}
+
+void StripComponent::moveFader (float value)
+{
+    auto& p = *strip.controls.fader;
+    // Right-click drag: this fader alone, out of its group for the move (a linked partner still follows by its link).
+    const bool alone = juce::ModifierKeys::currentModifiers.isPopupMenu();
+    if (bank == nullptr || strip.scribbleColour == 0 || alone)
+    {
+        p.set (value);
+        return;
+    }
+    // Where the group stood before the move: a linked partner follows this fader through its link as soon as it
+    // moves, so it must not get the delta again on top.
+    std::vector<std::pair<Param*, float>> group;
+    for (auto* other : *bank)
+        if (other != &strip && other->scribbleColour == strip.scribbleColour)
+            group.push_back ({ other->controls.fader, other->controls.fader->toNormalised (other->controls.fader->get()) });
+    const float delta = p.toNormalised (value) - p.toNormalised (p.get());
+    p.set (value);
+    for (auto& [q, start] : group)
+        q->set (q->fromNormalised (juce::jlimit (0.0f, 1.0f, start + delta)));
+}
+
+std::vector<ChannelStrip*> StripComponent::followers() const
+{
+    // This strip, the selected ones (if it is one of them) and its colour group. Linked partners follow by their link.
+    std::vector<ChannelStrip*> list { &strip };
+    if (bank == nullptr)
+        return list;
+    const auto& sel = selectionFor (bank).chosen;
+    const bool selected = sel.count (bankIndex()) > 0;
+    for (int i = 0; i < bank->size(); ++i)
+    {
+        auto* other = (*bank)[i];
+        if (other != &strip && ((selected && sel.count (i) > 0) || (strip.scribbleColour != 0 && other->scribbleColour == strip.scribbleColour)))
+            list.push_back (other);
+    }
+    return list;
+}
+
+void StripComponent::switchFollowers (Param* ChannelStrip::Controls::* which, bool on)
+{
+    for (auto* s : followers())
+        (s->controls.*which)->set (on ? 1.0f : 0.0f);
+}
+
+void StripComponent::switchSubFollowers (int sub, bool on)
+{
+    for (auto* s : followers())
+        s->controls.sub[sub]->set (on ? 1.0f : 0.0f);
+}
+
+void StripComponent::ColourBox::paint (juce::Graphics& g)
+{
+    const auto r = getLocalBounds().toFloat().reduced (1.0f);
+    g.setColour (colour);
+    g.fillRoundedRectangle (r, 2.0f);
+    g.setColour (juce::Colours::black.withAlpha (0.55f));
+    g.drawRoundedRectangle (r, 2.0f, 1.0f);
+}
+
 void StripComponent::update (const StripComponent* source)
 {
     compPanel.update();   // the compressor type may have changed (channel window, or a loaded session)
 
     // A loaded session may have renamed the strip.
+    // Colour and selection (this strip, a copy of the bank, a loaded session).
+    if (strip.scribbleColour != shownColour)
+    {
+        shownColour = strip.scribbleColour;
+        colourScribble (scribble, shownColour);
+        colourBox.colour = stripColour (shownColour);
+        colourBox.repaint();
+        fader.slider.setTooltip (shownColour == 0 ? juce::String()
+                                 : juce::String (stripColourName (shownColour)) + " group: the faders of this colour move together. Right-click drag moves this one alone.");
+    }
+    const bool selectedNow = bank != nullptr && selectionFor (bank).chosen.count (bankIndex()) > 0;
+    if (selectedNow != shownSelected)
+    {
+        shownSelected = selectedNow;
+        repaint (colourBox.getBounds().getUnion (scribble.getBounds()).expanded (3));
+    }
+
     if (! scribble.isBeingEdited() && scribble.getText() != strip.name)
         scribble.setText (strip.name, juce::dontSendNotification);
 
@@ -661,8 +850,8 @@ CentreSection::CentreSection (AudioEngine& e, PluginContext* plugins)
         addAndMakeVisible (b);
 
     power.setTooltip ("Switches the audio interface on and off (off frees the driver for other programs)");
-    rew.setTooltip ("Rewind: winds back to the start, speeding up like a real tape machine (Stop brakes)");
-    ff.setTooltip ("Fast forward: winds on to the end of the recording (Stop brakes)");
+    rew.setTooltip ("Rewind: winds back to the start, speeding up like a real tape machine to 20x; hold it down for 40x (Stop brakes)");
+    ff.setTooltip ("Fast forward: winds on to the end of the recording, 20x; hold it down for 40x (Stop brakes)");
     stop.setTooltip ("Stop");
     play.setTooltip ("Play");
     rec.setTooltip ("Record enable: armed tracks record while the tape plays");
@@ -671,6 +860,12 @@ CentreSection::CentreSection (AudioEngine& e, PluginContext* plugins)
     power.onClick = [this] { engine.setPower (! engine.isPowered()); };
     rew.onClick   = [this] { tape.rewind(); };
     ff.onClick    = [this] { tape.fastForward(); };
+    // Rew / FF start as soon as they go down; held down, the tape winds at 40x until they come up.
+    for (auto* k : { &rew, &ff })
+    {
+        k->setTriggeredOnMouseDown (true);
+        k->onStateChange = [this] { tape.setWindHeld (rew.isDown() || ff.isDown()); };
+    }
     stop.onClick  = [this] { tape.stop(); };
     play.onClick  = [this] { tape.play(); };
     rec.onClick   = [this] { tape.setRecordEnabled (! tape.isRecordEnabled()); };
@@ -681,7 +876,8 @@ CentreSection::CentreSection (AudioEngine& e, PluginContext* plugins)
     setOut.setTooltip ("Set the Out point to the current tape position");
     loopButton.setTooltip ("Loop between In and Out");
     punchButton.setTooltip ("Auto-punch: record armed tracks only between In and Out (you hear the old take outside)");
-    wowButton.setTooltip ("Wow and flutter: subtle tape speed wobble, smaller at higher speeds");
+    wowButton.setTooltip ("Wow and flutter: subtle tape speed wobble, smaller at higher speeds. Right-click for the Wow and Flutter knobs.");
+    wowButton.onRightClick = [this] { showWowFlutterPopup (wowButton, *tape.wowAmount, *tape.flutterAmount); };
     setIn.onClick  = [this] { tape.setInPoint (tape.getPosition()); };
     setOut.onClick = [this] { tape.setOutPoint (tape.getPosition()); };
     loopButton.onClick  = [this] { tape.loopOn = ! tape.loopOn.load(); };
@@ -700,9 +896,9 @@ CentreSection::CentreSection (AudioEngine& e, PluginContext* plugins)
 
     for (int t = 0; t < TapeMachine::numTracks; ++t)
     {
-        auto* b = armButtons.add (new ParamButton (*tape.arm[(size_t) t], juce::String (t + 1)));
-        redButton (*b);
-        b->setTooltip ("Arm track " + juce::String (t + 1) + ": armed tracks monitor their input and record; others play back");
+        auto* b = armButtons.add (new ArmButton (tape, t));
+        b->setTooltip ("Arm track " + juce::String (t + 1) + ". Click: grey (off) > yellow (armed: the tape plays back until Record is on) "
+                       "> red (armed: input only, nothing from tape).");
         addAndMakeVisible (b);
     }
 
@@ -1202,12 +1398,12 @@ void updateTapeDisplay (TapeMachine& tape, Cassette& cassette, TapeClock& clock)
 }
 
 //==============================================================================
-StripBank::StripBank (const juce::OwnedArray<ChannelStrip>& bankStrips, const std::vector<Param*>& linkParams)
-    : channelStrips (bankStrips), links (linkParams)
+StripBank::StripBank (const juce::OwnedArray<ChannelStrip>& bankStrips, BankLinks& bankLinks)
+    : channelStrips (bankStrips), links (bankLinks)
 {
     for (auto* s : channelStrips)
     {
-        auto* strip = strips.add (new StripComponent (*s));
+        auto* strip = strips.add (new StripComponent (*s, &channelStrips));
         strip->onToggleSection = [this] (int bit)
         {
             setCollapsed (collapsed ^ bit);
@@ -1223,16 +1419,16 @@ StripBank::StripBank (const juce::OwnedArray<ChannelStrip>& bankStrips, const st
     meterButton.onClick = [this] { setMeterInput (! meterInput); };
     addAndMakeVisible (meterButton);
 
-    for (size_t k = 0; k < links.size(); ++k)
+    for (int k = 0; k < strips.size(); ++k)
     {
-        auto* b = linkButtons.add (new ParamButton (*links[k], "Link"));
-        b->setTooltip ("Links channels " + juce::String (2 * k + 1) + " and " + juce::String (2 * k + 2)
-                       + ": every control moves both, and the pan knobs turn in opposite directions. "
-                         "Linking copies channel " + juce::String (2 * k + 1) + "'s settings onto channel " + juce::String (2 * k + 2) + ".");
+        auto* b = linkButtons.add (new juce::TextButton ("Link"));
         b->setColour (juce::TextButton::buttonOnColourId, amber);
         b->setColour (juce::TextButton::textColourOnId, juce::Colours::black);
+        b->onClick = [this, k] { clickLink (k); };
         addAndMakeVisible (b);
     }
+    shownLinkState.assign ((size_t) strips.size(), -3);
+    updateLinkButtons();
     setSize (strips.size() * stripW, totalH);
 }
 
@@ -1292,17 +1488,73 @@ void StripBank::resized()
     meterButton.setBounds (6, getHeight() - stripFaderH + 6, stripW - 12, 18);   // the first strip's meter row
     meterButton.toFront (false);
 
-    // Each link button sits on the line between its two strips, level with their pan knobs.
-    for (int k = 0; k < linkButtons.size() && 2 * k + 1 < strips.size(); ++k)
+    // Each strip's link button sits to the right of its pan knob.
+    for (int k = 0; k < linkButtons.size() && k < strips.size(); ++k)
     {
-        const auto panY = strips[2 * k]->getPanBounds().getCentreY();
-        linkButtons[k]->setBounds (juce::Rectangle<int> (40, 18).withCentre ({ (2 * k + 1) * stripW, panY - 4 }));
+        const auto pan = strips[k]->getPanBounds();
+        linkButtons[k]->setBounds (juce::Rectangle<int> (28, 20).withCentre ({ k * stripW + (pan.getRight() + stripW) / 2, pan.getCentreY() - 4 }));
         linkButtons[k]->toFront (false);
+    }
+}
+
+namespace
+{
+    /** The strip whose Link button was clicked first, waiting for its partner (-1 none): one per bank, shared by
+        the bank's copies. */
+    int& waitingFor (const BankLinks* bank)
+    {
+        static std::map<const BankLinks*, int> waiting;
+        return waiting.try_emplace (bank, -1).first->second;
+    }
+}
+
+void StripBank::clickLink (int strip)
+{
+    auto& waiting = waitingFor (&links);
+    if (links.partner (strip) >= 0)
+    {
+        links.unlink (strip);   // a lit link: both strips go free
+        waiting = -1;
+    }
+    else if (waiting < 0 || waiting == strip || links.partner (waiting) >= 0)
+        waiting = waiting == strip ? -1 : strip;   // the first of two (or click it again to give up)
+    else
+    {
+        links.link (waiting, strip);   // the lower-numbered strip's settings go onto the higher one
+        waiting = -1;
+    }
+    updateLinkButtons();
+    for (auto* c : copies)
+        c->updateLinkButtons();
+    if (original != nullptr)
+        original->updateLinkButtons();
+}
+
+void StripBank::updateLinkButtons()
+{
+    const int waiting = waitingFor (&links);
+    const bool blinkOn = (juce::Time::getMillisecondCounter() / 300) % 2 == 0;
+    for (int k = 0; k < linkButtons.size(); ++k)
+    {
+        const int partner = links.partner (k);
+        const int state = partner >= 0 ? partner : k == waiting ? (blinkOn ? -2 : -1) : -1;
+        if (state == shownLinkState[(size_t) k])
+            continue;
+        shownLinkState[(size_t) k] = state;
+        auto* b = linkButtons[k];
+        b->setButtonText (partner >= 0 ? juce::String (juce::CharPointer_UTF8 ("↔")) + juce::String (partner + 1) : juce::String ("Link"));
+        b->setToggleState (state != -1, juce::dontSendNotification);
+        b->setTooltip (partner >= 0 ? "Linked with channel " + juce::String (partner + 1)
+                                          + ": every control moves both, and the pan knobs turn in opposite directions. Click to unlink."
+                       : k == waiting ? "Now click Link on the channel to link with (or this one again to cancel)"
+                                      : "Link this channel with any other in this bank: click here, then Link on the other channel. "
+                                        "The lower-numbered channel's settings are copied onto the higher one, and the lower one is the left side.");
     }
 }
 
 void StripBank::update()
 {
+    updateLinkButtons();
     for (auto* s : strips)
         s->update();
     for (auto* c : copies)
@@ -1311,6 +1563,7 @@ void StripBank::update()
 
 void StripBank::updateFrom (const StripBank& source)
 {
+    updateLinkButtons();
     for (int i = 0; i < strips.size(); ++i)
         strips[i]->update (source.strips[i]);
 }
@@ -1343,8 +1596,8 @@ void ViewSwitch::setView (int view)
 
 //==============================================================================
 Desk::Desk (AudioEngine& e, PluginContext* plugins)
-    : engine (e), inputs (e.inputStrips, { e.inputLink.begin(), e.inputLink.end() }),
-      returns (e.returnStrips, { e.returnLink.begin(), e.returnLink.end() }), centre (e, plugins)
+    : engine (e), inputs (e.inputStrips, e.inputLinks),
+      returns (e.returnStrips, e.returnLinks), centre (e, plugins)
 {
     centre.setSize (centreW, totalH);
     centre.setTitle ("Centre section");

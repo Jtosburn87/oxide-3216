@@ -114,13 +114,13 @@ AudioImport::Audio AudioImport::read (const juce::File& file, double targetRate,
     return a;
 }
 
-void AudioImport::place (TapeMachine& tape, const Audio& a, int firstTrack, juce::int64 start)
+void AudioImport::place (TapeMachine& tape, const Audio& a, int firstTrack, juce::int64 start, int secondTrack)
 {
     jassert (! tape.isPlaying());
     const auto n = a.length();
     for (size_t ch = 0; ch < a.channels.size(); ++ch)
     {
-        const int track = firstTrack + (int) ch;
+        const int track = ch == 1 && secondTrack >= 0 ? secondTrack : firstTrack + (int) ch;
         if (! juce::isPositiveAndBelow (track, Config::numTracks))
             break;
         const float* data = a.channels[ch].data();

@@ -4,9 +4,12 @@
 #include "AudioEngine.h"
 #include "AudioImport.h"
 
-/** Session > Import audio: choose a file, the track (a stereo file takes two neighbouring tracks)
-    and where on the tape it starts. The file is decoded with a progress window, then written to tape. */
-class ImportAudioDialog : public juce::Component
+/** Session > Import audio: choose one or more files (up to 16 tape tracks' worth: a mono file takes one track,
+    a stereo file any two, left and right), pick each file's track in the list or on the
+    track overview, and where on the tape they all start. The files are decoded one after another with a progress
+    window and written to tape. */
+class ImportAudioDialog : public juce::Component,
+                          private juce::ListBoxModel
 {
 public:
     ImportAudioDialog (AudioEngine&, juce::PropertiesFile& settings);
@@ -18,50 +21,72 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
 
-    /** Sixteen track cells; picks one track, or two neighbouring tracks for a stereo file. */
+    /** One file in the list and where it goes. */
+    struct Item
+    {
+        juce::File file;
+        AudioImport::Info info;
+        int first = -1;    // the (left) tape track, 0-based; -1 = not placed
+        int second = -1;   // a stereo file's right track (any other track)
+        int span() const noexcept { return info.tracksNeeded(); }
+        bool on (int track) const noexcept { return track >= 0 && (track == first || (span() == 2 && track == second)); }
+    };
+
+    /** The sixteen tracks: which file lands where (the selected file in amber). Click a track to put the
+        selected file there (a stereo file's left channel, its right on the next free track). */
     class TrackPicker : public juce::Component
     {
     public:
-        TrackPicker();
-        void setSpan (int numTracks);   // 1 or 2
-        int getSpan() const noexcept { return span; }
-        void setFirst (int track);
-        int getFirst() const noexcept { return first; }
-
-        std::function<bool (int)> hasAudio;
-        std::function<void()> onChange;
-
+        explicit TrackPicker (ImportAudioDialog& d) : dialog (d) { setTitle ("Tape tracks"); }
         void paint (juce::Graphics&) override;
         void mouseDown (const juce::MouseEvent&) override;
-        void mouseDrag (const juce::MouseEvent&) override;
-        bool keyPressed (const juce::KeyPress&) override;
 
     private:
-        int span = 1, first = 0;
-        void pickAt (int x);
+        ImportAudioDialog& dialog;
     };
 
 private:
+    class Row;
+
     AudioEngine& engine;
     juce::PropertiesFile& settings;
 
-    juce::File file;
-    AudioImport::Info info;
+    std::vector<Item> items;
+    int selected = -1;
+    juce::StringArray problems;   // files that could not be added, for the note
 
-    juce::Label fileTitle, fileName, infoLabel, tracksTitle, startTitle, note;
-    juce::TextButton chooseButton { "Choose file..." }, importButton { "Import" }, cancelButton { "Cancel" };
-    TrackPicker picker;
+    juce::Label filesTitle, tracksTitle, startTitle, note;
+    juce::TextButton addButton { "Add files..." }, clearButton { "Clear" }, importButton { "Import" }, cancelButton { "Cancel" };
+    juce::ListBox list;
+    TrackPicker picker { *this };
     juce::ComboBox startBox;
     std::unique_ptr<juce::FileChooser> chooser;
 
     enum StartIds { startOfTape = 1, currentPosition, inPoint };
 
-    void chooseFile();
-    void setFile (const juce::File&);
+    int getNumRows() override { return (int) items.size(); }
+    void paintListBoxItem (int, juce::Graphics&, int, int, bool) override {}
+    juce::Component* refreshComponentForRow (int row, bool selected, juce::Component* existing) override;
+    void selectedRowsChanged (int row) override;
+
+    // Track bookkeeping.
+    int tracksUsed() const;
+    int occupant (int track, int except = -1) const;          // the item on a track, or -1
+    bool fits (const Item&, int first, int second, int except) const;   // free of the other items
+    bool autoPlace (int index);                               // the best free spot (an empty track if it can)
+    bool repackAll();                                         // stereo pairs first, then mono
+    bool move (int index, int track);                         // overview click: stereo left there, right on the next free track
+    bool setTracks (int index, int first, int second);        // the files in the way go elsewhere
+    void removeItem (int index);
+    void select (int index);
+
+    void chooseFiles();
+    void addFiles (const juce::Array<juce::File>&);
     void refresh();
     juce::int64 startSample() const;
-    juce::int64 lengthOnTape() const;
+    juce::int64 lengthOnTape (const Item&) const;
     juce::String formatTime (juce::int64 samples) const;
+    static juce::String describe (const AudioImport::Info&);
     void startImport();
     void close();
 

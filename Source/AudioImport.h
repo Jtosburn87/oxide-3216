@@ -38,7 +38,8 @@ namespace AudioImport
         progress gets 0..1 and returns false to cancel. Any thread. */
     Audio read (const juce::File&, double targetRate, juce::int64 maxSamples, const std::function<bool (double)>& progress);
 
-    /** Writes the audio onto firstTrack (and firstTrack + 1 for stereo) from start, replacing what was there
-        in that stretch, and lengthens the tape if needed. Message thread, transport stopped. */
-    void place (TapeMachine&, const Audio&, int firstTrack, juce::int64 start);
+    /** Writes the audio onto firstTrack (and a stereo file's right channel onto secondTrack: -1 = firstTrack + 1)
+        from start, replacing what was there in that stretch, and lengthens the tape if needed. Message thread,
+        transport stopped. */
+    void place (TapeMachine&, const Audio&, int firstTrack, juce::int64 start, int secondTrack = -1);
 }

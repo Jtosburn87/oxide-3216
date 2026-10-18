@@ -23,9 +23,12 @@ TapeMachine::TapeMachine (ParamSet& params)
     speed = &params.addStepped ("tape.speed", "Tape speed", 3, 1);   // 15 ips
     pitch = &params.add ("tape.pitch", "Pitch", -maxPitchPercent, maxPitchPercent, 0.0f);
     wowFlutter = &params.addToggle ("tape.wf", "Wow and flutter", true);
+    wowAmount = &params.add ("tape.wow", "Wow", 0.0f, maxWowFlutterPercent, 100.0f);
+    flutterAmount = &params.add ("tape.flutter", "Flutter", 0.0f, maxWowFlutterPercent, 100.0f);
     for (int t = 0; t < numTracks; ++t)
     {
         arm[(size_t) t] = &params.addToggle ("tape.arm" + juce::String (t + 1), "Arm " + juce::String (t + 1), false);
+        armPlay[(size_t) t] = &params.addToggle ("tape.armplay" + juce::String (t + 1), "Arm " + juce::String (t + 1) + " plays back", false);
         hiss[(size_t) t].state = 0x9e3779b9u * (unsigned) (t + 1);   // independent hiss per track
     }
 
@@ -78,6 +81,7 @@ TapeMachine::~TapeMachine()
 void TapeMachine::prepare (double sr, int roundTripLatency)
 {
     sampleRate = sr;
+    prepared = true;
     setLatency (roundTripLatency);
     levelGain.prepare (sr, Dsp::dbToGain (recordLevel->get()));
 
@@ -99,6 +103,32 @@ void TapeMachine::prepare (double sr, int roundTripLatency)
     aaPlayCut = aaRecCut = 0.0f;
 }
 
+TapeMachine::ArmState TapeMachine::getArmState (int t) const noexcept
+{
+    if (! juce::isPositiveAndBelow (t, numTracks) || ! arm[(size_t) t]->on())
+        return ArmState::off;
+    return armPlay[(size_t) t]->on() ? ArmState::playback : ArmState::armed;
+}
+
+void TapeMachine::setArmState (int t, ArmState s)
+{
+    if (! juce::isPositiveAndBelow (t, numTracks))
+        return;
+    armPlay[(size_t) t]->set (s == ArmState::playback ? 1.0f : 0.0f);
+    arm[(size_t) t]->set (s == ArmState::off ? 0.0f : 1.0f);
+}
+
+void TapeMachine::stepArmState (int t)
+{
+    const auto s = getArmState (t);
+    setArmState (t, s == ArmState::off ? ArmState::playback : s == ArmState::playback ? ArmState::armed : ArmState::off);
+}
+
+bool TapeMachine::takesInput (int t) const noexcept
+{
+    return arm[(size_t) t]->on() && (! armPlay[(size_t) t]->on() || recordEnabled.load (std::memory_order_relaxed));
+}
+
 bool TapeMachine::isRecording (int track) const noexcept
 {
     return playing.load() && recordEnabled.load() && juce::isPositiveAndBelow (track, numTracks) && arm[(size_t) track]->on();
@@ -107,6 +137,7 @@ bool TapeMachine::isRecording (int track) const noexcept
 //==============================================================================
 void TapeMachine::play()
 {
+    windHeld.store (false);
     shuttleOn.store (false);
     jogOn.store (false);
     windTarget.store (-1);
@@ -117,6 +148,7 @@ void TapeMachine::play()
 
 void TapeMachine::stop()
 {
+    windHeld.store (false);
     playing.store (false);
     shuttleOn.store (false);
     jogOn.store (false);
@@ -156,6 +188,7 @@ void TapeMachine::jog (double samples)
 
 void TapeMachine::windTo (juce::int64 target)
 {
+    windHeld.store (false);
     target = juce::jlimit ((juce::int64) 0, (juce::int64) maxChunks * chunkSize - 1, target);
     playing.store (false);
     shuttleOn.store (false);
@@ -174,6 +207,7 @@ void TapeMachine::setRecordEnabled (bool on) { recordEnabled.store (on); }
 
 void TapeMachine::locate (juce::int64 p)
 {
+    windHeld.store (false);
     p = juce::jlimit ((juce::int64) 0, (juce::int64) maxChunks * chunkSize - 1, p);
     for (int t = 0; t < numTracks; ++t)
         if (arm[(size_t) t]->on())
@@ -400,9 +434,11 @@ int TapeMachine::wowBase (const Speed& s) const noexcept
 {
     if (! wowFlutter->on())
         return 0;
-    // Enough fixed delay that the wobble never needs to read ahead of the tape.
-    const double wow = s.wowPercent * 0.01 * sampleRate / (juce::MathConstants<double>::twoPi * 0.55);
-    const double flutter = s.flutterPercent * 0.01 * sampleRate / (juce::MathConstants<double>::twoPi * 6.8);
+    // Enough fixed delay that the wobble never needs to read ahead of the tape, with the Wow and Flutter knobs all
+    // the way up: turning them never moves the delay (no click, and recordings stay lined up).
+    const double most = maxWowFlutterPercent * 0.01;
+    const double wow = s.wowPercent * 0.01 * most * sampleRate / (juce::MathConstants<double>::twoPi * 0.55);
+    const double flutter = s.flutterPercent * 0.01 * most * sampleRate / (juce::MathConstants<double>::twoPi * 6.8);
     return (int) std::ceil (wow + flutter) + 3;
 }
 
@@ -471,7 +507,7 @@ void TapeMachine::process (const float* const* tapeIn, float* const* tapeOut, in
     bool anyArmed = false;
     for (int t = 0; t < numTracks; ++t)
     {
-        const bool armed = arm[(size_t) t]->on() && ! exporting.load (std::memory_order_relaxed);
+        const bool armed = takesInput (t) && ! exporting.load (std::memory_order_relaxed);
         anyArmed = anyArmed || armed;
         float* dst = recordBuf[(size_t) t].data();
         const float* in = tapeIn[t];
@@ -493,9 +529,15 @@ void TapeMachine::process (const float* const* tapeIn, float* const* tapeOut, in
         const double wowAmp = sp.wowPercent * 0.01 * sampleRate / (twoPi * 0.55);
         const double flutterAmp = sp.flutterPercent * 0.01 * sampleRate / (twoPi * 6.8);
         const double incW = twoPi * 0.55 / sampleRate, incF1 = twoPi * 6.8 / sampleRate, incF2 = twoPi * 9.3 / sampleRate;
+        // The Wow / Flutter knobs glide (about 50 ms), so turning them is smooth.
+        const double wowTarget = wowAmount->get() * 0.01, flutterTarget = flutterAmount->get() * 0.01;
+        const double glide = 1.0 - std::exp (-1.0 / (0.05 * sampleRate));
         for (int i = 0; i < n; ++i)
         {
-            const double wobble = wowAmp * std::sin (wowPhase) + flutterAmp * (0.65 * std::sin (flutterPhase1) + 0.35 * std::sin (flutterPhase2));
+            wowScale += (wowTarget - wowScale) * glide;
+            flutterScale += (flutterTarget - flutterScale) * glide;
+            const double wobble = wowAmp * wowScale * std::sin (wowPhase)
+                                + flutterAmp * flutterScale * (0.65 * std::sin (flutterPhase1) + 0.35 * std::sin (flutterPhase2));
             wowDelay[(size_t) i] = (float) (base - wobble);
             wowPhase += incW;
             flutterPhase1 += incF1;
@@ -625,10 +667,16 @@ void TapeMachine::wind (int n) noexcept
         return;
     }
 
-    // Speed up towards full winding speed, or brake (Stop, or a change of direction).
-    const double accel = windMaxSpeed / windRampSeconds, brake = windMaxSpeed / windBrakeSeconds;
+    // Speed up towards full winding speed (faster while the key is held down), or brake (Stop, or a change of direction).
+    const double top = windHeld.load() ? windHeldSpeed : windMaxSpeed;
+    const double accel = top / windRampSeconds, brake = windMaxSpeed / windBrakeSeconds;
     if (dir != 0 && (windVel == 0.0 || (windVel > 0.0) == (dir > 0)))
-        windVel = juce::jlimit (-windMaxSpeed, windMaxSpeed, windVel + dir * accel * dt);
+    {
+        if (std::abs (windVel) > top)   // let go after holding: settle back to full winding speed
+            windVel = windVel > 0.0 ? juce::jmax (top, windVel - brake * dt) : juce::jmin (-top, windVel + brake * dt);
+        else
+            windVel = juce::jlimit (-top, top, windVel + dir * accel * dt);
+    }
     else
         windVel = windVel > 0.0 ? juce::jmax (0.0, windVel - brake * dt) : juce::jmin (0.0, windVel + brake * dt);
 
@@ -694,7 +742,7 @@ void TapeMachine::scrub (float* const* tapeOut, int n, double from, double to, b
 
     for (int t = 0; t < numTracks; ++t)
     {
-        if (arm[(size_t) t]->on())
+        if (takesInput (t))
             continue;
         auto& lp = scrubLowPass[(size_t) t];
         float g = scrubGain;
@@ -728,7 +776,7 @@ void TapeMachine::processSegment (float* const* tapeOut, int offset, int count,
     {
         float* out = tapeOut[t] + offset;
         const float* input = recordBuf[(size_t) t].data() + offset;
-        const bool armed = arm[(size_t) t]->on() && ! exporting.load (std::memory_order_relaxed);
+        const bool armed = takesInput (t) && ! exporting.load (std::memory_order_relaxed);
 
         // Playback (plus hiss while rolling): unarmed tracks, and armed tracks outside the punch region.
         const bool needPlay = isPlay && (! armed || punch);
@@ -952,7 +1000,7 @@ void TapeMachine::processVarispeed (float* const* tapeOut, int n, bool rec, bool
         auto& v = vs[(size_t) t];
         float* out = tapeOut[t];
         const float* input = recordBuf[(size_t) t].data();
-        const bool armed = arm[(size_t) t]->on() && ! exporting.load (std::memory_order_relaxed);
+        const bool armed = takesInput (t) && ! exporting.load (std::memory_order_relaxed);
         const bool needPlay = ! armed || punch;
         float* stream = v.stream.data();   // [0, 4): history; [4, 4 + K): this block's tape samples
 

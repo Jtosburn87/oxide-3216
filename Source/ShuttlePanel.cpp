@@ -120,7 +120,7 @@ void ShuttleWheel::mouseDown (const juce::MouseEvent& e)
 {
     const auto c = getLocalBounds().toFloat().getCentre();
     const float d = e.position.getDistanceFrom (c);
-    drag = d > outerRadius() + 4.0f ? Drag::none : d > innerRadius() + 2.0f ? Drag::ring : Drag::jog;
+    drag = e.mods.isPopupMenu() || d > outerRadius() + 4.0f ? Drag::none : d > innerRadius() + 2.0f ? Drag::ring : Drag::jog;   // right-click: the window
     if (drag == Drag::ring)
         heldByKeys = false;   // the hand takes over: it springs back when let go
     lastAngle = angleAt (e.position);
@@ -214,6 +214,17 @@ void ShuttleWheel::timerCallback()
     }
 }
 
+void ShuttleWheel::setStep (int step)
+{
+    if (drag == Drag::ring)
+        return;   // the mouse has it
+    step = juce::jlimit (-steps, steps, step);
+    heldByKeys = step != 0;
+    ring = (float) step / (float) steps;
+    sendShuttle();
+    repaint();
+}
+
 //==============================================================================
 void ShuttlePanel::MemoryButton::paintButton (juce::Graphics& g, bool isMouseOver, bool isButtonDown)
 {
@@ -225,9 +236,10 @@ void ShuttlePanel::MemoryButton::paintButton (juce::Graphics& g, bool isMouseOve
     }
 }
 
-ShuttlePanel::ShuttlePanel (TapeMachine& t) : tape (t), wheel (t)
+ShuttlePanel::ShuttlePanel (TapeMachine& t, bool windowCopy) : tape (t), copy (windowCopy), wheel (t)
 {
     addAndMakeVisible (wheel);
+    info = idleInfo();
 
     for (auto* b : { &jogMode, &scrubMode })
     {
@@ -266,21 +278,34 @@ ShuttlePanel::ShuttlePanel (TapeMachine& t) : tape (t), wheel (t)
     store.onClick = [this]
     {
         storing = ! storing;
-        info = storing ? "Now press 1-6" : "Store, then 1-6";
+        sharedInfo = storing ? (copy ? "Now press a number" : "Now press 1-6") : juce::String();
         timerCallback();
-        repaint();
     };
     rtz.setTooltip ("Return to zero: the tape winds back to the start");
     rtz.onClick = [this] { tape.windTo (0); };
     addAndMakeVisible (store);
     addAndMakeVisible (rtz);
-    for (int m = 0; m < TapeMachine::numMemories; ++m)
+    for (int m = 0; m < shownMemories; ++m)
     {
         auto& b = memories[(size_t) m];
         b.setButtonText (juce::String (m + 1));
         b.setTitle ("Locate memory " + juce::String (m + 1));
-        b.onClick = [this, m] { memoryClicked (m); };
+        b.onClick = [this, m] { memoryClicked (memoryFor (m)); };
         addAndMakeVisible (b);
+    }
+    if (copy)
+    {
+        up.setTooltip ("Show the memories before (mouse wheel over the numbers too)");
+        down.setTooltip ("Show the memories after (mouse wheel over the numbers too)");
+        up.onClick = [] { scrollPage (-1); };
+        down.onClick = [] { scrollPage (1); };
+        addAndMakeVisible (up);
+        addAndMakeVisible (down);
+    }
+    else
+    {
+        addMouseListener (this, true);   // right-click on any key or the wheel opens the window too
+        setTooltip ("Right-click (or double-click the background) for the Jog / shuttle window: 99 locate memories and MIDI control");
     }
 
     setTitle ("Jog / shuttle");
@@ -288,11 +313,46 @@ ShuttlePanel::ShuttlePanel (TapeMachine& t) : tape (t), wheel (t)
     startTimerHz (15);
 }
 
+ShuttlePanel::~ShuttlePanel()
+{
+    removeMouseListener (this);
+}
+
+void ShuttlePanel::mouseDown (const juce::MouseEvent& e)
+{
+    if (! copy && e.mods.isPopupMenu() && onOpenWindow)
+        onOpenWindow();
+}
+
+void ShuttlePanel::mouseDoubleClick (const juce::MouseEvent& e)
+{
+    // The background and the readouts (the keys and the wheel have their own clicks; double-clicking the ring stops it).
+    if (! copy && e.eventComponent == this && onOpenWindow)
+        onOpenWindow();
+}
+
+void ShuttlePanel::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w)
+{
+    if (! copy || w.deltaY == 0.0f)
+        return;
+    const auto p = e.getEventRelativeTo (this).getPosition();
+    auto area = memories.front().getBounds().getUnion (memories.back().getBounds()).getUnion (up.getBounds()).getUnion (down.getBounds());
+    if (area.expanded (6).contains (p))
+        scrollPage ((w.deltaY < 0.0f) != w.isReversed ? 1 : -1);   // scroll down = higher numbers
+}
+
+void ShuttlePanel::scrollPage (int rows)
+{
+    page = juce::jlimit (0, TapeMachine::numMemories - shownMemories + 1, page + rows * 2) & ~1;   // a row is two keys
+}
+
 void ShuttlePanel::press (Key k)
 {
     switch (k)
     {
         case Key::jogScrub: (tape.scrubOn.load() ? jogMode : scrubMode).triggerClick(); break;
+        case Key::jog:      jogMode.triggerClick(); break;
+        case Key::scrub:    scrubMode.triggerClick(); break;
         case Key::store:    store.triggerClick(); break;
         case Key::rtz:      rtz.triggerClick(); break;
         case Key::setIn:    setIn.triggerClick(); break;
@@ -305,13 +365,33 @@ void ShuttlePanel::press (Key k)
         case Key::jogForward:     wheel.jogNotch (1); break;
         case Key::shuttleBack:    wheel.shuttleStep (-1); break;
         case Key::shuttleForward: wheel.shuttleStep (1); break;
+        case Key::pageUp:   scrollPage (-1); break;
+        case Key::pageDown: scrollPage (1); break;
     }
 }
 
 void ShuttlePanel::pressMemory (int m)
 {
     if (juce::isPositiveAndBelow (m, TapeMachine::numMemories))
-        memories[(size_t) m].triggerClick();
+        memoryClicked (m);
+}
+
+void ShuttlePanel::pressSlot (int slot)
+{
+    if (juce::isPositiveAndBelow (slot, shownMemories))
+        pressMemory (page + slot);   // the window's keys, whether it is open or not
+}
+
+void ShuttlePanel::jogBy (int notches)
+{
+    notches = juce::jlimit (-64, 64, notches);
+    for (int i = 0; i < std::abs (notches); ++i)
+        wheel.jogNotch (notches > 0 ? 1 : -1);
+}
+
+void ShuttlePanel::setShuttleStep (int step)
+{
+    wheel.setStep (step);
 }
 
 juce::String ShuttlePanel::formatTime (juce::int64 s) const
@@ -327,19 +407,18 @@ void ShuttlePanel::memoryClicked (int m)
     {
         tape.setMemory (m, tape.getPosition());
         storing = false;
-        info = juce::String (m + 1) + " = " + formatTime (tape.getMemory (m));
+        sharedInfo = juce::String (m + 1) + " = " + formatTime (tape.getMemory (m));
     }
     else if (tape.getMemory (m) >= 0)
     {
         tape.windTo (tape.getMemory (m));
-        info = "To " + juce::String (m + 1) + " (" + formatTime (tape.getMemory (m)) + ")";
+        sharedInfo = "To " + juce::String (m + 1) + " (" + formatTime (tape.getMemory (m)) + ")";
     }
     else
     {
-        info = juce::String (m + 1) + " is empty";
+        sharedInfo = juce::String (m + 1) + " is empty";
     }
     timerCallback();
-    repaint();
 }
 
 void ShuttlePanel::timerCallback()
@@ -353,34 +432,54 @@ void ShuttlePanel::timerCallback()
         speedText = juce::String (juce::CharPointer_UTF8 (speed < 0.0f ? "\xe2\x97\x80\xe2\x97\x80 " : "\xe2\x96\xb6\xe2\x96\xb6 "))
                   + juce::String (std::abs (speed), std::abs (speed) < 9.95f ? 1 : 0) + "x";
     const auto inOut = "In " + formatTime (tape.getInPoint()) + "   Out " + formatTime (tape.getOutPoint());
-    if (time != shownTime || speedText != shownSpeed || inOut != shownInOut)
+    const auto infoNow = sharedInfo.isNotEmpty() ? sharedInfo : idleInfo();
+    if (time != shownTime || speedText != shownSpeed || inOut != shownInOut || infoNow != info)
     {
         shownTime = time;
         shownSpeed = speedText;
         shownInOut = inOut;
+        info = infoNow;
         repaint();
     }
 
+    jogMode.setToggleState (! tape.scrubOn.load(), juce::dontSendNotification);
+    scrubMode.setToggleState (tape.scrubOn.load(), juce::dontSendNotification);
     loop.setToggleState (tape.loopOn.load(), juce::dontSendNotification);
     punch.setToggleState (tape.punchOn.load(), juce::dontSendNotification);
     store.setToggleState (storing, juce::dontSendNotification);
-    for (int m = 0; m < TapeMachine::numMemories; ++m)
+    const bool newPage = copy && page != shownPage;
+    shownPage = page;
+    if (copy)
     {
-        auto& b = memories[(size_t) m];
-        const auto p = tape.getMemory (m);
+        up.setEnabled (page > 0);
+        down.setEnabled (page + shownMemories < TapeMachine::numMemories);
+    }
+    for (int k = 0; k < shownMemories; ++k)
+    {
+        auto& b = memories[(size_t) k];
+        const int m = memoryFor (k);
+        const bool exists = m < TapeMachine::numMemories;
+        if (newPage)
+        {
+            b.setButtonText (exists ? juce::String (m + 1) : juce::String());   // the numbers change; the keys stay put
+            b.setEnabled (exists);
+        }
+        const auto p = exists ? tape.getMemory (m) : (juce::int64) -1;
         if (b.stored != (p >= 0))
         {
             b.stored = p >= 0;
             b.repaint();
         }
-        b.setTooltip (p >= 0 ? "Memory " + juce::String (m + 1) + ": " + formatTime (p) + ". Click to wind the tape there."
-                             : "Memory " + juce::String (m + 1) + ": empty. Press Store, then this, to keep the tape position here.");
+        b.setTooltip (! exists ? juce::String()
+                      : p >= 0 ? "Memory " + juce::String (m + 1) + ": " + formatTime (p) + ". Click to wind the tape there."
+                               : "Memory " + juce::String (m + 1) + ": empty. Press Store, then this, to keep the tape position here.");
     }
 }
 
 void ShuttlePanel::resized()
 {
-    // Left column: readouts, Jog / Scrub, the In / Out keys. Centre: the wheel. Right: the locate memories.
+    // Left column: readouts, Jog / Scrub, the In / Out keys. Centre: the wheel. Right: the locate memories
+    // (the window's copy has the up / down keys beside them).
     constexpr int lx = 12, lw = 176, rx = 430, rw = 84, gap = 4, bh = 24;
     clockWell = { lx, 15, lw, 52 };
     speedWell = { lx, 73, lw, 26 };
@@ -398,9 +497,15 @@ void ShuttlePanel::resized()
 
     store.setBounds (rx, 29, rw, bh);
     const int mw = (rw - gap) / 2;
-    for (int m = 0; m < TapeMachine::numMemories; ++m)
+    for (int m = 0; m < shownMemories; ++m)
         memories[(size_t) m].setBounds (rx + (m % 2) * (mw + gap), 59 + (m / 2) * (bh + gap), mw, bh);
     rtz.setBounds (rx, 161, rw, bh);
+    if (copy)
+    {
+        const int ax = rx + rw + gap, gridH = 3 * bh + 2 * gap;
+        up.setBounds (ax, 59, 24, (gridH - gap) / 2);
+        down.setBounds (ax, 59 + (gridH + gap) / 2, 24, (gridH - gap) / 2);
+    }
 }
 
 void ShuttlePanel::paint (juce::Graphics& g)
@@ -437,5 +542,5 @@ void ShuttlePanel::paint (juce::Graphics& g)
     g.setColour (juce::Colour (0xff8e9598).brighter (0.3f));
     g.setFont (ConsoleLookAndFeel::uiFont (10.5f));
     g.drawText (shownInOut, juce::Rectangle<int> (12, 211, 176, 14), juce::Justification::centredLeft, false);
-    g.drawFittedText (info, juce::Rectangle<int> (430, 192, 88, 30), juce::Justification::topLeft, 2, 0.8f);
+    g.drawFittedText (info, juce::Rectangle<int> (430, 192, copy ? 116 : 88, 30), juce::Justification::topLeft, 2, 0.8f);
 }

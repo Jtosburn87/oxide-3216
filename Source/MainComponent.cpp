@@ -1,4 +1,5 @@
 #include "MainComponent.h"
+#include "SceneWindow.h"
 #include "AudioSettingsComponent.h"
 #include "TalkbackSettings.h"
 #include "BinaryData.h"
@@ -40,7 +41,7 @@ MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionControll
     patchButton.onClick = [this] { patchBay.setVisible (true); patchBay.toFront (true); };
     patchBay.onClose = [this] { patchBay.setVisible (false); patchButton.grabKeyboardFocus(); };
     addChildComponent (patchBay);
-    addChildComponent (topEdgeBar);   // shows itself at the top edge in full screen
+    addAndMakeVisible (windowButtons);   // top bar, right end: _ / square / X
 
     rackButton.setTooltip ("Every insert slot at once, as racks of outboard gear");
     rackButton.onClick = [this]
@@ -153,6 +154,7 @@ MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionControll
     if (auto xml = settings.getXmlValue ("keyMappings"))
         commands.getKeyMappings()->restoreFromXml (*xml);
     commands.getKeyMappings()->addChangeListener (this);
+    setUpMidiControl();
     juce::Desktop::getInstance().addFocusChangeListener (this);
 
     engine.getDeviceManager().addChangeListener (this);
@@ -176,6 +178,9 @@ MainComponent::~MainComponent()
     saveSections();
     for (auto& w : sectionWindows)
         w = nullptr;
+    SceneMemoryPanel::closeWindow();
+    engine.midi.onHardwareMidi = nullptr;
+    shuttleWindow = nullptr;
     rackWindow = nullptr;
     busCompWindow = nullptr;
     if (tapeWindow != nullptr)
@@ -333,6 +338,9 @@ void MainComponent::paint (juce::Graphics& g)
 void MainComponent::resized()
 {
     auto bar = getLocalBounds().removeFromTop (topBarH).reduced (14, 9);
+    // _ / square / X at the right end.
+    windowButtons.setBounds (getLocalBounds().removeFromTop (topBarH).removeFromRight (WindowButtons::width + 4).reduced (2, 6).withTrimmedRight (2));
+    bar.removeFromRight (WindowButtons::width + 8);
     bar.removeFromLeft (214);
     zoomLabel.setBounds (bar.removeFromLeft (48));
     zoomSlider.setBounds (bar.removeFromLeft (150));
@@ -364,7 +372,6 @@ void MainComponent::showMidiPage (bool show)
         midiPage->onShowConsole = [this] { showMidiPage (false); };
         addChildComponent (*midiPage);
         patchBay.toFront (false);     // the patch bay pops up over the page too
-        topEdgeBar.toFront (false);
         midiPage->setBounds (getLocalBounds().withTrimmedTop (topBarH));
     }
     midiPage->setVisible (show);
@@ -475,7 +482,7 @@ void MainComponent::getAllCommands (juce::Array<juce::CommandID>& ids)
     ids.addArray ({ playStop, play, stop, record, rewind, fastForward, returnToZero,
                     newSession, openSession, saveSession, saveSessionAs, exportMix, exportTapeCmd, importAudio, importTempoMapCmd, clearTempoMapCmd,
                     recordViewCmd, mixViewCmd, fullViewCmd, nextViewCmd, fullScreenCmd,
-                    tapeMachineCmd, midiPageCmd, rackCmd, patchBayCmd, talkbackCmd });
+                    tapeMachineCmd, midiPageCmd, rackCmd, patchBayCmd, talkbackCmd, shuttleWindowCmd });
     for (int t = 0; t < TapeMachine::numTracks; ++t)
         ids.add (armTrack1 + t);
     ids.add (disarmAllCmd);
@@ -492,15 +499,16 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
     if (id >= armTrack1 && id < armTrack1 + TapeMachine::numTracks)
     {
         const juce::String n (id - armTrack1 + 1);
-        info.setInfo ("Arm track " + n, "Record arm on / off for tape track " + n, "Record arm", 0);
+        info.setInfo ("Arm track " + n, "Record arm for tape track " + n + ": off, tape playback until Record, armed", "Record arm", 0);
         return;
     }
-    // The Jog / shuttle box: the same as clicking its keys. Memories on 1-6.
+    // The Jog / shuttle box: the same as clicking its keys. Memories 1-6 on the number keys.
     if (id >= memory1 && id < memory1 + TapeMachine::numMemories)
     {
         const juce::String n (id - memory1 + 1);
         info.setInfo ("Memory " + n, "Winds the tape to locate memory " + n + " (after Store: keeps the tape position there)", "Jog / shuttle", 0);
-        info.addDefaultKeypress ('1' + (id - memory1), 0);
+        if (id - memory1 < 6)
+            info.addDefaultKeypress ('1' + (id - memory1), 0);   // 1-6; memories 7-99 have no keys until given some
         return;
     }
     switch (id)
@@ -510,9 +518,9 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
         case play:          info.setInfo ("Play", "Plays the tape", "Transport", 0); break;
         case stop:          info.setInfo ("Stop", "Stops the tape (a wind brakes to a stop)", "Transport", 0); break;
         case record:        info.setInfo ("Record", "Record enable on / off", "Transport", 0); break;
-        case rewind:        info.setInfo ("Rewind", "Winds back to the start", "Transport", 0);
+        case rewind:        info.setInfo ("Rewind", "Winds back to the start (hold the key down for 40x)", "Transport", 0);
                             info.addDefaultKeypress (juce::KeyPress::homeKey, 0); break;
-        case fastForward:   info.setInfo ("Fast forward", "Winds on to the end of the recording", "Transport", 0);
+        case fastForward:   info.setInfo ("Fast forward", "Winds on to the end of the recording (hold the key down for 40x)", "Transport", 0);
                             info.addDefaultKeypress (juce::KeyPress::endKey, 0); break;
         case returnToZero:  info.setInfo ("RTZ", "Return to zero: winds the tape back to the start (the RTZ key)", "Jog / shuttle", 0);
                             info.addDefaultKeypress ('0', 0); break;
@@ -567,6 +575,7 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
                             info.addDefaultKeypress (juce::KeyPress::tabKey, cmd); break;
         case fullScreenCmd: info.setInfo ("Full screen", "Full screen with no title bar, or back to a normal window", "View", 0);
                             info.addDefaultKeypress (juce::KeyPress::F11Key, 0); break;
+        case shuttleWindowCmd: info.setInfo ("Jog / shuttle window", "Opens the Jog / shuttle window (99 locate memories, MIDI control)", "Windows", 0); break;
         case tapeMachineCmd: info.setInfo ("Tape Machine", "Opens the Tape Machine window (transport, cassette and meters)", "Windows", 0);
                             info.addDefaultKeypress ('t', cmd); break;
         case midiPageCmd:   info.setInfo ("MIDI page", "Shows the MIDI page in place of the console, or the console again", "Windows", 0);
@@ -587,7 +596,7 @@ bool MainComponent::perform (const InvocationInfo& info)
     auto& tape = engine.tape;
     if (info.commandID >= armTrack1 && info.commandID < armTrack1 + TapeMachine::numTracks)
     {
-        tape.arm[(size_t) (info.commandID - armTrack1)]->toggle();
+        tape.stepArmState (info.commandID - armTrack1);   // grey -> yellow -> red, as the buttons
         return true;
     }
     auto& shuttle = desk.getShuttle();
@@ -602,8 +611,8 @@ bool MainComponent::perform (const InvocationInfo& info)
         case play:          tape.play(); return true;
         case stop:          tape.stop(); return true;
         case record:        tape.setRecordEnabled (! tape.isRecordEnabled()); return true;
-        case rewind:        tape.rewind(); return true;
-        case fastForward:   tape.fastForward(); return true;
+        case rewind:        tape.rewind(); holdWindWhileKeyDown (rewind); return true;
+        case fastForward:   tape.fastForward(); holdWindWhileKeyDown (fastForward); return true;
         case returnToZero:  shuttle.press (ShuttlePanel::Key::rtz); return true;
         case jogScrubCmd:   shuttle.press (ShuttlePanel::Key::jogScrub); return true;
         case storeCmd:      shuttle.press (ShuttlePanel::Key::store); return true;
@@ -631,12 +640,13 @@ bool MainComponent::perform (const InvocationInfo& info)
         case fullViewCmd:   showView (Desk::fullView); return true;
         case nextViewCmd:   showView ((desk.getView() + 1) % 3); return true;
         case fullScreenCmd: if (onToggleFullScreen) onToggleFullScreen(); return true;
+        case shuttleWindowCmd: openShuttleWindow(); return true;
         case tapeMachineCmd: tapeMachineButton.onClick(); return true;
         case midiPageCmd:   midiButton.onClick(); return true;
         case rackCmd:       rackButton.onClick(); return true;
         case patchBayCmd:   patchButton.onClick(); return true;
         case talkbackCmd:   TalkbackSettings::show (engine); return true;
-        case disarmAllCmd:  for (auto* a : tape.arm) a->set (0.0f);
+        case disarmAllCmd:  for (int t = 0; t < TapeMachine::numTracks; ++t) tape.setArmState (t, TapeMachine::ArmState::off);
                             return true;
         default:            return false;
     }
@@ -660,18 +670,87 @@ void MainComponent::openKeyMappings()
         return;
     }
 
-    auto editor = std::make_unique<juce::KeyMappingEditorComponent> (*commands.getKeyMappings(), true);
+    // Keys on one tab, MIDI notes and controllers on the other, for the same commands.
+    auto* editor = new juce::KeyMappingEditorComponent (*commands.getKeyMappings(), true);
     editor->setColours (juce::Colour (0xff2a2d30), bridgeText);
-    editor->setSize (560, 460);
+    auto tabs = std::make_unique<juce::TabbedComponent> (juce::TabbedButtonBar::TabsAtTop);
+    tabs->addTab ("Keys", juce::Colour (0xff2a2d30), editor, true);
+    tabs->addTab ("MIDI", juce::Colour (0xff2a2d30), new MidiShortcutsEditor (commands, midiShortcuts), true);
+    tabs->setSize (620, 520);
 
     juce::DialogWindow::LaunchOptions o;
-    o.content.setOwned (editor.release());
-    o.dialogTitle = "Keyboard shortcuts  -  click + to add a key, click a key to change or remove it";
+    o.content.setOwned (tabs.release());
+    o.dialogTitle = "Shortcuts  -  Keys: click + to add a key, click a key to change it.  MIDI: Learn, then press or move it";
     o.dialogBackgroundColour = room;
     o.escapeKeyTriggersCloseButton = true;
     o.useNativeTitleBar = true;
     o.resizable = true;
     keysWindow = o.launchAsync();
+}
+
+void MainComponent::setUpMidiControl()
+{
+    // MIDI shortcuts: any command, from any MIDI input.
+    midiShortcuts.fromString (settings.getValue ("midiShortcuts"));
+    midiShortcuts.invoke = [this] (int command) { commands.invokeDirectly (command, true); };
+    midiShortcuts.onChange = [this]
+    {
+        settings.setValue ("midiShortcuts", midiShortcuts.toString());
+        if (saveSettings) saveSettings();
+    };
+
+    // The Jog / shuttle window's MIDI: it plays the console's box (so it works with the window closed too).
+    shuttleMidi.fromString (settings.getValue ("shuttleMidi"));
+    shuttleMidi.onChange = [this]
+    {
+        settings.setValue ("shuttleMidi", shuttleMidi.toString());
+        if (saveSettings) saveSettings();
+    };
+    shuttleMidi.act = [this] (ShuttleMidi::Control c, int amount)
+    {
+        using K = ShuttlePanel::Key;
+        auto& box = desk.getShuttle();
+        switch (c)
+        {
+            case ShuttleMidi::jogWheel:    box.jogBy (amount); break;
+            case ShuttleMidi::shuttleRing: box.setShuttleStep (amount); break;
+            case ShuttleMidi::jog:         box.press (K::jog); break;
+            case ShuttleMidi::scrub:       box.press (K::scrub); break;
+            case ShuttleMidi::setIn:       box.press (K::setIn); break;
+            case ShuttleMidi::setOut:      box.press (K::setOut); break;
+            case ShuttleMidi::loop:        box.press (K::loop); break;
+            case ShuttleMidi::goIn:        box.press (K::goIn); break;
+            case ShuttleMidi::goOut:       box.press (K::goOut); break;
+            case ShuttleMidi::punch:       box.press (K::punch); break;
+            case ShuttleMidi::store:       box.press (K::store); break;
+            case ShuttleMidi::rtz:         box.press (K::rtz); break;
+            case ShuttleMidi::pageUp:      box.press (K::pageUp); break;
+            case ShuttleMidi::pageDown:    box.press (K::pageDown); break;
+            case ShuttleMidi::numControls: break;
+            default:                       box.pressSlot ((int) c - (int) ShuttleMidi::slot1); break;
+        }
+    };
+
+    // Every note, controller and program change from the MIDI inputs comes here first. A Learn takes it alone.
+    engine.midi.onHardwareMidi = [this] (const juce::MidiMessage& m, const juce::String& device)
+    {
+        if (shuttleMidi.getLearning() >= 0)
+            return shuttleMidi.handle (m, device);
+        if (midiShortcuts.getLearning() >= 0)
+            return midiShortcuts.handle (m);
+        shuttleMidi.handle (m, device);
+        midiShortcuts.handle (m);
+        return false;
+    };
+
+    desk.getShuttle().onOpenWindow = [this] { openShuttleWindow(); };
+}
+
+void MainComponent::openShuttleWindow()
+{
+    if (shuttleWindow == nullptr)
+        shuttleWindow = std::make_unique<ShuttleWindow> (engine.tape, shuttleMidi, settings, [this] { if (saveSettings) saveSettings(); });
+    shuttleWindow->show();
 }
 
 //==============================================================================
@@ -875,4 +954,33 @@ void MainComponent::saveSections()
     }
     if (saveSettings)
         saveSettings();
+}
+
+//==============================================================================
+namespace
+{
+    bool anyKeyDownFor (juce::KeyPressMappingSet& keys, juce::CommandID command)
+    {
+        for (auto& k : keys.getKeyPressesAssignedToCommand (command))
+            if (juce::KeyPress::isKeyCurrentlyDown (k.getKeyCode()))
+                return true;
+        return false;
+    }
+}
+
+void MainComponent::holdWindWhileKeyDown (juce::CommandID command)
+{
+    if (! anyKeyDownFor (*commands.getKeyMappings(), command))
+        return;   // from a menu or MIDI: an ordinary wind
+    heldWindCommand = command;
+    engine.tape.setWindHeld (true);
+    windKeyWatch.startTimerHz (30);
+}
+
+void MainComponent::checkWindKey()
+{
+    if (anyKeyDownFor (*commands.getKeyMappings(), heldWindCommand))
+        return;
+    windKeyWatch.stopTimer();
+    engine.tape.setWindHeld (false);   // let go: back to 20x, still winding
 }

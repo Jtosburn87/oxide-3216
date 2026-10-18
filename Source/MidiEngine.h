@@ -7,6 +7,7 @@
 #include "Config.h"
 #include "Tempo.h"
 #include "PatchMask.h"
+#include "MidiOut.h"
 
 class TapeMachine;
 
@@ -18,7 +19,8 @@ namespace Midi
     {
         juce::int64 start = 0, length = Tempo::ticksPerQuarter / 4;   // ticks, start from the clip's start
         int pitch = 60, velocity = 100;
-        bool operator== (const Note& o) const { return start == o.start && length == o.length && pitch == o.pitch && velocity == o.velocity; }
+        int channel = 1;   // 1-16, as played or as in the MIDI file (the track's channel setting can override it)
+        bool operator== (const Note& o) const { return start == o.start && length == o.length && pitch == o.pitch && velocity == o.velocity && channel == o.channel; }
     };
 
     /** A controller change (CC 0-127) or a program change (number programChange) in a clip. */
@@ -26,7 +28,8 @@ namespace Midi
     {
         juce::int64 tick = 0;   // from the clip's start
         int number = 1, value = 0;
-        bool operator== (const Control& o) const { return tick == o.tick && number == o.number && value == o.value; }
+        int channel = 1;   // 1-16
+        bool operator== (const Control& o) const { return tick == o.tick && number == o.number && value == o.value && channel == o.channel; }
     };
     constexpr int programChange = 128;   // Control::number of a program change (value = program 0-127)
 
@@ -57,6 +60,7 @@ namespace Midi
         juce::int64 tick = 0;
         Kind kind = note;
         std::uint8_t a = 0, b = 0;   // note: pitch, velocity (0 = off); controller: number, value; program: program
+        std::uint8_t channel = 1;    // 1-16, as it came from the keyboard
     };
 }
 
@@ -110,8 +114,46 @@ public:
     /** The MIDI inputs on this computer (opened as they appear). */
     static juce::Array<juce::MidiDeviceInfo> availableInputs() { return juce::MidiInput::getAvailableDevices(); }
 
+    /** The channel a track plays on, to its instrument and its MIDI out: 1-16 (everything on that channel), or
+        asRecorded (each note and controller on the channel it was played or imported on). New tracks: 1. */
+    static constexpr int asRecorded = 0;
+    void setChannel (int slot, int channel);
+    int getChannel (int slot) const noexcept;
+
+    /** A hardware MIDI output the track plays too (its clips, chased controllers and what comes in live): a device
+        identifier, or empty for none. Notes go out when the audio they line up with is heard (the output latency and
+        the console's plugin delay), plus the track's offset (ms; later is positive, earlier only as far as that latency). */
+    void setOutput (int slot, const juce::String& deviceIdentifier);
+    juce::String getOutput (int slot) const;
+    void setOutputOffset (int slot, double ms);
+    double getOutputOffset (int slot) const noexcept;
+    static constexpr double maxOffsetMs = 100.0;
+
+    /** MIDI clock (24 a quarter note, following the tempo map and vari-speed) with song position, start, continue
+        and stop, to each output switched on here, while the tape plays. Offset as for the tracks. */
+    void setClockOutput (const juce::String& deviceIdentifier, bool on);
+    bool sendsClockTo (const juce::String& deviceIdentifier) const { return clockOutputs.contains (deviceIdentifier); }
+    const juce::StringArray& getClockOutputs() const noexcept { return clockOutputs; }
+    void setClockOffset (double ms);
+    double getClockOffset() const noexcept { return clockOffset.load(); }
+
+    MidiOuts& outs() noexcept { return midiOuts; }
+
+    /** Scene control: a track can send its clips' controllers and program changes there (as it plays, not the
+        chase when the tape starts part-way). */
+    void setToScenes (int slot, bool);
+    bool sendsToScenes (int slot) const noexcept;
+    /** Controllers and program changes for scene control, on the message thread (about 100 times a second):
+        internal = from a MIDI page track, else from the hardware input deviceIdentifier (every input's are passed). */
+    std::function<void (const juce::MidiMessage&, bool internal, const juce::String& deviceIdentifier)> onSceneMidi;
+    /** Every note on, controller and program change from the MIDI inputs, first (message thread): for MIDI shortcuts
+        and the Jog / shuttle window. Return true if it was taken for a Learn (scene control then never sees it). */
+    std::function<bool (const juce::MidiMessage&, const juce::String& deviceIdentifier)> onHardwareMidi;
+    /** For the tests: hands what is waiting to onHardwareMidi / onSceneMidi now. */
+    void deliverSceneMidi();
+
     /** A standard MIDI file (dragged from a plugin's groove browser, or from Explorer) as a clip starting at 0: its
-        notes (every track and channel merged) in our ticks, the length rounded up to whole bars of the tempo (map),
+        notes (every track merged, each note on its own channel) in our ticks, the length rounded up to whole bars of the tempo (map),
         named after the file. Empty clip and an error if it can't be read. */
     static Midi::Clip readMidiFile (const juce::File&, const Tempo&, juce::String& error);
     /** A MIDI file's tempo map (its tempo and time signature changes, in our ticks). Empty and an error if it has none. */
@@ -144,7 +186,7 @@ public:
 
     // Routing bookkeeping (AudioEngine::routeInstrument does the patching) ---------
     /** What a destination had before an instrument was routed into it, put back when it is unrouted.
-        link: the strip pair's stereo link before (-1 = not a channel strip pair). */
+        link: the strip's stereo link before (-1 = not recorded, 0 = none, 1 = its neighbour (older sessions), else partner + 2). */
     struct Restore { int destination = 0; PatchMask mask; int interfaceInput = -1; int link = -1; };
     std::vector<Restore>& restoreList (int slot);
     const std::vector<Restore>& restoreList (int slot) const;
@@ -158,13 +200,16 @@ public:
     // Audio thread -----------------------------------------------------------------
     void prepare (double sampleRate, int maxBlockSize);
     /** Renders every instrument for one block. The tape is at tapeFrom (tape samples) and moves `rate` tape samples
-        per output sample while rolling (playing); recording: the tape is recording, so armed tracks capture what is played. */
-    void process (int numSamples, juce::int64 tapeFrom, double rate, bool rolling, bool recording) noexcept;
+        per output sample while rolling (playing); recording: the tape is recording, so armed tracks capture what is played.
+        outTimeMs: when the block's first sample is heard (Time::getMillisecondCounterHiRes), for the MIDI outputs
+        and the clock; negative (an offline render): nothing goes out. */
+    void process (int numSamples, juce::int64 tapeFrom, double rate, bool rolling, bool recording, double outTimeMs = -1.0) noexcept;
     /** An instrument output for the patch bay: source 0 = slot 0 left, 1 = slot 0 right, 2 = slot 1 left... */
     const float* output (int source) const noexcept { return outputs[(size_t) juce::jlimit (0, 2 * maxTracks - 1, source)].data(); }
 
-    /** Opens the computer's MIDI inputs (and any plugged in later). Off until the app calls it, so the tests leave them alone. */
-    void enableDeviceInputs() { openDevices = true; openNewInputs(); }
+    /** Opens the computer's MIDI inputs and the outputs in use (and any plugged in later). Off until the app calls it,
+        so the tests leave them alone. */
+    void enableDeviceInputs() { openDevices = true; openNewInputs(); midiOuts.enable(); }
 
     /** For the tests. Feeds a message to a slot as if it came from its input. */
     void injectLive (int slot, const juce::MidiMessage&);
@@ -179,6 +224,7 @@ private:
         juce::int64 tick;
         Kind kind;
         std::uint8_t a, b;   // note: pitch, velocity; controller: number, value; program: program
+        std::uint8_t ch;     // 0-15, as recorded (the track's channel setting is applied as it plays)
     };
 
     struct Slot
@@ -191,7 +237,8 @@ private:
         std::vector<Restore> restore;
         // Recording in progress (message thread): notes held and finished.
         std::array<juce::int64, 128> recordHeld {};   // tick of the note on, -1 = up
-        std::array<int, 128> recordVelocity {};
+        std::array<int, 128> recordVelocity {}, recordChannel {};
+        juce::String output;                          // MIDI out device identifier (empty: none)
         std::vector<Midi::Note> recorded;             // absolute ticks
         std::vector<Midi::Control> recordedControls;  // absolute ticks
         bool recordingTake = false;
@@ -204,12 +251,17 @@ private:
 
         std::atomic<bool> used { false }, armed { false }, muted { false }, soloed { false }, stereo { true };
         std::atomic<bool> listens { false };   // takes the live input (armed, or selected with none armed)
+        std::atomic<int> channel { 1 };        // 1-16 or asRecorded
+        std::atomic<bool> toScenes { false };  // clip controllers / program changes go to scene control too
+        std::atomic<int> outPort { -1 };       // MidiOuts port, -1 = none
+        std::atomic<double> outOffset { 0.0 }; // ms
         juce::MidiMessageCollector live;
 
         // Audio thread.
-        juce::MidiBuffer midi;
-        std::array<bool, 128> sounding {};    // notes the clips have on (so a stop or a jump can end them)
+        juce::MidiBuffer midi, remapped;
+        std::array<std::uint16_t, 128> sounding {};   // per pitch, the channels (bit 0 = 1) the clips have it on
         juce::int64 expectedFrom = -1;        // where the tape should be next block if it keeps rolling
+        int sentPort = -1, sentChannel = 1;   // where the notes sounding went (a change ends them there)
     };
 
     Tempo& tempo;
@@ -242,6 +294,29 @@ private:
     std::atomic<bool> recordingNow { false };
     void pushRecorded (const Midi::RecordedEvent&) noexcept;
     void finishTake (Slot&, juce::int64 endTick);
+
+    // MIDI out and clock.
+    MidiOuts midiOuts;
+    juce::StringArray clockOutputs;
+    std::atomic<std::uint32_t> clockPorts { 0 };   // bit per MidiOuts port
+    std::atomic<double> clockOffset { 0.0 };
+    // Audio thread: the clock run in progress.
+    juce::int64 clockExpected = -1;   // where the tape should be next block if it keeps rolling
+    juce::int64 clockNext = 0;        // the next clock to send, in clocks from the start (40 ticks each)
+    std::uint32_t clockRunning = 0;   // ports that were sent start / continue
+    // Scene control: from the audio thread (tracks) and the MIDI input thread (hardware) to the message thread.
+    struct SceneBytes { std::uint8_t data[3]; };
+    juce::AbstractFifo sceneFifo { 256 };
+    std::vector<SceneBytes> sceneQueue = std::vector<SceneBytes> (256);
+    juce::CriticalSection sceneInLock;
+    std::vector<std::pair<juce::MidiMessage, juce::String>> sceneFromDevices;
+    juce::TimedCallback sceneDelivery { [this] { deliverSceneMidi(); } };
+    void pushScene (SceneBytes) noexcept;
+
+    void endSounding (Slot&, juce::MidiBuffer&, int port, double timeMs) noexcept;
+    /** Runs the MIDI out sending timer only while a track has a MIDI out or the clock goes somewhere. */
+    void updateOutputsActive();
+    void clock (int numSamples, juce::int64 from, juce::int64 to, double t0, double t1, bool rolling, double outTimeMs) noexcept;
 
     int initSlot (int slot, const juce::String& name);
     void compile (Slot&);   // clips -> events, swapped in

@@ -404,6 +404,8 @@ void ChannelStripPanel::timerCallback()
 {
     if (! scribble.isBeingEdited() && scribble.getText() != strip.name)
         scribble.setText (strip.name, juce::dontSendNotification);
+    if (scribble.findColour (juce::Label::backgroundColourId) != stripColour (strip.scribbleColour))
+        colourScribble (scribble, strip.scribbleColour);   // the channel's colour (set on the console)
 
     if (strip.deEsser != nullptr && strip.deEsser->on->on() != shownDeEss)
     {

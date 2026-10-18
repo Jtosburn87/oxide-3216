@@ -56,8 +56,65 @@ namespace StripStyle
         l.setColour (juce::Label::outlineColourId, juce::Colours::black.withAlpha (0.35f));
         l.setColour (juce::TextEditor::backgroundColourId, juce::Colours::white);
         l.setColour (juce::TextEditor::textColourId, juce::Colour (0xff111111));
+        l.setColour (juce::Label::textWhenEditingColourId, juce::Colour (0xff111111));   // the editor takes its text colour from this
+        l.setColour (juce::Label::backgroundWhenEditingColourId, juce::Colours::white);
         l.setColour (juce::TextEditor::highlightColourId, amber.withAlpha (0.5f));
         l.setColour (juce::TextEditor::focusedOutlineColourId, focus);
+    }
+
+    // Scribble strip colours (ChannelStrip::colour). White is the default and groups nothing; the others group
+    // the bank's faders that share them.
+    inline constexpr int numStripColours = 9;
+    inline const char* stripColourName (int c)
+    {
+        static const char* const names[numStripColours] = { "White", "Red", "Orange", "Yellow", "Green", "Blue", "Indigo", "Violet", "Black" };
+        return names[juce::jlimit (0, numStripColours - 1, c)];
+    }
+    inline juce::Colour stripColour (int c)
+    {
+        static const juce::uint32 colours[numStripColours] = { 0xffe9e6da, 0xffd63a2f, 0xffef8a2e, 0xfff2d43a, 0xff3fa34d,
+                                                               0xff2f6fd6, 0xff4b3a9e, 0xff8e44c4, 0xff151515 };
+        return juce::Colour (colours[juce::jlimit (0, numStripColours - 1, c)]);
+    }
+
+    /** WCAG contrast ratio of two colours (1 = none, 21 = black on white). */
+    inline float contrast (juce::Colour a, juce::Colour b)
+    {
+        const auto lum = [] (juce::Colour c)
+        {
+            const auto lin = [] (float v) { return v <= 0.03928f ? v / 12.92f : std::pow ((v + 0.055f) / 1.055f, 2.4f); };
+            return 0.2126f * lin (c.getFloatRed()) + 0.7152f * lin (c.getFloatGreen()) + 0.0722f * lin (c.getFloatBlue());
+        };
+        const float la = lum (a), lb = lum (b);
+        return (juce::jmax (la, lb) + 0.05f) / (juce::jmin (la, lb) + 0.05f);
+    }
+
+    /** The name's colour on a scribble strip colour: its opposite on the painter's wheel (red / green,
+        orange / blue, yellow / violet, indigo / yellow-orange, white / black), made as dark (on a light strip) or as
+        light (on a dark one) as it takes to read clearly; black or white if even that is not enough. */
+    inline juce::Colour stripTextColour (int c)
+    {
+        static const juce::uint32 opposite[numStripColours] = { 0xff111111, 0xff3fa34d, 0xff2f6fd6, 0xff8e44c4, 0xffd63a2f,
+                                                                0xffef8a2e, 0xfff2b33a, 0xfff2d43a, 0xffffffff };
+        const auto bg = stripColour (c);
+        const auto op = juce::Colour (opposite[juce::jlimit (0, numStripColours - 1, c)]);
+        const bool lightStrip = contrast (bg, juce::Colours::black) > contrast (bg, juce::Colours::white);
+        constexpr float readable = 4.5f;   // WCAG AA (mid colours such as green can't reach more with any text colour)
+        for (int step = 0; step <= 20; ++step)
+        {
+            const float t = (float) step / 20.0f;
+            const auto candidate = op.interpolatedWith (lightStrip ? juce::Colours::black : juce::Colours::white, t);
+            if (contrast (bg, candidate) >= readable)
+                return candidate;
+        }
+        return lightStrip ? juce::Colours::black : juce::Colours::white;
+    }
+
+    /** A scribble strip in its colour. */
+    inline void colourScribble (juce::Label& l, int c)
+    {
+        l.setColour (juce::Label::backgroundColourId, stripColour (c));
+        l.setColour (juce::Label::textColourId, stripTextColour (c));
     }
 
     inline void redButton (juce::Button& b)
