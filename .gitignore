@@ -18,3 +18,6 @@ Thumbs.db
 # design reference photos, kept local
 /reference.jpg
 /meterbridge.jpg
+
+# Android version is a separate project, never part of this repo
+/android/
