@@ -1,0 +1,62 @@
+# Builds the native Windows ARM64 release zip on GitHub's Windows 11 ARM machines and runs the engine tests there.
+# The zip is kept as a download on the run's page (Actions > Windows ARM build > the run > Artifacts).
+#
+# Native ARM64 only loads ARM64 VST3 plugins (most plugins are x64 only); the x64 build, made on the
+# PC with release.ps1, still runs on ARM PCs under emulation with x64 plugins.
+# The ASIO SDK is not in git: it is downloaded from Steinberg for the build.
+# Runs by hand (Actions > Windows ARM build > Run workflow), on a tag like v0.1.9, or when this file changes.
+name: Windows ARM build
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+    branches: [main]
+    paths: [".github/workflows/windows-arm.yml"]
+
+jobs:
+  build:
+    runs-on: windows-11-arm
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ASIO SDK
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://www.steinberg.net/asiosdk -OutFile asiosdk.zip
+          Expand-Archive asiosdk.zip -DestinationPath asiosdk
+          $header = Get-ChildItem asiosdk -Recurse -Filter iasiodrv.h | Select-Object -First 1
+          if (-not $header) { throw "iasiodrv.h not found in the ASIO SDK download." }
+          "ASIO_SDK_DIR=$($header.Directory.Parent.FullName -replace '\\','/')" >> $env:GITHUB_ENV
+
+      - name: Build
+        shell: pwsh
+        run: |
+          cmake -S . -B build-arm64 -G "Visual Studio 17 2022" -A ARM64 "-DASIO_SDK_DIR=$env:ASIO_SDK_DIR"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cmake --build build-arm64 --config Release --parallel
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - name: Test
+        shell: pwsh
+        run: |
+          & build-arm64\Release\EngineTests.exe
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - name: Pack
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path CMakeLists.txt -Pattern 'project\(Oxide3216 VERSION ([0-9.]+)').Matches[0].Groups[1].Value
+          $version += (Select-String -Path CMakeLists.txt -Pattern 'OXIDE_VERSION_LABEL "\$\{PROJECT_VERSION\}([^"]*)"').Matches[0].Groups[1].Value
+          $stage = "dist\Oxide-3216-$version"
+          New-Item -ItemType Directory -Force $stage | Out-Null
+          Copy-Item build-arm64\Oxide3216_artefacts\Release\Oxide-3216.exe $stage
+          Copy-Item README.txt $stage
+          Compress-Archive -Path "$stage\*" -DestinationPath "dist\Oxide-3216-$version-win-arm64.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Oxide-3216-windows-arm64
+          path: dist/*.zip
+          if-no-files-found: error

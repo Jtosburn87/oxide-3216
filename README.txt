@@ -29,6 +29,11 @@ On Linux (in testing; built on Ubuntu 22.04, x64): untar anywhere and run ./Oxid
 ALSA or JACK (PipeWire serves JACK clients too). It needs the usual desktop libraries (ALSA,
 FreeType, Fontconfig, X11), which any desktop distro already has.
 
+On a Windows ARM PC (Snapdragon etc.; in testing): two choices. The win-arm64 zip is native
+and runs fastest, but only loads ARM64 VST3 plugins, and ASIO only works with an ARM64 ASIO
+driver (otherwise use WASAPI). Most plugins are x64 only: the normal win64 zip also runs on an
+ARM PC (Windows emulates it) and loads x64 plugins and drivers, at some extra CPU cost.
+
 
 THE CONSOLE
 -----------
