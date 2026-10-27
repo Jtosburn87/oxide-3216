@@ -462,7 +462,8 @@ public:
     {
         auto& tape = page.engine.tape;
         play.setToggleState (tape.isPlaying(), juce::dontSendNotification);
-        rec.setToggleState (tape.isRecordEnabled(), juce::dontSendNotification);
+        rec.setToggleState (tape.isRecordEnabled() && (juce::Time::getMillisecondCounter() / 400) % 2 == 0,   // flashes while on
+                            juce::dontSendNotification);
         auto& tempo = page.engine.tempo;
         const double now = tempo.ticksAt ((double) tape.getPosition(), tape.getSampleRate());
         const auto pos = tempo.positionAtTicks (now);

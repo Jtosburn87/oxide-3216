@@ -253,6 +253,14 @@ InsertsSection::InsertsSection (AudioEngine& e, PluginContext* ctx) : engine (e)
     sbcButton.setClickingTogglesState (false);
     sbcButton.onClick = [this] { if (onOpenBusComp) onOpenBusComp(); };
     addAndMakeVisible (sbcButton);
+
+    sofButton.setTooltip ("Sends on Fader: pick an aux, and every channel fader (inputs and returns) sets that channel's send to it, "
+                          "on the fader's dB scale (amber caps). Pick Off to give the faders back.");
+    sofButton.setClickingTogglesState (false);
+    sofButton.setColour (juce::TextButton::buttonOnColourId, amber);
+    sofButton.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff141516));
+    sofButton.onClick = [this] { if (onSendsOnFader) onSendsOnFader(); };
+    addAndMakeVisible (sofButton);
     startTimerHz (10);
 }
 
@@ -360,6 +368,7 @@ void InsertsSection::resized()
         sbcButton.setBounds (master.withTrimmedTop (16).withHeight (16).reduced (2, 0));
         const int below = 16 + 18 + InsertChain::numSlots * 17 + 6;
         grBar = master.withTrimmedTop (below).withHeight (10).reduced (6, 0);
+        sofButton.setBounds (master.withTrimmedTop (below + 22).withHeight (22).reduced (2, 0));
     }
 
     // Each Link button straddles the line between its pair.
@@ -368,6 +377,12 @@ void InsertsSection::resized()
         const int x = columnX (Config::numSubs + 2 * j + 1);
         linkButtons[(size_t) j].setBounds (x - 22, 17, 44, 16);
     }
+}
+
+void InsertsSection::showSendsOnFader (const juce::String& text, bool on)
+{
+    sofButton.setButtonText (text);
+    sofButton.setToggleState (on, juce::dontSendNotification);
 }
 
 void InsertsSection::paint (juce::Graphics& g)

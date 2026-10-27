@@ -430,7 +430,7 @@ void ShuttlePanel::timerCallback()
         speedText = "Play";
     else if (std::abs (speed) >= 0.05f)
         speedText = juce::String (juce::CharPointer_UTF8 (speed < 0.0f ? "\xe2\x97\x80\xe2\x97\x80 " : "\xe2\x96\xb6\xe2\x96\xb6 "))
-                  + juce::String (std::abs (speed), std::abs (speed) < 9.95f ? 1 : 0) + "x";
+                  + (std::abs (speed) < 9.95f ? juce::String (std::abs (speed), 1) : juce::String (juce::roundToInt (std::abs (speed)))) + "x";   // (0 decimals would print them all)
     const auto inOut = "In " + formatTime (tape.getInPoint()) + "   Out " + formatTime (tape.getOutPoint());
     const auto infoNow = sharedInfo.isNotEmpty() ? sharedInfo : idleInfo();
     if (time != shownTime || speedText != shownSpeed || inOut != shownInOut || infoNow != info)

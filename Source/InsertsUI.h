@@ -87,6 +87,11 @@ public:
     /** The SBC button (above the master slots) was clicked: open the stereo bus compressor's window. */
     std::function<void()> onOpenBusComp;
 
+    /** The Sends on Fader button (under the master slots) was clicked: the desk offers the auxes. */
+    std::function<void()> onSendsOnFader;
+    /** What the Sends on Fader button shows: its text, lit while the faders are on a send. */
+    void showSendsOnFader (const juce::String& text, bool on);
+
     void paint (juce::Graphics&) override;
     void resized() override;
 
@@ -128,6 +133,7 @@ private:
     std::array<bool, AudioEngine::numAuxPairs> shownLink {};
     float columnW = 0.0f;
     juce::TextButton sbcButton { "SBC" };   // lit while the bus compressor is in
+    juce::TextButton sofButton { "Sends on Fader" };   // the channel faders move an aux send instead (lit)
     float shownGr = 0.0f;                    // dB, on the bar under the master slots
     juce::Rectangle<int> grBar;
 

@@ -89,6 +89,14 @@ MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionControll
     creditsButton.setTooltip ("Who made Oxide-3216, and where to send bugs and feature requests");
     creditsButton.onClick = [] { CreditsWindow::show(); };
     addAndMakeVisible (creditsButton);
+    remote = std::make_unique<Remote> (engine, settings, [this]() -> Desk& { return desk; },
+                                       [this] { if (saveSettings) saveSettings(); });
+    remoteButton.setTooltip ("Wi-Fi remote: a QR code for a phone or iPad to run the tape machine (transport, record arm, jog / shuttle, locate memories)");
+    remoteButton.setColour (juce::TextButton::buttonOnColourId, ConsoleColours::amber);
+    remoteButton.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1b1b1b));
+    remoteButton.onClick = [this] { RemotePanel::show (*remote); };
+    addAndMakeVisible (remoteButton);
+    remote->restore();
     viewSwitch.onChange = [this] (int v) { showView (v); };
     desk.setCollapsed (Desk::inputSection, settings.getIntValue ("collapsed.input"));
     desk.setCollapsed (Desk::returnSection, settings.getIntValue ("collapsed.return"));
@@ -179,6 +187,8 @@ MainComponent::~MainComponent()
     for (auto& w : sectionWindows)
         w = nullptr;
     SceneMemoryPanel::closeWindow();
+    RemotePanel::closeWindow();
+    remote = nullptr;
     engine.midi.onHardwareMidi = nullptr;
     shuttleWindow = nullptr;
     rackWindow = nullptr;
@@ -285,7 +295,8 @@ void MainComponent::refreshDeviceText()
 
 void MainComponent::timerCallback()
 {
-    // Twice a second: is audio running, CPU load, dropouts.
+    // Twice a second: is audio running, CPU load, dropouts. The Remote button is lit while the Wi-Fi remote is on.
+    remoteButton.setToggleState (remote != nullptr && remote->isOn(), juce::dontSendNotification);
     auto& dm = engine.getDeviceManager();
     if (dm.getCurrentAudioDevice() == nullptr)
     {
@@ -353,6 +364,8 @@ void MainComponent::resized()
     midiButton.setBounds (bar.removeFromLeft (64));
     bar.removeFromLeft (6);
     creditsButton.setBounds (bar.removeFromLeft (76));
+    bar.removeFromLeft (6);
+    remoteButton.setBounds (bar.removeFromLeft (76));
     bar.removeFromLeft (16);
     statusLabel.setBounds (bar);
 

@@ -45,6 +45,10 @@ the patch bay); exports and Bounce Song ignore it and always take the full mix. 
 group EQs, Tempo, inserts and aux returns, bus faders and the main fader. The stereo bus
 compressor has a window of its own: the SBC button above the Master insert slots opens it (SBC lights
 while the compressor is in; the GR bar under the slots shows its gain reduction).
+Sends on Fader (under the Master slots): pick an aux and every channel fader, inputs and returns, sets
+that channel's send to it instead of its level, on the same dB scale (amber caps; a send tops out at
++3.5 dB). A linked aux pair is one choice. Pick Off to give the faders back. The channel window's fader
+and the Wi-Fi remote stay on the channel level.
 The console stretches to fill the window (the centre section on its own keeps its shape). The Zoom
 slider zooms in evenly, with scroll bars; resizing the window fits it again.
 The small "-" on the EQ, Gate, Comp and Aux sends titles minimises that section on
@@ -85,7 +89,9 @@ to unlink both. A channel has one partner: linking it elsewhere breaks its old l
 THE CHANNEL WINDOW: double-click any knob on a channel strip to open that channel big, laid out
 like a channel-strip plugin (Input, Equaliser, Gate / Compressor, Aux sends, Output). Everything in
 it is the console's own control. The arrows either side of the name step through the channels of
-the same bank (16 goes round to 1). It also has controls the strip doesn't:
+the same bank (16 goes round to 1). Copy takes every knob and switch of the channel (not
+the fader, solo, name, colour or inserts); Paste puts them on another channel of the same bank
+(inputs to inputs, returns to returns). It also has controls the strip doesn't:
   EQ: LF and HF "Bell" (off = shelf), Q for LMF and HMF.
   Gate: Release, and a side chain (In, HPF / LPF / BPF, Freq, Q) that filters what the gate
   listens to, not the audio.
@@ -176,7 +182,8 @@ Rew and FF wind like a real machine: they speed up over 3 seconds to 20x play sp
 down to arrive at the start or the end of the recording. Stop brakes; Play takes over at once.
 Hold Rew or FF down (the keys, or their keyboard shortcuts) and the tape winds up to 40x while held;
 let go and it settles back to 20x.
-Rec arms recording; Play rolls the tape. Recording is shifted by the interface's latency
+Rec arms recording (the whole key flashes red while it is on); Play rolls the tape. Stop takes
+Rec off again; the tracks stay armed. Recording is shifted by the interface's latency
 (plus any plugin delay) so overdubs line up with what you heard. If they still land early
 or late with your interface, correct it under Audio device > Recording offset.
 
@@ -214,6 +221,24 @@ I / O Set In / Out, Shift+I / Shift+O Go In / Out, L Loop, P Punch, , and . jog 
 forward, [ and ] step the shuttle ring back / forward (it stays there until Stop).
 Options > "Keyboard shortcuts" changes any of these and adds keys for Play, Stop and Record. Its MIDI
 tab gives any command a MIDI note or controller (Learn, then press it), from any MIDI input.
+
+Wi-Fi remote: the Remote button (top bar, lit while it is on) opens a window with a QR code. Turn the
+remote on and scan the code with a phone or iPad on the same network: its browser shows the counter,
+the transport (hold Rew / F Fwd for 40x), record arm for tracks 1-16 (tap to step off / yellow / red,
+Disarm all), the jog / shuttle wheel, the In / Out keys and all 99 locate memories (Store, then a
+number; RTZ). No internet or app needed, and older iPads (iOS 12) work. Oxide serves the page itself
+on port 52819; the link has a secret key (New link makes a new one and drops old phones). If the
+venue Wi-Fi keeps devices apart, turn on the computer's Mobile Hotspot and join that instead. If the
+phone holding the shuttle ring drops off the network, the tape stops winding by itself.
+The tabs along the top (each with little meters) switch between Center (the tape machine, above) and
+the channels: In 1-8 / 9-16 (the inputs) and Out 1-8 / 9-16 (the tape returns). A channel tab shows 8
+fader columns as on the console: Mute, the fader and meter, Solo, and the name at the bottom. Tap a name
+for that channel's whole strip (Input, EQ, Gate or De-esser, Comp, Aux sends, Pan, and the output with
+Main and S1-S4); the arrows step through the bank. SENDS ON FADER over the faders (Off, A1-A8, linked pairs as one)
+turns them into that aux's sends, amber caps, on this phone or iPad only (the console keeps its own, and
+each device remembers its choice) - handy for a player running their own headphone mix. Knobs turn with a drag (sideways always; up / down
+too when the page isn't scrolling), a double-tap resets one; double-tap a fader for 0 dB. Fader, mute,
+solo and assigns move their colour group, as on the console. Meters follow each bank's Meters In/Out.
 
 
 PATCH BAY
@@ -283,3 +308,5 @@ CREDITS AND LICENCES
 --------------------
 Built with JUCE 8 (juce.com). ASIO is a trademark and software of Steinberg Media
 Technologies GmbH. VST is a trademark of Steinberg Media Technologies GmbH.
+The Wi-Fi remote's QR codes: QR Code generator library by Project Nayuki (MIT licence,
+third_party/qrcodegen).

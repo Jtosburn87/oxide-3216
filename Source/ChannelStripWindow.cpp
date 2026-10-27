@@ -16,6 +16,15 @@ namespace
 
     /** Every In button sits at the right end of its section's title line. */
     juce::Rectangle<int> inButtonAt (juce::Rectangle<int> section) { return { section.getRight() - 40, section.getY() - 7, 32, 14 }; }
+
+    /** Copy / Paste in the channel window: one clipboard for every window, by parameter id after the strip's
+        prefix ("eq.hf.gain"), so it can land on any channel of the same bank. */
+    struct StripClipboard
+    {
+        juce::String kind, from;   // kind: "ch" / "rt"; from: the name of the channel it was copied from
+        std::map<juce::String, float> values;
+    };
+    StripClipboard clipboard;
 }
 
 //==============================================================================
@@ -217,6 +226,12 @@ ChannelStripPanel::ChannelStripPanel (ChannelStrip& s, StripBank& consoleBank, i
         add (*button);
     }
 
+    copyButton.setTooltip ("Copy this channel's settings (every knob and switch; not the fader, solo, name, colour or inserts)");
+    copyButton.onClick = [this] { copySettings(); };
+    add (copyButton);
+    pasteButton.onClick = [this] { pasteSettings(); };
+    add (pasteButton);
+
     hpf.setFormatter ([] (float f) { return f < 20.5f ? juce::String ("off") : formatHz (f); });
     hpf.setEndLabels ("20", "300");
     setupPreamp (s, gain, trim, phase, gainLink);
@@ -400,8 +415,42 @@ void ChannelStripPanel::updateVisibility()
         auxPre[(int) (2 * j + 1)]->setVisible (! shownAuxLink[j]);   // a linked pair has one pre switch, the odd one
 }
 
+juce::String ChannelStripPanel::bankKind() const
+{
+    return strip.idPrefix.trimCharactersAtEnd ("0123456789");
+}
+
+void ChannelStripPanel::copySettings()
+{
+    clipboard.kind = bankKind();
+    clipboard.from = strip.name;
+    clipboard.values.clear();
+    const int skip = strip.idPrefix.length() + 1;
+    for (auto* p : strip.copyableSettings())
+        clipboard.values[p->id.substring (skip)] = p->get();
+}
+
+void ChannelStripPanel::pasteSettings()
+{
+    if (clipboard.kind != bankKind())
+        return;
+    const int skip = strip.idPrefix.length() + 1;
+    for (auto* p : strip.copyableSettings())
+        if (auto it = clipboard.values.find (p->id.substring (skip)); it != clipboard.values.end())
+            p->set (it->second);
+}
+
 void ChannelStripPanel::timerCallback()
 {
+    const bool canPaste = clipboard.kind == bankKind() && ! clipboard.values.empty();
+    if (pasteButton.isEnabled() != canPaste)
+        pasteButton.setEnabled (canPaste);
+    const auto pasteTip = canPaste ? "Paste the settings copied from " + clipboard.from + " onto this channel"
+                                   : juce::String (clipboard.values.empty() ? "Copy a channel first"
+                                                                            : "Paste only goes to a channel of the bank it was copied from");
+    if (pasteButton.getTooltip() != pasteTip)
+        pasteButton.setTooltip (pasteTip);
+
     if (! scribble.isBeingEdited() && scribble.getText() != strip.name)
         scribble.setText (strip.name, juce::dontSendNotification);
     if (scribble.findColour (juce::Label::backgroundColourId) != stripColour (strip.scribbleColour))
@@ -446,10 +495,12 @@ void ChannelStripPanel::timerCallback()
 void ChannelStripPanel::resized()
 {
     modules.clear();
-    // Header: the name between the two arrows; the chain order at the right.
+    // Header: the name between the two arrows; Copy and Paste; the chain order at the right.
     prevButton.setBounds (margin, 10, arrowW, 22);
-    scribble.setBounds (prevButton.getRight() + 6, 10, 180, 22);
+    scribble.setBounds (prevButton.getRight() + 6, 10, 120, 22);
     nextButton.setBounds (scribble.getRight() + 6, 10, arrowW, 22);
+    copyButton.setBounds (nextButton.getRight() + 10, 10, 46, 22);
+    pasteButton.setBounds (copyButton.getRight() + 4, 10, 46, 22);
     chainBlocks->setBounds (getWidth() - margin - ChainBlocks::preferredWidth, 10, ChainBlocks::preferredWidth, 22);
 
     int x = margin, y = row1Y, h = row1H;

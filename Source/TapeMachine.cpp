@@ -150,6 +150,7 @@ void TapeMachine::stop()
 {
     windHeld.store (false);
     playing.store (false);
+    recordEnabled.store (false);   // Stop takes the master Record off; the tracks stay armed
     shuttleOn.store (false);
     jogOn.store (false);
     windTarget.store (-1);

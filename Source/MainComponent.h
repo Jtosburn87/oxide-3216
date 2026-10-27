@@ -19,6 +19,7 @@
 #include "WindowButtons.h"
 #include "MidiControlUI.h"
 #include "CreditsWindow.h"
+#include "Remote.h"
 
 /** Top bar (name plate, zoom, status) above the zoomable desk. The app buttons live on the desk. */
 class MainComponent : public juce::Component,
@@ -103,6 +104,7 @@ private:
     juce::TextButton midiButton { "MIDI" };      // the MIDI page in place of the console (lit while it shows)
     std::unique_ptr<MidiPage> midiPage;
     juce::TextButton creditsButton { "Credits" };   // who made it, and how to get in touch
+    juce::TextButton remoteButton { "Remote" };     // the Wi-Fi remote window (QR code for a phone or iPad)
     void showMidiPage (bool);
     /** The console's cassette moves (Options setting) unless the Tape machine window is showing it. */
     void applyCassetteAnimation();
@@ -115,6 +117,7 @@ private:
     juce::Viewport viewport;
     std::unique_ptr<TouchPanZoom> touch;   // pinch to zoom (touch never scrolls)
     PatchBayPanel patchBay;
+    std::unique_ptr<Remote> remote;   // the Wi-Fi remote (plays the desk's Jog / shuttle box, so it comes after the desk)
     WindowButtons windowButtons { [this] { return isFullScreenMode != nullptr && isFullScreenMode(); },
                                   [this] { if (onToggleFullScreen) onToggleFullScreen(); } };   // _ / square / X, top bar right
 

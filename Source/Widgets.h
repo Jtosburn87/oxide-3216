@@ -146,18 +146,32 @@ private:
 };
 
 /** Long-throw fader with a printed dB scale to its left. */
-class Fader : public juce::Component
+class Fader : public juce::Component,
+              private Param::Listener
 {
 public:
     /** labelWidth: room for the printed dB scale on the left. */
     explicit Fader (Param&, int labelWidth = 20);
+    ~Fader() override;
     void paint (juce::Graphics&) override;
     void resized() override;
 
     ParamSlider slider;
 
+    /** Sends on fader: the fader moves this aux send (a channel's 0..1 send level) on the same dB scale, with an amber
+        cap; it stops at the send's top (+3.5 dB). nullptr: back to the channel's own level. */
+    void setSend (Param* auxLevel);
+    Param* getSend() const noexcept { return send; }
+
+    /** The send law (ChannelStrip::auxGain: level^2 x 1.5) against fader positions (Dsp::faderDb). */
+    static float sendLevelAt (double faderPos);
+    static double faderPosOf (float sendLevel);
+
 private:
     const int labelWidth;
+    juce::Slider sendSlider;
+    Param* send = nullptr;
+    void paramChanged (Param&) override;
 };
 
 /** Vertical LED peak meter, -60 to 0 dBFS, with a short peak hold. */
@@ -205,7 +219,8 @@ private:
 /** A transport key in the style of a 1980s cassette multitrack: a dark key with a light top edge and a
     white symbol, its name printed above, and a status LED beside the name. The power key is a red square
     with its name to the left, lit while on. The toggle state lights the LED (or the power key). */
-class TransportKey : public juce::Button
+class TransportKey : public juce::Button,
+                     private juce::Timer
 {
 public:
     enum Icon { rewind, fastForward, stop, play, record, erase, power };
@@ -222,6 +237,9 @@ private:
     const juce::Colour ledColour;
 
     void paintIcon (juce::Graphics&, juce::Rectangle<float>, juce::Colour) const;
+    void timerCallback() override;
+    bool blinkLit() const;   // the record key while on: the whole key flashes red
+    bool shownLit = false;
 };
 
 /** A female XLR socket as on a console's front panel: metal shell, latch tab on top, three contact holes.

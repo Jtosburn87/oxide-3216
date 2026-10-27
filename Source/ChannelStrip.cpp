@@ -12,7 +12,7 @@ namespace
 }
 
 ChannelStrip::ChannelStrip (ParamSet& params, const juce::String& prefix, const juce::String& defaultName, bool withDeEsser, float defaultFader)
-    : idPrefix (prefix), name (defaultName),
+    : paramSet (params), idPrefix (prefix), name (defaultName),
       eq (params, prefix, 1, true), gate (params, prefix), comp (params, prefix)
 {
     const auto id = [&] (const juce::String& s) { return prefix + "." + s; };
@@ -48,6 +48,15 @@ void ChannelStrip::turnGain (float db)
     controls.gain->set (db);
     if (controls.gainLink->on())
         controls.trim->set (controls.trim->get() - (controls.gain->get() - before));
+}
+
+std::vector<Param*> ChannelStrip::copyableSettings() const
+{
+    std::vector<Param*> result;
+    for (auto* p : paramSet.all())
+        if (p->id.startsWith (idPrefix + ".") && p != controls.fader && p != controls.solo)
+            result.push_back (p);
+    return result;
 }
 
 void ChannelStrip::setChain (const Chain& c)

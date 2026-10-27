@@ -46,6 +46,17 @@ public:
     /** Meter readings, taken once a frame by the console's bank (update). */
     struct Readings { float out = 0.0f, in = 0.0f, gr = 0.0f, gate = 0.0f, deEss = 0.0f; };
     const Readings& getReadings() const noexcept { return readings; }
+    /** The loudest readings since the last call (the Wi-Fi remote reads less often than the console draws). */
+    Readings takeRemoteReadings() noexcept { auto r = remoteHeld; remoteHeld = {}; return r; }
+    bool isMeterInput() const noexcept { return meterInput; }
+
+    /** The Wi-Fi remote moving the fader or switching mute / solo / main / a sub: as by hand on the console, so the
+        colour group (and for the switches the selected strips) follow. */
+    void remoteFader (float value) { moveFader (value); }
+    void remoteSwitch (Param*, bool on);
+
+    /** Sends on fader: the fader moves this aux send (0-7) instead of the channel's level; -1 = its own level. */
+    void setSendsOnFader (int aux) { fader.setSend (aux >= 0 ? strip.controls.auxLevel[aux] : nullptr); }
 
     /** true: the bridge meter shows the input (after the trim); false: the output (post-fader). */
     void setMeterInput (bool);
@@ -106,6 +117,7 @@ private:
 
     std::uint32_t lastPops = 0;
     Readings readings;   // the last ones taken (or copied from the source)
+    Readings remoteHeld;   // the loudest since the remote last read them
     bool meterInput = false;
     int collapsed = 0;
     std::array<juce::TextButton, 4> foldButtons;
@@ -215,9 +227,14 @@ public:
     void setCassetteAnimated (bool a) { cassette.setAnimated (a); }
     void setCassetteFrozen (bool f) { cassette.setFrozen (f); }
     ShuttlePanel& getShuttle() { return shuttle; }
+    /** The main L / R peaks since the Wi-Fi remote last read them (linear). */
+    float takeRemoteMain (int side) noexcept { const float p = remoteMain[(size_t) side]; remoteMain[(size_t) side] = 0.0f; return p; }
 
     /** The SBC button over the master inserts was clicked. */
     std::function<void()> onOpenBusComp;
+    /** The Sends on Fader button (under the master inserts) was clicked. */
+    std::function<void()> onSendsOnFader;
+    void showSendsOnFader (const juce::String& text, bool on) { inserts.showSendsOnFader (text, on); }
 
 private:
     AudioEngine& engine;
@@ -245,6 +262,7 @@ private:
     std::array<std::array<LedMeter, 2>, Config::numSubs> subMeters;
     std::array<LedMeter, Config::numAux> auxMeters;
     std::array<LedMeter, 2> mainMeters;
+    std::array<float, 2> remoteMain {};
     Fader mainFader;
     juce::Label mainScribble;
     TempoPanel tempoPanel;         // where the bus compressor was (that is in its own window now: SBC)
@@ -294,6 +312,7 @@ public:
     /** A knob on strip i (0-based) was double-clicked (on this bank or a copy). */
     std::function<void (int strip)> onOpenStrip;
     const StripComponent& getStrip (int i) const { return *strips[i]; }
+    StripComponent& getStrip (int i) { return *strips[i]; }
     /** Channel windows showing this bank's meter readings: while any is open, the bank keeps updating. */
     int readers = 0;
 
@@ -306,6 +325,10 @@ public:
     std::function<void()> onCollapseChanged;   // the user minimised or restored a section
     void setChainUnlocked (bool);
 
+    /** Sends on fader for the whole bank (and its copies): aux 0-7, -1 = off. */
+    void setSendsOnFader (int aux);
+    int getSendsOnFader() const noexcept { return sendsOnFader; }
+
 private:
     juce::OwnedArray<StripComponent> strips;
     juce::OwnedArray<juce::TextButton> linkButtons;   // one per strip, beside its pan knob
@@ -316,6 +339,7 @@ private:
     bool meterInput = false;
     int collapsed = 0;
     bool chainUnlocked = false;
+    int sendsOnFader = -1;
     void setMeterInput (bool);
 
     const juce::OwnedArray<ChannelStrip>& channelStrips;
@@ -380,11 +404,17 @@ public:
     void setCassetteFrozen (bool f) { centre.setCassetteFrozen (f); }
     /** The Jog / shuttle box (its keys have keyboard shortcuts). */
     ShuttlePanel& getShuttle() { return centre.getShuttle(); }
+    float takeRemoteMain (int side) noexcept { return centre.takeRemoteMain (side); }
     /** The SBC button (over the master inserts) opens the stereo bus compressor window. */
     void setOnOpenBusComp (std::function<void()> f) { centre.onOpenBusComp = std::move (f); }
 
     /** Lets every channel's EQ, gate and compressor be reordered (Options > Unlock chain order). */
     void setChainUnlocked (bool);
+
+    /** Sends on Fader: every channel fader (both banks and their windows) moves its send to this aux (0-7) instead of
+        the channel's level; -1 = off. A linked aux pair is one send (its odd aux), whichever of the two is picked. */
+    void setSendsOnFader (int aux);
+    int getSendsOnFader() const noexcept { return sendsOnFader; }
 
     /** The desk's size changed. sectionMoved: a section left or came back (the view refits);
         otherwise a bank minimised or restored a section (the zoom stays as it is). */
@@ -402,6 +432,11 @@ private:
     CentreSection centre;
     std::array<bool, numSections> docked { true, true, true };
     View view = recordView;
+    int sendsOnFader = -1, appliedSendsOnFader = -1;   // picked / on the faders now (a linked pair's odd aux)
+    juce::String shownSendsOnFader;
+
+    void chooseSendsOnFader();    // the button's menu: Off, Aux 1-8 (linked pairs as one)
+    void applySendsOnFader();     // also follows aux links made or broken while it is on
 
     void relayout (bool sectionMoved = true);
     void timerCallback() override;

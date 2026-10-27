@@ -654,6 +654,21 @@ void StripComponent::switchSubFollowers (int sub, bool on)
         s->controls.sub[sub]->set (on ? 1.0f : 0.0f);
 }
 
+void StripComponent::remoteSwitch (Param* p, bool on)
+{
+    auto& c = strip.controls;
+    if (p == c.mute)       switchFollowers (&ChannelStrip::Controls::mute, on);
+    else if (p == c.solo)  switchFollowers (&ChannelStrip::Controls::solo, on);
+    else if (p == c.main)  switchFollowers (&ChannelStrip::Controls::main, on);
+    else
+    {
+        for (int k = 0; k < Config::numSubs; ++k)
+            if (p == c.sub[k])
+                return switchSubFollowers (k, on);
+        p->set (on ? 1.0f : 0.0f);
+    }
+}
+
 void StripComponent::ColourBox::paint (juce::Graphics& g)
 {
     const auto r = getLocalBounds().toFloat().reduced (1.0f);
@@ -723,6 +738,11 @@ void StripComponent::update (const StripComponent* source)
         readings.gr = strip.comp.isIn() ? strip.comp.takeGainReduction() : 0.0f;
         readings.gate = strip.gate.takeReduction();   // taken every frame, so a switch never shows a stale one
         readings.deEss = shownDeEss && strip.deEsser->isActive() ? strip.deEsser->takeReduction() : 0.0f;
+        remoteHeld.out = juce::jmax (remoteHeld.out, readings.out);
+        remoteHeld.in = juce::jmax (remoteHeld.in, readings.in);
+        remoteHeld.gr = juce::jmax (remoteHeld.gr, readings.gr);
+        remoteHeld.gate = juce::jmax (remoteHeld.gate, readings.gate);
+        remoteHeld.deEss = juce::jmax (remoteHeld.deEss, readings.deEss);
     }
     meter.setLevel (meterInput ? readings.in : readings.out);
     compPanel.setReduction (readings.gr);
@@ -929,6 +949,7 @@ CentreSection::CentreSection (AudioEngine& e, PluginContext* plugins)
     addAndMakeVisible (tempoPanel);
     addAndMakeVisible (inserts);
     inserts.onOpenBusComp = [this] { if (onOpenBusComp) onOpenBusComp(); };
+    inserts.onSendsOnFader = [this] { if (onSendsOnFader) onSendsOnFader(); };
     addAndMakeVisible (shuttle);
 
     for (int i = 0; i < Config::numSubs + Config::numAux; ++i)
@@ -1262,7 +1283,9 @@ void CentreSection::update()
 
     for (int side = 0; side < 2; ++side)
     {
-        mainMeters[(size_t) side].setLevel (engine.takeMainPeak (side));
+        const float mainPeak = engine.takeMainPeak (side);
+        mainMeters[(size_t) side].setLevel (mainPeak);
+        remoteMain[(size_t) side] = juce::jmax (remoteMain[(size_t) side], mainPeak);
         for (int k = 0; k < Config::numSubs; ++k)
             subMeters[(size_t) k][(size_t) side].setLevel (engine.takeSubPeak (k, side));
     }
@@ -1446,6 +1469,7 @@ std::unique_ptr<StripBank> StripBank::makeCopy()
     copy->setCollapsed (collapsed);
     copy->setChainUnlocked (chainUnlocked);
     copy->setMeterInput (meterInput);
+    copy->setSendsOnFader (sendsOnFader);
     copies.add (copy.get());
     return copy;
 }
@@ -1467,6 +1491,15 @@ void StripBank::setChainUnlocked (bool unlocked)
         s->setChainUnlocked (unlocked);
     for (auto* c : copies)
         c->setChainUnlocked (unlocked);
+}
+
+void StripBank::setSendsOnFader (int aux)
+{
+    sendsOnFader = aux;
+    for (auto* s : strips)
+        s->setSendsOnFader (aux);
+    for (auto* c : copies)
+        c->setSendsOnFader (aux);
 }
 
 void StripBank::setCollapsed (int mask)
@@ -1617,8 +1650,57 @@ Desk::Desk (AudioEngine& e, PluginContext* plugins)
         const auto s = bank == &inputs ? inputSection : returnSection;
         bank->onOpenStrip = [this, s] (int i) { if (onOpenStrip) onOpenStrip (s, i); };
     }
+    centre.onSendsOnFader = [this] { chooseSendsOnFader(); };
     relayout();
     startTimerHz (30);
+}
+
+void Desk::setSendsOnFader (int aux)
+{
+    sendsOnFader = juce::isPositiveAndBelow (aux, Config::numAux) ? aux : -1;
+    applySendsOnFader();
+}
+
+void Desk::applySendsOnFader()
+{
+    const int aux = sendsOnFader;
+    const bool linked = aux >= 0 && engine.inputStrips.getFirst()->isAuxLinked (aux / 2);
+    const int onFaders = linked ? aux - aux % 2 : aux;   // a linked pair's level is its odd send
+    if (onFaders != appliedSendsOnFader)
+    {
+        appliedSendsOnFader = onFaders;
+        inputs.setSendsOnFader (onFaders);
+        returns.setSendsOnFader (onFaders);
+    }
+    const auto text = aux < 0 ? juce::String ("Sends on Fader")
+                    : linked ? "Sends: A" + juce::String (onFaders + 1) + "+" + juce::String (onFaders + 2)
+                             : "Sends: A" + juce::String (aux + 1);
+    if (text != shownSendsOnFader)
+    {
+        shownSendsOnFader = text;
+        centre.showSendsOnFader (text, aux >= 0);
+    }
+}
+
+void Desk::chooseSendsOnFader()
+{
+    juce::PopupMenu menu;
+    menu.addSectionHeader ("Channel faders move their send to");
+    menu.addItem (1, "Off (the faders are the channels' levels)", true, sendsOnFader < 0);
+    for (int pair = 0; pair < Config::numAux / 2; ++pair)
+    {
+        const int a = 2 * pair;
+        if (engine.inputStrips.getFirst()->isAuxLinked (pair))
+            menu.addItem (10 + a, "Aux " + juce::String (a + 1) + "+" + juce::String (a + 2) + " (linked)", true, sendsOnFader == a || sendsOnFader == a + 1);
+        else
+            for (int k : { a, a + 1 })
+                menu.addItem (10 + k, "Aux " + juce::String (k + 1), true, sendsOnFader == k);
+    }
+    menu.showMenuAsync (juce::PopupMenu::Options(), [safe = juce::Component::SafePointer<Desk> (this)] (int result)
+    {
+        if (safe != nullptr && result > 0)
+            safe->setSendsOnFader (result == 1 ? -1 : result - 10);
+    });
 }
 
 Desk::~Desk()
@@ -1765,6 +1847,7 @@ void Desk::timerCallback()
     if (inputs.isShowing() || inputs.hasCopies() || inputs.readers > 0)    inputs.update();
     if (returns.isShowing() || returns.hasCopies() || returns.readers > 0) returns.update();
     centre.update();
+    applySendsOnFader();   // (an aux pair linked or unlinked while the faders are on its send)
 }
 
 //==============================================================================

@@ -93,6 +93,10 @@ public:
     static int getPage() noexcept { return page; }
     static void scrollPage (int rows);
 
+    /** For the Wi-Fi remote: Store is waiting for a number, and the box's last message ("To 3 (00:12.0)"; empty at first). */
+    static bool isStoring() noexcept { return storing; }
+    static juce::String getMessage() { return sharedInfo; }
+
 private:
     /** A key that only answers the left button: a right-click on the box opens the window instead of pressing it. */
     class KeyButton : public juce::TextButton

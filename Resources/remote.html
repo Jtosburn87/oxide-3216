@@ -1,0 +1,1492 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0a0b0c">
+<title>Oxide-3216 Remote</title>
+<style>
+/* Keep this page safe for iOS 12 Safari (older iPads): no flex gap, no inset, no ?. / ?? in the script,
+   pointer events only where the browser has them (touch + mouse events otherwise). */
+:root {
+    --room: #161718;
+    --bridge: #0a0b0c;
+    --plate: #222527;
+    --edge: #5d6467;
+    --legend: #e4e7e8;
+    --dim: #9aa0a3;
+    --amber: #e0a93a;
+    --red: #d0473c;
+    --led: #ff6a3d;
+    --yellow: #ffd23a;
+    --green: #4fc35d;
+    --blue: #3a8fd6;
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; height: 100%; background: var(--room); color: var(--legend);
+             font-family: "Segoe UI", -apple-system, Helvetica, Arial, sans-serif; overflow: hidden;
+             -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; touch-action: manipulation; }
+body { display: flex; flex-direction: column;
+       padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+
+header { display: flex; align-items: center; padding: 8px 14px; background: var(--bridge); border-bottom: 1px solid #3a3f42; flex: none; }
+.logo { font-weight: 800; letter-spacing: 3px; font-size: 15px; }
+.logo span { color: var(--amber); }
+.sub { color: var(--dim); font-size: 12px; margin-left: 10px; letter-spacing: 1px; }
+.spacer { flex: 1; }
+#link { font-size: 12px; color: var(--dim); }
+#link i { display: inline-block; width: 9px; height: 9px; border-radius: 5px; background: var(--red); margin-right: 6px; vertical-align: 0; }
+#link.on i { background: var(--green); }
+
+main { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 10px;
+       display: grid; grid-gap: 10px; grid-template-columns: 1fr;
+       grid-template-areas: "counter" "arm" "wheel" "locators" "memories"; align-content: start; }
+@media (orientation: landscape) and (min-width: 700px) {
+    main { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: auto auto 1fr;
+           grid-template-areas: "counter wheel" "locators wheel" "arm memories"; }
+}
+.box { background: var(--plate); border: 1px solid #34393c; border-radius: 6px; padding: 10px; min-width: 0; }
+.title { font-size: 11px; font-weight: 700; letter-spacing: 2px; color: var(--dim); margin: 0 0 8px 2px; text-transform: uppercase; }
+.title b { color: var(--legend); font-weight: 600; letter-spacing: 0; text-transform: none; margin-left: 8px; }
+
+/* counter */
+#counterBox { grid-area: counter; display: flex; align-items: stretch; }
+.well { background: #050505; border: 1px solid #000; border-radius: 4px; box-shadow: inset 0 2px 6px rgba(0,0,0,.8); padding: 6px 12px; }
+#time { flex: none; font-family: "Courier New", Courier, monospace; font-weight: 700; font-size: 46px; line-height: 1.1;
+        color: var(--led); text-shadow: 0 0 10px rgba(255,106,61,.55); letter-spacing: 1px; min-width: 228px; text-align: center; }
+#readouts { flex: 1; min-width: 0; margin-left: 10px; display: flex; flex-direction: column; justify-content: space-between; }
+#speed { font-size: 20px; font-weight: 700; }
+#inout { font-family: "Courier New", Courier, monospace; font-size: 14px; color: var(--dim); }
+#message { font-size: 13px; color: var(--amber); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-height: 17px; }
+
+/* keys */
+.key { position: relative; display: flex; align-items: center; justify-content: center; text-align: center; cursor: pointer;
+       background: linear-gradient(#4a5053, #33383b); border: 1px solid #15181a; border-radius: 5px;
+       box-shadow: 0 2px 0 #0c0d0e, inset 0 1px 0 rgba(255,255,255,.12);
+       color: var(--legend); font-weight: 700; font-size: 15px; min-height: 46px; padding: 4px; }
+.key.down { transform: translateY(2px); box-shadow: 0 0 0 #0c0d0e, inset 0 1px 0 rgba(255,255,255,.08); }
+.key.lit-amber { background: linear-gradient(#f0bf55, #c9922a); color: #1b1b1b; }
+.key.lit-green { background: linear-gradient(#6ad574, #3a9d45); color: #0d1a0e; }
+.key.lit-red   { background: linear-gradient(#e8604f, #b3352a); color: #fff; }
+.key.lit-blue  { background: linear-gradient(#5aa8ea, #2f77b6); color: #fff; }
+/* Record on: the whole key flashes */
+#kRec.lit-red { -webkit-animation: recflash 0.8s step-end infinite; animation: recflash 0.8s step-end infinite; }
+@-webkit-keyframes recflash { 50% { background: linear-gradient(#4a5053, #33383b); color: var(--legend); } }
+@keyframes recflash { 50% { background: linear-gradient(#4a5053, #33383b); color: var(--legend); } }
+.row { display: grid; grid-gap: 8px; }
+
+/* transport: pinned along the bottom, outside the scrolling area, so it is always under the thumbs */
+#transport { flex: none; min-width: 0; width: 100%; padding: 8px 10px 10px; background: var(--bridge); border-top: 1px solid #3a3f42; }
+#transportKeys { grid-template-columns: repeat(5, 1fr); }
+#transportKeys .key { min-height: 64px; font-size: 22px; }
+#transportKeys .key small { display: block; font-size: 10px; letter-spacing: 1px; margin-top: 2px; font-weight: 700; }
+.glyph { line-height: 1; }
+
+#locators { grid-area: locators; }
+#locatorKeys { grid-template-columns: repeat(3, 1fr); }
+
+/* record arm */
+#arm { grid-area: arm; }
+#armKeys { grid-template-columns: repeat(8, 1fr); grid-gap: 6px; }
+#armKeys .key { min-height: 50px; font-size: 18px; padding: 2px; }
+#armKeys .key.s1 { background: linear-gradient(#ffe07a, #e0b324); color: #1b1b1b; }
+#armKeys .key.s2 { background: linear-gradient(#e8604f, #b3352a); color: #fff; }
+#armKeys .key.rec { animation: recblink 1s steps(1) infinite; }
+@-webkit-keyframes recblink { 50% { opacity: .55; } }
+@keyframes recblink { 50% { opacity: .55; } }
+.armFoot { display: flex; align-items: center; margin-top: 8px; }
+.legendDot { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin: 0 4px 0 10px; vertical-align: -1px; }
+.armFoot .hint { font-size: 11px; color: var(--dim); flex: 1; }
+#disarm { min-height: 36px; font-size: 13px; padding: 4px 12px; }
+
+/* jog / shuttle */
+#wheelBox { grid-area: wheel; display: flex; flex-direction: column; align-items: center; }
+#wheelBox .title { align-self: flex-start; }
+#wheel { width: 300px; height: 300px; max-width: 100%; touch-action: none; display: block; }
+#modes { display: grid; grid-template-columns: 1fr 1fr; grid-gap: 8px; width: 300px; max-width: 100%; margin-top: 8px; }
+#modes .key { min-height: 40px; }
+
+/* locate memories */
+#memoriesBox { grid-area: memories; display: flex; flex-direction: column; min-height: 220px; }
+#memHead { display: grid; grid-template-columns: 1fr 1fr 2fr; grid-gap: 8px; margin-bottom: 8px; }
+#memHead .key { min-height: 44px; }
+#memHint { align-self: center; font-size: 12px; color: var(--dim); }
+#memScroll { flex: 1; min-height: 160px; overflow-y: auto; -webkit-overflow-scrolling: touch; border-radius: 4px; background: #1a1c1e; padding: 6px; }
+#memKeys { display: grid; grid-template-columns: repeat(6, 1fr); grid-gap: 6px; }
+@media (max-width: 420px) { #memKeys { grid-template-columns: repeat(4, 1fr); } #time { font-size: 36px; min-width: 180px; } }
+#memKeys .key { min-height: 52px; flex-direction: column; font-size: 17px; padding: 3px 2px 6px; }
+#memKeys .key span { font-family: "Courier New", Courier, monospace; font-size: 11px; color: var(--dim); font-weight: 400; margin-top: 2px; }
+#memKeys .key.stored::after { content: ""; position: absolute; left: 4px; right: 4px; bottom: 3px; height: 3px; background: var(--amber); border-radius: 1px; }
+#memKeys .key.stored span { color: var(--amber); }
+
+/* view tabs: In 1-8, In 9-16, Center, Out 1-8, Out 9-16, each with little meters */
+#tabs { flex: none; min-width: 0; width: 100%; display: flex; padding: 6px 8px; background: var(--bridge); border-bottom: 1px solid #3a3f42; }
+.tab { flex: 1 1 0; min-width: 0; margin: 0 3px; height: 46px; display: flex; flex-direction: column; cursor: pointer;
+       background: linear-gradient(#3a3f42, #26292b); border: 1px solid #15181a; border-radius: 5px; padding: 3px 5px 4px; }
+.tab.on { background: linear-gradient(#f0bf55, #c9922a); color: #1b1b1b; }
+.tabLabel { font-size: 12px; font-weight: 800; letter-spacing: 1px; white-space: nowrap; text-align: center; line-height: 15px; }
+.tabLabel small { font-size: 9px; letter-spacing: 1px; opacity: .75; margin-right: 3px; }
+.tabMeters { flex: 1; display: flex; align-items: flex-end; background: #070808; border-radius: 2px; padding: 1px 2px; margin-top: 2px; }
+.tabMeters i { flex: 1 1 0; margin: 0 1px; height: 0; background: var(--green); }
+.tabMeters i.hot { background: var(--yellow); }
+.tabMeters i.clip { background: var(--red); }
+
+/* ---- channels, styled as the console: grey strip panels with framed sections, black knobs with coloured caps,
+   dark keys that light amber (Mute red), the black fader section with its LED meter and the scribble strip ---- */
+body.channels main { display: none; }
+#bank, #chan { flex: 1; min-height: 0; min-width: 0; width: 100%; display: none; background: #0b0c0d; }
+body.bankView #bank { display: flex; flex-direction: column; overflow-x: auto; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+body.chanView #chan { display: flex; flex-direction: column; }
+
+.ckey { display: flex; align-items: center; justify-content: center; height: 26px; margin: 3px 0; border-radius: 3px; cursor: pointer;
+        background: linear-gradient(#53585b, #2c3032); border: 1px solid #000; box-shadow: inset 0 1px 0 rgba(255,255,255,.12);
+        color: #e4e7e8; font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; padding: 0 4px; }
+.ckey.on { background: linear-gradient(#f0c35e, #b98a2c); color: #141516; box-shadow: 0 0 0 2px rgba(224,169,58,.3), inset 0 1px 0 rgba(255,255,255,.3); }
+.ckey.on.red { background: linear-gradient(#e2685d, #a8372e); color: #fff; box-shadow: 0 0 0 2px rgba(208,71,60,.3), inset 0 1px 0 rgba(255,255,255,.3); }
+.ckey.on.pale { background: linear-gradient(#f2f3f1, #b9bbb8); color: #0b0b0b; }
+.ckey.small { height: 20px; font-size: 10px; margin: 2px 0; }
+.ckey.in { width: 28px; height: 18px; font-size: 10px; margin: 0 6px 0 0; flex: none; }
+.row { display: flex; } .row > * { flex: 1 1 0; min-width: 0; margin-left: 2px; margin-right: 2px; }
+.hidden { display: none !important; }
+.absent { display: none !important; }
+
+/* the fader section (bank view columns, and the channel view's output) */
+.fsec { background: #0b0c0d; display: flex; flex-direction: column; padding: 6px 6px 6px; }
+.faderArea { position: relative; display: flex; justify-content: center; margin: 4px 0; }
+.scale { position: relative; width: 26px; }
+.scale span { position: absolute; right: 2px; font-size: 10px; color: #c3c8ca; line-height: 10px; margin-top: -5px; white-space: nowrap; }
+.scale span::after { content: ""; display: inline-block; width: 5px; height: 1px; background: #8e9598; vertical-align: 3px; margin-left: 2px; }
+.fader { position: relative; width: 40px; height: 100%; touch-action: none; cursor: ns-resize; }
+.fader .slot { position: absolute; left: 18px; top: 14px; bottom: 14px; width: 4px; background: #000; border-left: 1px solid #2a2d2f; border-right: 1px solid #2a2d2f; }
+.fader .cap { position: absolute; left: 3px; width: 34px; height: 28px; margin-top: -14px; border-radius: 3px;
+              background: linear-gradient(#5a5f62, #2a2d2f 45%, #1a1c1d 55%, #3a3e41); border: 1px solid #000; box-shadow: 0 2px 3px rgba(0,0,0,.7); }
+.fader .cap::after { content: ""; position: absolute; left: 3px; right: 3px; top: 12px; height: 2px; background: #f2f3f3; }
+.fader.active .cap { box-shadow: 0 0 0 2px #e0a93a; }
+.led { position: relative; width: 9px; height: 100%; margin-left: 6px; background: #12190f; border: 1px solid #000; overflow: hidden; }
+.led .fill { position: absolute; left: 0; right: 0; bottom: 0; height: 0; overflow: hidden; }
+.led .fill i { position: absolute; left: 0; right: 0; bottom: 0; display: block;
+               background: linear-gradient(to top, #39c552 0, #39c552 66%, #f0c23a 66%, #f0c23a 88%, #ff4a3a 88%); }
+.led::after { content: ""; position: absolute; left: 0; right: 0; top: 0; bottom: 0;
+              background: repeating-linear-gradient(to bottom, transparent 0, transparent 4px, #000 4px, #000 6px); }
+.soloLed { width: 8px; height: 8px; border-radius: 4px; background: #4a1512; margin: 4px auto 1px; }
+.soloLed.on { background: #ff3b2f; box-shadow: 0 0 6px #ff3b2f; }
+.faderDb { text-align: center; font-size: 11px; color: #c3c8ca; height: 14px; font-family: "Courier New", Courier, monospace; }
+.scribble { display: flex; align-items: center; height: 28px; margin-top: 4px; cursor: pointer; }
+.scribble .sq { width: 14px; height: 22px; border-radius: 2px; border: 1px solid rgba(0,0,0,.55); margin-right: 4px; flex: none; }
+.scribble .nm { flex: 1; min-width: 0; height: 26px; line-height: 26px; border-radius: 2px; background: #e9e6da; color: #111;
+                font-size: 13px; font-weight: 700; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 3px; }
+
+/* bank view: 8 fader columns side by side */
+#sofBar { flex: none; display: flex; align-items: center; min-width: 640px; padding: 5px 8px; background: #16181a; border-bottom: 1px solid #2a2d2f; }
+#sofBar .sofLabel { font-size: 11px; font-weight: 800; letter-spacing: 1.5px; color: #9aa0a3; margin-right: 10px; white-space: nowrap; }
+#sofBar.on .sofLabel { color: #e0a93a; }
+#sofKeys { flex: 1; display: flex; }
+#sofKeys .ckey { flex: 1 1 0; min-width: 0; margin: 0 2px; height: 28px; }
+.fader.sof .cap { background: linear-gradient(#f3c968, #c08f2e 45%, #6e5016 55%, #c9962e); }
+#bankInner { display: flex; flex: 1; flex-shrink: 0; min-width: 640px; padding: 0 2px; }
+.bcol { flex: 1 1 0; min-width: 0; border-left: 1px solid #222426; }
+.bcol .faderArea { height: 360px; flex: none; }   /* fixed: a short screen scrolls instead */
+
+/* channel view: one channel, laid out as its console strip */
+#chanHead { flex: none; display: flex; align-items: center; padding: 6px 8px; background: #0a0b0c; border-bottom: 1px solid #3a3f42; }
+#chanHead .ckey { margin: 0 4px; min-width: 44px; height: 34px; font-size: 15px; }
+#chanBack { min-width: 90px !important; }
+#chanName { flex: 1; max-width: 320px; margin: 0 4px; cursor: default; }
+#chanName .nm { height: 32px; line-height: 32px; font-size: 16px; }
+#chanName .sq { height: 30px; }
+#chanMain { flex: 1; min-height: 0; display: flex; }
+#chanBody { flex: 1; min-width: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; background: #585e60; padding: 4px 4px 10px;
+            display: flex; flex-wrap: wrap; align-content: flex-start; align-items: flex-start; }
+#chanOut { flex: none; width: 128px; display: flex; flex-direction: column; }
+#chanOut .faderArea { flex: 1; min-height: 160px; }
+
+.frame { position: relative; border: 1px solid rgba(195,200,202,.55); border-radius: 5px; margin: 14px 5px 4px; padding: 12px 4px 4px; }
+.ftitle { position: absolute; top: -11px; left: 6px; display: flex; align-items: center; background: #585e60; padding: 0 5px; height: 20px;
+          font-size: 13px; font-weight: 600; color: #f0f2f3; white-space: nowrap; }
+.gr { width: 40px; height: 6px; background: #050505; border: 1px solid #000; margin-left: 8px; overflow: hidden; }
+.gr i { display: block; height: 100%; width: 0; background: #e0a93a; }
+.grid2 { display: flex; flex-wrap: wrap; width: 136px; }
+.grid2 > * { width: 50%; }
+.grid2 > .ckey { width: calc(50% - 8px); margin: 18px 4px 4px; }
+.grid2 > .row { width: 100%; }
+.auxGrid { display: flex; flex-wrap: wrap; width: 176px; }
+.auxCell { width: 50%; display: flex; align-items: center; }
+.auxCell .knob { flex: 1; }
+.auxCell .ckey { width: 24px; flex: none; margin-right: 4px; padding: 0; }
+
+.knob { display: flex; flex-direction: column; align-items: center; padding: 2px 0 4px; touch-action: none; cursor: ns-resize; }
+#chanBody.scrolls .knob { touch-action: pan-y; }   /* up / down scrolls the channel; sideways turns */
+.dial { position: relative; width: 40px; height: 40px; border-radius: 20px; margin: 2px 0;
+        background: radial-gradient(circle at 40% 30%, #53585b, #1b1d1f 75%); border: 1px solid #000; box-shadow: 0 2px 3px rgba(0,0,0,.6); }
+.dial .capc { position: absolute; left: 10px; top: 10px; width: 18px; height: 18px; border-radius: 9px; border: 1px solid rgba(0,0,0,.6);
+              background: #7b8185; box-shadow: inset 0 2px 2px rgba(255,255,255,.25), inset 0 -2px 2px rgba(0,0,0,.3); }
+.dial .ptr { position: absolute; left: 0; top: 0; width: 40px; height: 40px; }
+.dial .ptr::after { content: ""; position: absolute; left: 19px; top: 2px; width: 2px; height: 8px; background: #f2f3f3; border-radius: 1px; }
+.knob .lbl { font-size: 12px; color: #f0f2f3; line-height: 14px; white-space: nowrap; }
+.knob .val { font-size: 11px; color: #d6d9da; line-height: 13px; white-space: nowrap; font-family: "Courier New", Courier, monospace; }
+.knob.active .dial { box-shadow: 0 0 0 2px #e0a93a; }
+body.channels #transportKeys .key { min-height: 44px; font-size: 18px; }
+body.channels #transportKeys .key small { display: none; }
+
+#banner { position: fixed; left: 0; right: 0; top: 0; padding: 12px 16px; background: #5a1d1a; color: #fff; font-size: 14px; display: none; z-index: 5; }
+#banner.show { display: block; }
+#banner b { margin-right: 8px; }
+</style>
+</head>
+<body>
+<header>
+    <div class="logo">OXIDE<span>·</span>3216</div><div class="sub">TAPE REMOTE</div>
+    <div class="spacer"></div>
+    <div id="link"><i></i><span id="linkText">Connecting…</span></div>
+</header>
+
+<nav id="tabs">
+    <div class="tab" data-view="ch0"><div class="tabLabel"><small>IN</small>1-8</div><div class="tabMeters"></div></div>
+    <div class="tab" data-view="ch1"><div class="tabLabel"><small>IN</small>9-16</div><div class="tabMeters"></div></div>
+    <div class="tab on" data-view="centre"><div class="tabLabel">CENTER</div><div class="tabMeters"></div></div>
+    <div class="tab" data-view="rt0"><div class="tabLabel"><small>OUT</small>1-8</div><div class="tabMeters"></div></div>
+    <div class="tab" data-view="rt1"><div class="tabLabel"><small>OUT</small>9-16</div><div class="tabMeters"></div></div>
+</nav>
+
+<div id="bank">
+    <div id="sofBar"><div class="sofLabel">SENDS ON FADER</div><div id="sofKeys"></div></div>
+    <div id="bankInner"></div>
+</div>
+
+<div id="chan">
+    <div id="chanHead">
+        <div class="ckey" id="chanBack">&#9664; IN 1-8</div>
+        <div class="ckey" id="chanPrev">&#8249;</div>
+        <div class="scribble" id="chanName"><div class="sq"></div><div class="nm"></div></div>
+        <div class="ckey" id="chanNext">&#8250;</div>
+    </div>
+    <div id="chanMain">
+        <div id="chanBody"></div>
+        <div id="chanOut" class="fsec"></div>
+    </div>
+</div>
+
+<main>
+    <section class="box" id="counterBox">
+        <div class="well" id="time">00:00.0</div>
+        <div id="readouts">
+            <div id="speed">Stop</div>
+            <div id="inout">In 00:00.0 &nbsp; Out 00:00.0</div>
+            <div id="message"></div>
+        </div>
+    </section>
+
+    <section class="box" id="locators">
+        <div class="title">In / Out</div>
+        <div class="row" id="locatorKeys">
+            <div class="key" data-action="setIn">Set In</div>
+            <div class="key" data-action="setOut">Set Out</div>
+            <div class="key" data-action="loop" id="kLoop">Loop</div>
+            <div class="key" data-action="goIn">&#9664; Go In</div>
+            <div class="key" data-action="goOut">Go Out &#9654;</div>
+            <div class="key" data-action="punch" id="kPunch">Punch</div>
+        </div>
+    </section>
+
+    <section class="box" id="arm">
+        <div class="title">Record arm</div>
+        <div class="row" id="armKeys"></div>
+        <div class="armFoot">
+            <div class="hint">Tap to step:<span class="legendDot" style="background:#4a5053"></span>off<span class="legendDot" style="background:var(--yellow)"></span>tape until Record<span class="legendDot" style="background:var(--red)"></span>armed</div>
+            <div class="key" id="disarm">Disarm all</div>
+        </div>
+    </section>
+
+    <section class="box" id="wheelBox">
+        <div class="title">Jog / shuttle <b id="wheelHint">ring: wind &middot; centre: jog</b></div>
+        <svg id="wheel" viewBox="0 0 300 300">
+            <defs>
+                <radialGradient id="ringFill" cx="35%" cy="30%" r="80%"><stop offset="0" stop-color="#4a4f53"/><stop offset="1" stop-color="#16181a"/></radialGradient>
+                <radialGradient id="jogFill" cx="35%" cy="28%" r="85%"><stop offset="0" stop-color="#d9dcde"/><stop offset="1" stop-color="#5f6569"/></radialGradient>
+            </defs>
+            <g id="ticks"></g>
+            <g id="ring">
+                <circle cx="150" cy="150" r="130" fill="url(#ringFill)"/>
+                <g id="ridges"></g>
+                <polygon points="144,22 156,22 150,38" fill="#e0a93a"/>
+                <text x="68" y="155" fill="#aeb3b5" font-size="14" font-weight="700" text-anchor="middle">&#9664;&#9664;</text>
+                <text x="232" y="155" fill="#aeb3b5" font-size="14" font-weight="700" text-anchor="middle">&#9654;&#9654;</text>
+            </g>
+            <circle cx="150" cy="150" r="86" fill="#0b0c0d"/>
+            <g id="jog">
+                <circle cx="150" cy="150" r="83" fill="url(#jogFill)"/>
+                <circle cx="150" cy="99" r="12" fill="rgba(0,0,0,.35)"/>
+                <circle cx="149" cy="98" r="8" fill="rgba(255,255,255,.18)"/>
+            </g>
+            <circle cx="150" cy="150" r="19" fill="#2b2f31"/>
+            <text x="150" y="154" fill="#e4e7e8" font-size="11" font-weight="700" text-anchor="middle">JOG</text>
+        </svg>
+        <div id="modes">
+            <div class="key" data-action="jog" id="kJog">Jog</div>
+            <div class="key" data-action="scrub" id="kScrub">Scrub</div>
+        </div>
+    </section>
+
+    <section class="box" id="memoriesBox">
+        <div class="title">Locate memories</div>
+        <div id="memHead">
+            <div class="key" data-action="store" id="kStore">Store</div>
+            <div class="key" data-action="rtz">RTZ</div>
+            <div id="memHint">Store, then a number. A number winds the tape there.</div>
+        </div>
+        <div id="memScroll"><div id="memKeys"></div></div>
+    </section>
+</main>
+
+<footer id="transport">
+    <div class="row" id="transportKeys">
+        <div class="key" id="kRew"><div><div class="glyph">&#9664;&#9664;</div><small>REW</small></div></div>
+        <div class="key" id="kFf"><div><div class="glyph">&#9654;&#9654;</div><small>F FWD</small></div></div>
+        <div class="key" id="kStop"><div><div class="glyph">&#9632;</div><small>STOP</small></div></div>
+        <div class="key" id="kPlay"><div><div class="glyph">&#9654;</div><small>PLAY</small></div></div>
+        <div class="key" id="kRec"><div><div class="glyph">&#9679;</div><small>REC</small></div></div>
+    </div>
+</footer>
+
+<div id="banner"><b id="bannerTitle">Connecting to Oxide-3216…</b><span id="bannerText">Keep this page open. It reconnects by itself.</span></div>
+
+<script>
+// Oxide-3216 Wi-Fi remote. Served by Oxide itself (http://<computer>:52819/?k=<key>); talks to it over a WebSocket
+// on the same port. Opened from a file (or with window.OXIDE_DEMO) it runs a demo with a fake tape machine.
+'use strict';
+var DEMO = !! window.OXIDE_DEMO || location.protocol === 'file:';
+var socket = null, state = null, failures = 0, retryTimer = null;
+
+function $ (id) { return document.getElementById (id); }
+
+// ---- input: pointer events where the browser has them; touch + mouse on old iOS (before 13) ----
+
+function onPress (element, handler) {
+    if (window.PointerEvent) {
+        element.addEventListener ('pointerdown', function (e) { if (e.button === 0 || e.pointerType !== 'mouse') handler (e); });
+        return;
+    }
+    element.addEventListener ('touchstart', function (e) { e.preventDefault(); handler (e); }, { passive: false });
+    element.addEventListener ('mousedown', function (e) { if (e.button === 0) handler (e); });
+}
+
+function onRelease (element, handler) {
+    var types = window.PointerEvent ? [ 'pointerup', 'pointerleave', 'pointercancel' ]
+                                    : [ 'touchend', 'touchcancel', 'mouseup', 'mouseleave' ];
+    types.forEach (function (type) { element.addEventListener (type, handler); });
+}
+
+/** A key that acts the moment it is touched, and looks pressed while held. */
+function key (element, action, release) {
+    onPress (element, function () {
+        element.classList.add ('down');
+        if (navigator.vibrate) navigator.vibrate (10);
+        action();
+    });
+    onRelease (element, function () {
+        if (! element.classList.contains ('down')) return;
+        element.classList.remove ('down');
+        if (release) release();
+    });
+}
+
+function send (message) {
+    if (DEMO) { demoHandle (message); return; }
+    if (socket && socket.readyState === WebSocket.OPEN)
+        socket.send (JSON.stringify (message));
+}
+function press (action) { send ({ type: 'press', action: action }); }
+
+// ---- building the page ----
+
+function build () {
+    key ($('kPlay'), function () { press ('play'); });
+    key ($('kStop'), function () { press ('stop'); });
+    key ($('kRec'),  function () { press ('record'); });
+    // Rew / F Fwd: wind, 40x while held (as the keys on the console)
+    key ($('kRew'), function () { send ({ type: 'wind', dir: -1, held: true }); }, function () { send ({ type: 'wind', dir: 0, held: false }); });
+    key ($('kFf'),  function () { send ({ type: 'wind', dir: 1, held: true }); },  function () { send ({ type: 'wind', dir: 0, held: false }); });
+    key ($('disarm'), function () { press ('disarmAll'); });
+
+    var actionKeys = document.querySelectorAll ('[data-action]');
+    for (var i = 0; i < actionKeys.length; ++i)
+        (function (k) { key (k, function () { press (k.getAttribute ('data-action')); }); }) (actionKeys[i]);
+
+    var arm = $('armKeys');
+    for (var t = 0; t < 16; ++t) {
+        var k = document.createElement ('div');
+        k.className = 'key';
+        k.textContent = String (t + 1);
+        arm.appendChild (k);
+        (function (track) { key (k, function () { send ({ type: 'arm', track: track }); }); }) (t);
+    }
+
+    // The memories scroll, so they answer a tap (click), not a touch: a swipe over them scrolls instead.
+    var mem = $('memKeys');
+    for (var m = 0; m < 99; ++m) {
+        var b = document.createElement ('div');
+        b.className = 'key';
+        b.innerHTML = (m + 1) + '<span>&nbsp;</span>';
+        mem.appendChild (b);
+        (function (memory) { b.addEventListener ('click', function () { if (navigator.vibrate) navigator.vibrate (10); send ({ type: 'memory', m: memory }); }); }) (m);
+    }
+
+    buildWheel();
+    buildChannels();
+}
+
+// ---- jog / shuttle wheel: the outer ring springs back (wind faster the further it turns), the centre jogs ----
+
+var NS = 'http://www.w3.org/2000/svg';
+var STEPS = 7, TRAVEL = Math.PI / 3, R = 130, R_IN = 86;
+var ring = 0, jogAngle = 0, sentStep = 0, drag = null, lastAngle = 0, touchId = null, jogPending = 0;
+var springTimer = null, heldTimer = null;
+
+function buildWheel () {
+    var svg = $('wheel'), ticks = $('ticks'), ridges = $('ridges');
+    for (var i = -STEPS; i <= STEPS; ++i) {
+        var a = -Math.PI / 2 + TRAVEL * i / STEPS, r1 = R + 4, r2 = R + (i === 0 ? 12 : 9);
+        var l = document.createElementNS (NS, 'line');
+        l.setAttribute ('x1', 150 + Math.cos (a) * r1); l.setAttribute ('y1', 150 + Math.sin (a) * r1);
+        l.setAttribute ('x2', 150 + Math.cos (a) * r2); l.setAttribute ('y2', 150 + Math.sin (a) * r2);
+        l.setAttribute ('stroke', i === 0 ? '#e4e7e8' : 'rgba(228,231,232,.55)');
+        l.setAttribute ('stroke-width', '2');
+        ticks.appendChild (l);
+    }
+    for (var j = 0; j < 36; ++j) {
+        var b = Math.PI * 2 * j / 36;
+        var g = document.createElementNS (NS, 'line');
+        g.setAttribute ('x1', 150 + Math.cos (b) * (R - 2));  g.setAttribute ('y1', 150 + Math.sin (b) * (R - 2));
+        g.setAttribute ('x2', 150 + Math.cos (b) * (R - 12)); g.setAttribute ('y2', 150 + Math.sin (b) * (R - 12));
+        g.setAttribute ('stroke', 'rgba(0,0,0,.55)'); g.setAttribute ('stroke-width', '3');
+        ridges.appendChild (g);
+    }
+
+    function point (e) {
+        var src = e;
+        if (e.changedTouches) {
+            src = null;
+            for (var i = 0; i < e.changedTouches.length; ++i)
+                if (touchId === null || e.changedTouches[i].identifier === touchId) { src = e.changedTouches[i]; break; }
+            if (! src) return null;
+        }
+        var box = svg.getBoundingClientRect();
+        return { x: (src.clientX - box.left) * 300 / box.width - 150, y: (src.clientY - box.top) * 300 / box.height - 150,
+                 id: src.identifier !== undefined ? src.identifier : null };
+    }
+    function start (e) {
+        if (drag) return;
+        var p = point (e);
+        if (! p) return;
+        var d = Math.sqrt (p.x * p.x + p.y * p.y);
+        if (d > R + 8) return;
+        e.preventDefault();
+        touchId = p.id;
+        drag = d > R_IN + 2 ? 'ring' : 'jog';
+        lastAngle = Math.atan2 (p.y, p.x);
+        if (drag === 'ring') {
+            stopSpring();
+            startHeld();
+        }
+        if (window.PointerEvent && e.pointerId !== undefined && svg.setPointerCapture) svg.setPointerCapture (e.pointerId);
+    }
+    function move (e) {
+        if (! drag) return;
+        var p = point (e);
+        if (! p) return;
+        e.preventDefault();
+        var a = Math.atan2 (p.y, p.x), da = a - lastAngle;
+        if (da > Math.PI) da -= Math.PI * 2;
+        if (da < -Math.PI) da += Math.PI * 2;
+        lastAngle = a;
+        if (drag === 'ring') {
+            ring = Math.max (-1, Math.min (1, ring + da / TRAVEL));
+            sendShuttle();
+        } else {
+            jogAngle += da;
+            jogPending += da / (Math.PI * 2);   // turns; one turn = one second of tape
+        }
+        drawWheel();
+    }
+    function end (e) {
+        if (! drag) return;
+        if (e.changedTouches && ! point (e)) return;   // another finger lifted
+        if (drag === 'ring') startSpring();
+        drag = null;
+        touchId = null;
+    }
+    if (window.PointerEvent) {
+        svg.addEventListener ('pointerdown', start);
+        svg.addEventListener ('pointermove', move);
+        svg.addEventListener ('pointerup', end);
+        svg.addEventListener ('pointercancel', end);
+    } else {
+        svg.addEventListener ('touchstart', start, { passive: false });
+        svg.addEventListener ('touchmove', move, { passive: false });
+        svg.addEventListener ('touchend', end);
+        svg.addEventListener ('touchcancel', end);
+        svg.addEventListener ('mousedown', start);
+        window.addEventListener ('mousemove', move);
+        window.addEventListener ('mouseup', end);
+    }
+    // jog moves go out in batches (20 a second), not one message per touch move
+    setInterval (function () {
+        if (jogPending !== 0) {
+            send ({ type: 'jog', turns: Math.round (jogPending * 10000) / 10000 });
+            jogPending = 0;
+        }
+    }, 50);
+    drawWheel();
+}
+
+function sendShuttle () {
+    var step = Math.round (ring * STEPS);
+    if (step !== sentStep) {
+        sentStep = step;
+        send ({ type: 'shuttle', step: step });
+    }
+}
+// While the ring is off centre, tell Oxide a few times a second it is still held: if the phone goes quiet
+// (Wi-Fi drops, it locks) Oxide lets go of the ring by itself.
+function startHeld () {
+    if (heldTimer) return;
+    heldTimer = setInterval (function () {
+        if (sentStep !== 0) send ({ type: 'shuttleHeld' });
+        else if (! drag && ! springTimer) { clearInterval (heldTimer); heldTimer = null; }
+    }, 400);
+}
+function startSpring () {
+    stopSpring();
+    springTimer = setInterval (function () {
+        ring *= 0.72;   // springs back, slowing the tape through the steps (as the console's ring)
+        if (Math.abs (ring) < 0.02) ring = 0;
+        sendShuttle();
+        drawWheel();
+        if (ring === 0) stopSpring();
+    }, 33);
+}
+function stopSpring () {
+    if (springTimer) { clearInterval (springTimer); springTimer = null; }
+}
+function drawWheel () {
+    $('ring').setAttribute ('transform', 'rotate(' + (ring * 60).toFixed (2) + ' 150 150)');
+    $('jog').setAttribute ('transform', 'rotate(' + (jogAngle * 180 / Math.PI).toFixed (2) + ' 150 150)');
+}
+
+// ---- the state from Oxide ----
+
+function lit (element, cls, on) {
+    [ 'lit-amber', 'lit-green', 'lit-red', 'lit-blue' ].forEach (function (c) { element.classList.remove (c); });
+    if (on) element.classList.add (cls);
+}
+
+function render () {
+    if (! state) return;
+    $('time').textContent = state.time;
+    $('speed').textContent = state.speed;
+    $('inout').innerHTML = 'In ' + state.inPoint + ' &nbsp; Out ' + state.outPoint;
+    $('message').textContent = state.message || '';
+
+    lit ($('kPlay'), 'lit-green', state.playing);
+    lit ($('kRec'), 'lit-red', state.record);
+    lit ($('kRew'), 'lit-amber', state.wind < 0);
+    lit ($('kFf'), 'lit-amber', state.wind > 0);
+    lit ($('kLoop'), 'lit-blue', state.loop);
+    lit ($('kPunch'), 'lit-red', state.punch);
+    lit ($('kJog'), 'lit-amber', ! state.scrub);
+    lit ($('kScrub'), 'lit-amber', state.scrub);
+    lit ($('kStore'), 'lit-red', state.storing);
+    $('memHint').textContent = state.storing ? 'Now tap a number to keep the tape position there.'
+                                             : 'Store, then a number. A number winds the tape there.';
+
+    var arm = $('armKeys').children;
+    for (var t = 0; t < arm.length; ++t) {
+        var s = state.arm ? state.arm[t] : 0;
+        arm[t].classList.toggle ('s1', s === 1);
+        arm[t].classList.toggle ('s2', s === 2);
+        arm[t].classList.toggle ('rec', !! (state.recording && state.recording[t]));
+    }
+
+    var mem = $('memKeys').children;
+    for (var m = 0; m < mem.length; ++m) {
+        var time = state.memories ? state.memories[m] : '';
+        mem[m].classList.toggle ('stored', !! time);
+        var span = mem[m].lastChild;
+        var text = time ? time : ' ';
+        if (span.textContent !== text) span.textContent = text;
+    }
+}
+
+// ---- channels: In 1-8 / 9-16 (the input bank) and Out 1-8 / 9-16 (the tape returns) ----
+// A bank tab shows 8 fader columns (mute, fader, meter, solo, name); tapping a name opens that channel's strip.
+// Oxide sends a schema (each control's id after the strip prefix, range, scale, default), the strips' values when they
+// change, and meters 15 times a second. The page sends {type:'param', id:'ch3.eq.hf.gain', v:value}.
+
+var schema = null, strips = null, meters = null;
+var view = 'centre';                               // 'centre', a bank tab ('ch0', 'ch1', 'rt0', 'rt1') or 'chan'
+var bankCols = [];                                 // the 8 fader columns of the bank tab
+var chan = null;                                   // the channel view: its controls
+var chanFrom = 'ch0';                              // the tab the channel view came from (its back button)
+var dragging = {}, holdUntil = {}, pending = {};   // by full id: being moved here / just let go (ignore echoes) / to send
+var shownDb = { ch: [], rt: [], main: [] };
+
+var SCALE_LOG = 1, SCALE_TOGGLE = 2, SCALE_STEPPED = 3;
+var BANK_NAMES = { ch: 'IN', rt: 'OUT' };
+
+function spec (bank, key) {
+    var s = schema && schema[bank];
+    if (! s) return null;
+    if (! s.index) { s.index = {}; for (var i = 0; i < s.keys.length; ++i) s.index[s.keys[i]] = i; }
+    var i = s.index[key];
+    return i === undefined ? null : { i: i, min: s.min[i], max: s.max[i], scale: s.scale[i], def: s.def[i] };
+}
+function toNorm (sp, v) {
+    v = Math.max (sp.min, Math.min (sp.max, v));
+    return sp.scale === SCALE_LOG ? Math.log (v / sp.min) / Math.log (sp.max / sp.min) : (v - sp.min) / (sp.max - sp.min);
+}
+function fromNorm (sp, n) {
+    n = Math.max (0, Math.min (1, n));
+    var v = sp.scale === SCALE_LOG ? sp.min * Math.pow (sp.max / sp.min, n) : sp.min + (sp.max - sp.min) * n;
+    return sp.scale === SCALE_STEPPED || sp.scale === SCALE_TOGGLE ? Math.round (v) : v;
+}
+
+// ---- how each control reads ----
+function signed (v, places) { return (v > 0.04 ? '+' : '') + v.toFixed (places); }
+function hz (v) { return v >= 1000 ? (v / 1000).toFixed (v >= 10000 ? 0 : 1) + 'k' : String (Math.round (v)); }
+function secs (v) { return v < 1 ? Math.round (v * 1000) + 'ms' : v.toFixed (1) + 's'; }
+function ratio (v) { return v >= 40 ? '∞' : v.toFixed (v < 10 ? 1 : 0) + ':1'; }
+function panText (p) { return Math.abs (p) < 0.02 ? 'C' : (p < 0 ? 'L' : 'R') + Math.round (Math.abs (p) * 100); }
+function auxLinked (k) { return !! (strips && strips.auxLink && strips.auxLink[Math.floor ((k - 1) / 2)]); }
+function auxText (key, v) {
+    var k = parseInt (key.substring (3), 10);
+    if (k % 2 === 0 && auxLinked (k)) return panText ((v - 0.5) * 2);   // a linked pair: the even send is its pan
+    var g = v * v * 1.5;
+    return g <= 0.00001 ? '-∞' : signed (20 * Math.log (g) / Math.LN10, 0);
+}
+function faderText (v) { return v <= 0 ? '-∞' : signed ((v - 80) * 0.75, 1); }
+var formats = {
+    gain: function (v) { return signed (v, 1); }, trim: function (v) { return signed (v, 1); },
+    hpf: function (v) { return v < 20.5 ? 'off' : hz (v); }, pan: panText,
+    'gate.thr': function (v) { return v <= -79.5 ? 'off' : v.toFixed (0); }, 'gate.range': function (v) { return v.toFixed (0); },
+    'gate.release': secs, 'comp.g.release': secs,
+    'comp.input': function (v) { return v.toFixed (1); }, 'comp.output': function (v) { return signed (v, 1); },
+    'comp.attack': function (v) { return v.toFixed (1); }, 'comp.release': function (v) { return v.toFixed (1); },
+    'comp.60.thr': function (v) { return v.toFixed (0); }, 'comp.60.ratio': ratio, 'comp.60.out': function (v) { return signed (v, 1); },
+    'comp.la.peak': function (v) { return v.toFixed (0); }, 'comp.la.gain': function (v) { return v.toFixed (0); },
+    'comp.g.thr': function (v) { return v.toFixed (0); }, 'comp.g.ratio': ratio,
+    'deess.freq': hz, 'deess.reduction': function (v) { return v.toFixed (0); }
+};
+function formatValue (key, v) {
+    if (formats[key]) return formats[key] (v);
+    if (/^eq\.\w+\.gain$/.test (key)) return signed (v, 1);
+    if (/^eq\.\w+\.freq$/.test (key)) return hz (v);
+    if (/^aux\d$/.test (key)) return auxText (key, v);
+    return v.toFixed (1);
+}
+
+// the console's knob caps
+var CAPS = { grey: '#7b8185', red: '#b8473a', green: '#3f8a52', blue: '#3e6fae', black: '#3a3d3f', gate: '#3d6b50', comp: '#c9c6bb', aux: '#d9d6cc' };
+
+// ---- controls ----
+// A "col" is one channel's set of controls: col.bank ('ch' / 'rt') and col.ch (0-15) say which channel it shows.
+function el (tag, cls, text) {
+    var e = document.createElement (tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+}
+function fullId (col, key) { return col.bank + (col.ch + 1) + '.' + key; }
+function stripOf (col) { return strips && strips[col.bank] ? strips[col.bank][col.ch] : null; }
+function valueOf (col, key) {
+    var sp = spec (col.bank, key), s = stripOf (col);
+    if (! sp || ! s) return null;
+    var id = fullId (col, key);
+    if (pending[id] !== undefined) return pending[id];
+    if (dragging[id] !== undefined) return dragging[id];
+    return s.v[sp.i];
+}
+function setValue (col, key, v) {
+    var id = fullId (col, key);
+    pending[id] = v;
+    holdUntil[id] = Date.now() + 600;
+    for (var k in col.controls)
+        if (col.controls.hasOwnProperty (k) && col.controls[k].key === key) renderControl (col, col.controls[k]);
+}
+// moves go out at most 25 times a second
+setInterval (function () {
+    for (var id in pending) {
+        if (! pending.hasOwnProperty (id)) continue;
+        send ({ type: 'param', id: id, v: Math.round (pending[id] * 10000) / 10000 });
+        if (dragging[id] !== undefined) dragging[id] = pending[id];
+    }
+    pending = {};
+}, 40);
+
+/** Vertical drag (the faders): touch, pointer or mouse. Calls start(), move (dy since the start), end(). */
+function dragger (element, start, move, end) {
+    var startY = 0, touch = null, active = false;
+    function down (y) { startY = y; active = true; start(); }
+    function up () { if (active) { active = false; end(); } }
+    if (window.PointerEvent) {
+        element.addEventListener ('pointerdown', function (e) {
+            if (e.pointerType === 'mouse' && e.button !== 0) return;
+            e.preventDefault();
+            if (element.setPointerCapture) element.setPointerCapture (e.pointerId);
+            down (e.clientY);
+        });
+        element.addEventListener ('pointermove', function (e) { if (active) { e.preventDefault(); move (e.clientY - startY); } });
+        element.addEventListener ('pointerup', up);
+        element.addEventListener ('pointercancel', up);
+        return;
+    }
+    element.addEventListener ('touchstart', function (e) {
+        e.preventDefault();
+        if (touch !== null) return;
+        touch = e.changedTouches[0].identifier;
+        down (e.changedTouches[0].clientY);
+    }, { passive: false });
+    element.addEventListener ('touchmove', function (e) {
+        for (var i = 0; i < e.changedTouches.length; ++i)
+            if (e.changedTouches[i].identifier === touch) { e.preventDefault(); move (e.changedTouches[i].clientY - startY); }
+    }, { passive: false });
+    function touchEnd (e) {
+        for (var i = 0; i < e.changedTouches.length; ++i)
+            if (e.changedTouches[i].identifier === touch) { touch = null; up(); }
+    }
+    element.addEventListener ('touchend', touchEnd);
+    element.addEventListener ('touchcancel', touchEnd);
+    element.addEventListener ('mousedown', function (e) {
+        if (e.button !== 0) return;
+        down (e.clientY);
+        function mm (ev) { move (ev.clientY - startY); }
+        function mu () { window.removeEventListener ('mousemove', mm); window.removeEventListener ('mouseup', mu); up(); }
+        window.addEventListener ('mousemove', mm);
+        window.addEventListener ('mouseup', mu);
+    });
+}
+
+/** Does the channel view scroll (it doesn't all fit)? Then an up / down drag on a knob scrolls instead of turning it. */
+function chanScrolls () { var b = $('chanBody'); return b.scrollHeight > b.clientHeight + 2; }
+
+/** A knob's drag: the first few pixels decide. Sideways always turns it (right = up); up / down turns it too unless
+    the channel view scrolls, when it scrolls. Calls down() at the touch, turn (amount in px) while turning, up(). */
+function knobDragger (element, down, turn, up) {
+    var x0 = 0, y0 = 0, mode = null, touch = null, mouse = false;   // mode: null undecided, 'h', 'v', 'scroll', 'done'
+    var inBody = false;   // in the scrolling part (the pan knob over the fader never scrolls anything)
+    function begin (x, y, isMouse) { x0 = x; y0 = y; mode = null; mouse = isMouse; inBody = $('chanBody').contains (element); down(); }
+    function moved (x, y) {
+        var dx = x - x0, dy = y - y0;
+        if (mode === null) {
+            if (Math.abs (dx) < 6 && Math.abs (dy) < 6) return false;
+            mode = Math.abs (dx) > Math.abs (dy) ? 'h' : (! mouse && inBody && chanScrolls() ? 'scroll' : 'v');
+            x0 = x; y0 = y; dx = 0; dy = 0;
+        }
+        if (mode === 'scroll' || mode === 'done') return false;
+        turn (mode === 'h' ? dx : -dy);
+        return true;
+    }
+    function finish () { if (mode !== 'done') { mode = 'done'; up(); } }
+    if (window.PointerEvent) {
+        element.addEventListener ('pointerdown', function (e) {
+            if (e.pointerType === 'mouse' && e.button !== 0) return;
+            if (e.pointerType === 'mouse') e.preventDefault();
+            if (element.setPointerCapture) element.setPointerCapture (e.pointerId);
+            begin (e.clientX, e.clientY, e.pointerType === 'mouse');
+        });
+        element.addEventListener ('pointermove', function (e) { if (moved (e.clientX, e.clientY)) e.preventDefault(); });
+        element.addEventListener ('pointerup', finish);
+        element.addEventListener ('pointercancel', finish);   // the browser took it for a scroll
+        return;
+    }
+    element.addEventListener ('touchstart', function (e) {
+        if (touch !== null) return;
+        touch = e.changedTouches[0].identifier;
+        begin (e.changedTouches[0].clientX, e.changedTouches[0].clientY, false);
+    }, { passive: true });
+    element.addEventListener ('touchmove', function (e) {
+        for (var i = 0; i < e.changedTouches.length; ++i)
+            if (e.changedTouches[i].identifier === touch && moved (e.changedTouches[i].clientX, e.changedTouches[i].clientY))
+                e.preventDefault();   // turning: no scroll
+    }, { passive: false });
+    function touchEnd (e) {
+        for (var i = 0; i < e.changedTouches.length; ++i)
+            if (e.changedTouches[i].identifier === touch) { touch = null; finish(); }
+    }
+    element.addEventListener ('touchend', touchEnd);
+    element.addEventListener ('touchcancel', touchEnd);
+    element.addEventListener ('mousedown', function (e) {
+        if (e.button !== 0 || touch !== null) return;
+        begin (e.clientX, e.clientY, true);
+        function mm (ev) { moved (ev.clientX, ev.clientY); }
+        function mu () { window.removeEventListener ('mousemove', mm); window.removeEventListener ('mouseup', mu); finish(); }
+        window.addEventListener ('mousemove', mm);
+        window.addEventListener ('mouseup', mu);
+    });
+}
+
+/** A console knob: drag (150 px = the whole turn), double-tap for its default. reversed: right = the low end. */
+function knob (col, key, label, cap, reversed) {
+    var k = el ('div', 'knob');
+    var dial = el ('div', 'dial'), capc = el ('div', 'capc'), ptr = el ('div', 'ptr');
+    capc.style.background = CAPS[cap || 'grey'];
+    dial.appendChild (capc);
+    dial.appendChild (ptr);
+    k.appendChild (dial);
+    var lbl = el ('div', 'lbl', label);
+    k.appendChild (lbl);
+    var val = el ('div', 'val', '');
+    k.appendChild (val);
+    var c = { key: key, type: 'knob', element: k, ptr: ptr, val: val, lbl: lbl, reversed: !! reversed, shown: null };
+    var startN = 0, lastTap = 0;
+    knobDragger (k, function () {
+        var sp = spec (col.bank, key), v = valueOf (col, key);
+        if (! sp || v === null) return;
+        var now = Date.now();
+        if (now - lastTap < 350) { setValue (col, key, sp.def); lastTap = 0; return; }   // double-tap: default
+        lastTap = now;
+        startN = toNorm (sp, v);
+        dragging[fullId (col, key)] = v;
+        k.classList.add ('active');
+    }, function (px) {
+        var sp = spec (col.bank, key), id = fullId (col, key);
+        if (! sp || dragging[id] === undefined) return;
+        lastTap = 0;   // a turn is not a tap
+        setValue (col, key, fromNorm (sp, startN + (reversed ? -px : px) / 150));
+    }, function () {
+        var id = fullId (col, key);
+        delete dragging[id];
+        holdUntil[id] = Date.now() + 600;
+        k.classList.remove ('active');
+    });
+    col.controls[key] = c;
+    return k;
+}
+
+/** A switch: tap to flip. inverted: lit while the parameter is off (the de-esser's bypass shown as In). */
+function toggle (col, key, label, cls, inverted) {
+    var b = el ('div', 'ckey' + (cls ? ' ' + cls : ''), label);
+    var c = { key: key, type: 'toggle', element: b, inverted: !! inverted, shown: null };
+    b.addEventListener ('click', function (e) {
+        e.stopPropagation();
+        var v = valueOf (col, key);
+        if (v === null) return;
+        setValue (col, key, v >= 0.5 ? 0 : 1);
+    });
+    col.controls[key + (inverted ? '!' : '')] = c;
+    return b;
+}
+
+/** One position of a stepped switch (the compressor type, the 76's ratio). */
+function radio (col, key, position, label) {
+    var b = el ('div', 'ckey small', label);
+    var c = { key: key, type: 'radio', element: b, position: position, shown: null };
+    b.addEventListener ('click', function (e) { e.stopPropagation(); setValue (col, key, position); });
+    col.controls[key + '=' + position] = c;
+    return b;
+}
+
+/** The fader with its dB scale and LED meter, as on the console. */
+function faderArea (col, parent) {
+    var area = el ('div', 'faderArea');
+    var scale = el ('div', 'scale'), fader = el ('div', 'fader'), slot = el ('div', 'slot'), capEl = el ('div', 'cap');
+    var led = el ('div', 'led'), fill = el ('div', 'fill'), grad = el ('i');
+    fill.appendChild (grad);
+    led.appendChild (fill);
+    fader.appendChild (slot);
+    fader.appendChild (capEl);
+    area.appendChild (scale);
+    area.appendChild (fader);
+    area.appendChild (led);
+    parent.appendChild (area);
+    col.scale = scale; col.meter = fill; col.meterGrad = grad; col.led = led;
+
+    // key: 'fader' (the channel's level), or 'aux5' etc. while the bank tab has Sends on Fader on
+    var c = { key: 'fader', type: 'fader', element: fader, cap: capEl, shown: null };
+    col.controls.fader = c;
+    var startPos = 0, lastTap = 0, key = 'fader';   // (key: what this drag moves, even if Sends on Fader changes)
+    dragger (fader, function () {
+        key = c.key;
+        var v = valueOf (col, key);
+        if (! spec (col.bank, key) || v === null) return;
+        var now = Date.now();
+        if (now - lastTap < 350) { setValue (col, key, valueAtPos (key, 80)); lastTap = 0; return; }   // double-tap: 0 dB
+        lastTap = now;
+        startPos = posOf (key, v);
+        dragging[fullId (col, key)] = v;
+        fader.classList.add ('active');
+    }, function (dy) {
+        if (dragging[fullId (col, key)] === undefined) return;
+        if (Math.abs (dy) > 3) lastTap = 0;
+        setValue (col, key, valueAtPos (key, startPos - dy / Math.max (40, fader.clientHeight - 28) * 100));
+    }, function () {
+        var id = fullId (col, key);
+        delete dragging[id];
+        holdUntil[id] = Date.now() + 600;
+        fader.classList.remove ('active');
+    });
+    return area;
+}
+
+// The fader's travel is always the channel fader's (0..100, 0 dB at 80). A send (0..1, gain level^2 x 1.5) sits on the
+// same dB scale and tops out at +3.5 dB, as on the console's Sends on Fader.
+function sendLevelAt (pos) {
+    if (pos <= 0) return 0;
+    var gain = Math.pow (10, (pos - 80) * 0.75 / 20);
+    return Math.min (1, Math.sqrt (gain / 1.5));
+}
+function faderPosOf (level) {
+    if (level <= 0) return 0;
+    return Math.max (0, Math.min (100, 20 * Math.log (level * level * 1.5) / Math.LN10 / 0.75 + 80));
+}
+function posOf (key, v) { return key === 'fader' ? v : faderPosOf (v); }
+function valueAtPos (key, pos) { pos = Math.max (0, Math.min (100, pos)); return key === 'fader' ? pos : sendLevelAt (pos); }
+function sendText (level) { return level <= 0 ? '-∞' : signed (20 * Math.log (level * level * 1.5) / Math.LN10, 1); }
+
+// ---- Sends on Fader on the remote's bank tabs: this device only (the console's own is separate) ----
+var sofAux = -1;   // 0-7, -1 off
+try { sofAux = parseInt (localStorage.getItem ('oxideSendsOnFader') || '-1', 10); } catch (e) {}
+if (! (sofAux >= 0 && sofAux < 8)) sofAux = -1;
+var sofShownLinks = null;
+
+function setSendsOnFader (aux) {
+    sofAux = aux;
+    try { localStorage.setItem ('oxideSendsOnFader', String (aux)); } catch (e) {}
+    sofShownLinks = null;
+    renderStrips();
+}
+/** The send the faders move: a linked pair's level is its odd aux. */
+function sofKey () {
+    if (sofAux < 0) return 'fader';
+    var a = auxLinked (sofAux + 1) ? sofAux - sofAux % 2 : sofAux;
+    return 'aux' + (a + 1);
+}
+/** The bar over the bank tab: Off, then each aux (linked pairs as one). Rebuilt when the links change. */
+function renderSofBar () {
+    var links = strips && strips.auxLink ? strips.auxLink.join (',') : '';
+    if (links === sofShownLinks) return;
+    sofShownLinks = links;
+    var bar = $('sofKeys');
+    bar.innerHTML = '';
+    function add (label, aux, lit) {
+        var b = el ('div', 'ckey' + (lit ? ' on' : ''), label);
+        b.addEventListener ('click', function () { setSendsOnFader (aux); });
+        bar.appendChild (b);
+    }
+    add ('Off', -1, sofAux < 0);
+    for (var a = 0; a < 8; a += 2) {
+        if (auxLinked (a + 1)) add ('A' + (a + 1) + '+' + (a + 2), a, sofAux === a || sofAux === a + 1);
+        else { add ('A' + (a + 1), a, sofAux === a); add ('A' + (a + 2), a + 1, sofAux === a + 1); }
+    }
+    $('sofBar').classList.toggle ('on', sofAux >= 0);
+}
+
+/** Fader scale marks: dB at the console's fader law (0 dB at 80 of 100, 0.75 dB a step). */
+function drawScale (col) {
+    var h = col.controls.fader.element.clientHeight;
+    if (! h || col.scaleHeight === h) return;
+    col.scaleHeight = h;
+    col.scale.innerHTML = '';
+    [ 15, 10, 5, 0, -5, -10, -20, -30, -40, -50 ].forEach (function (db) {
+        var pos = db / 0.75 + 80;
+        var s = el ('span', '', (db > 0 ? '+' : '') + db);
+        s.style.top = (14 + (1 - pos / 100) * (h - 28)) + 'px';
+        col.scale.appendChild (s);
+    });
+    var inf = el ('span', '', '∞');
+    inf.style.top = (h - 14) + 'px';
+    col.scale.appendChild (inf);
+    col.controls.fader.shown = null;
+}
+
+function scribble (col, parent) {
+    var s = el ('div', 'scribble'), sq = el ('div', 'sq'), nm = el ('div', 'nm');
+    s.appendChild (sq);
+    s.appendChild (nm);
+    parent.appendChild (s);
+    col.sq = sq; col.nm = nm;
+    return s;
+}
+
+// ---- the bank tab: 8 fader columns ----
+function buildBankColumn (index) {
+    var col = { index: index, bank: 'ch', ch: index, controls: {} };
+    var c = el ('div', 'bcol fsec');
+    c.appendChild (toggle (col, 'mute', 'Mute', 'red'));
+    faderArea (col, c);
+    col.soloLed = el ('div', 'soloLed');
+    c.appendChild (col.soloLed);
+    c.appendChild (toggle (col, 'solo', 'Solo'));
+    col.db = el ('div', 'faderDb', '');
+    c.appendChild (col.db);
+    var name = scribble (col, c);
+    name.addEventListener ('click', function () { openChannel (col.bank, col.ch); });
+    $('bankInner').appendChild (c);
+    return col;
+}
+
+// ---- the channel view: one channel's strip ----
+function frame (title, inKey, col) {
+    var f = el ('div', 'frame'), t = el ('div', 'ftitle');
+    if (inKey) t.appendChild (toggle (col, inKey, 'In', 'in'));
+    var label = el ('span', '', title);
+    t.appendChild (label);
+    f.appendChild (t);
+    $('chanBody').appendChild (f);
+    return { frame: f, title: t, label: label };
+}
+function grBar (col, name, parent) {
+    var g = el ('div', 'gr'), i = el ('i');
+    g.appendChild (i);
+    parent.appendChild (g);
+    col[name + 'Gr'] = i;
+}
+function spacerWith (child) {   // a switch in a knob's place, lined up with the dials
+    var d = el ('div');
+    d.style.paddingTop = '10px';
+    d.appendChild (child);
+    child.style.margin = '4px';
+    return d;
+}
+
+function buildChannel () {
+    var col = { bank: 'ch', ch: 0, controls: {} };
+
+    var input = frame ('Input', null, col), g = el ('div', 'grid2');
+    g.appendChild (knob (col, 'gain', 'Gain'));
+    g.appendChild (knob (col, 'trim', 'Trim'));
+    g.appendChild (spacerWith (toggle (col, 'phase', 'Ø')));
+    g.appendChild (knob (col, 'hpf', 'HPF'));
+    g.appendChild (spacerWith (toggle (col, 'gain.link', 'Link')));
+    input.frame.appendChild (g);
+
+    var eq = frame ('EQ', 'eq.in', col), eg = el ('div', 'grid2');
+    [ [ 'hf', 'HF', 'red' ], [ 'hmf', 'HMF', 'green' ], [ 'lmf', 'LMF', 'blue' ], [ 'lf', 'LF', 'black' ] ].forEach (function (b) {
+        eg.appendChild (knob (col, 'eq.' + b[0] + '.gain', b[1], b[2]));
+        eg.appendChild (knob (col, 'eq.' + b[0] + '.freq', 'Freq', b[2]));
+    });
+    eq.frame.appendChild (eg);
+
+    var gate = frame ('Gate', 'gate.in', col);
+    gate.title.insertBefore (toggle (col, 'deess.bypass', 'In', 'in', true), gate.label);
+    grBar (col, 'gate', gate.title);
+    col.gateLabel = gate.label;
+    var gg = el ('div', 'grid2');
+    gg.appendChild (knob (col, 'gate.thr', 'Thr', 'gate'));
+    gg.appendChild (knob (col, 'gate.range', 'Range', 'gate', true));
+    gg.appendChild (knob (col, 'gate.release', 'Release', 'gate'));
+    gg.appendChild (spacerWith (toggle (col, 'gate.fast', 'Fast atk', 'pale')));
+    gate.frame.appendChild (gg);
+    var dg = el ('div', 'grid2');
+    dg.appendChild (knob (col, 'deess.freq', 'Freq', 'gate'));
+    dg.appendChild (knob (col, 'deess.reduction', 'Reduce', 'gate'));
+    dg.appendChild (spacerWith (toggle (col, 'deess.wide', 'Wide')));
+    dg.appendChild (spacerWith (toggle (col, 'deess.gentle', 'Gentle')));
+    gate.frame.appendChild (dg);
+    var mode = toggle (col, 'deess.on', 'De-esser');
+    gate.frame.appendChild (mode);
+    col.gateParts = gg; col.deessParts = dg; col.deessMode = mode;
+
+    var comp = frame ('Comp', 'comp.in', col);
+    grBar (col, 'comp', comp.title);
+    col.compLabel = comp.label;
+    var types = el ('div', 'row');
+    [ '60', '76', 'LA', 'G' ].forEach (function (t, i) { types.appendChild (radio (col, 'comp.type', i, t)); });
+    comp.frame.appendChild (types);
+    function group (items) {
+        var grp = el ('div', 'grid2');
+        items.forEach (function (it) { grp.appendChild (it); });
+        comp.frame.appendChild (grp);
+        return grp;
+    }
+    var ratios = el ('div', 'row');
+    [ '4', '8', '12', '20' ].forEach (function (t, i) { ratios.appendChild (radio (col, 'comp.ratio', i, t)); });
+    var la = el ('div', 'row');
+    la.appendChild (radio (col, 'comp.la.limit', 0, 'Comp'));
+    la.appendChild (radio (col, 'comp.la.limit', 1, 'Limit'));
+    col.compGroups = [
+        group ([ knob (col, 'comp.60.thr', 'Thresh', 'comp'), knob (col, 'comp.60.ratio', 'Ratio', 'comp'),
+                 knob (col, 'comp.60.out', 'Output', 'comp'), spacerWith (toggle (col, 'comp.60.oe', 'OverEasy')) ]),
+        group ([ knob (col, 'comp.input', 'Input', 'comp'), knob (col, 'comp.output', 'Output', 'comp'),
+                 knob (col, 'comp.attack', 'Attack', 'comp'), knob (col, 'comp.release', 'Release', 'comp'), ratios,
+                 spacerWith (toggle (col, 'comp.all', 'All')) ]),
+        group ([ knob (col, 'comp.la.peak', 'Peak red', 'comp'), knob (col, 'comp.la.gain', 'Gain', 'comp'), la ]),
+        group ([ knob (col, 'comp.g.thr', 'Thresh', 'comp'), knob (col, 'comp.g.ratio', 'Ratio', 'comp'),
+                 knob (col, 'comp.g.release', 'Release', 'comp'), spacerWith (toggle (col, 'comp.g.fast', 'Fast')) ])
+    ];
+
+    var aux = frame ('Aux sends', null, col), ag = el ('div', 'auxGrid');
+    for (var a = 1; a <= 8; ++a) {
+        var cell = el ('div', 'auxCell');
+        cell.appendChild (knob (col, 'aux' + a, 'A' + a, 'aux'));
+        cell.appendChild (toggle (col, 'aux' + a + '.pre', 'P', 'small'));
+        ag.appendChild (cell);
+    }
+    aux.frame.appendChild (ag);
+
+    var pan = frame ('Pan', null, col);
+    pan.frame.appendChild (knob (col, 'pan', 'Pan'));
+
+    // the output, as the console's fader section: mute, main and subs, fader and meter, solo, name
+    var out = $('chanOut');
+    out.appendChild (toggle (col, 'mute', 'Mute', 'red'));
+    out.appendChild (toggle (col, 'main', 'Main'));
+    for (var s = 1; s <= 4; ++s) out.appendChild (toggle (col, 'sub' + s, 'S' + s, 'small'));
+    faderArea (col, out);
+    col.soloLed = el ('div', 'soloLed');
+    out.appendChild (col.soloLed);
+    out.appendChild (toggle (col, 'solo', 'Solo'));
+    col.db = el ('div', 'faderDb', '');
+    out.appendChild (col.db);
+
+    $('chanBack').addEventListener ('click', function () { showView (chanFrom); });
+    $('chanPrev').addEventListener ('click', function () { openChannel (chan.bank, (chan.ch + 15) % 16); });
+    $('chanNext').addEventListener ('click', function () { openChannel (chan.bank, (chan.ch + 1) % 16); });
+    col.sq = $('chanName').firstChild;
+    col.nm = $('chanName').lastChild;
+    return col;
+}
+
+function buildChannels () {
+    for (var i = 0; i < 8; ++i) bankCols.push (buildBankColumn (i));
+    chan = buildChannel();
+    var tabs = document.querySelectorAll ('.tab');
+    for (var t = 0; t < tabs.length; ++t) {
+        var bars = tabs[t].querySelector ('.tabMeters');
+        var n = tabs[t].getAttribute ('data-view') === 'centre' ? 2 : 8;
+        for (var b = 0; b < n; ++b) bars.appendChild (el ('i'));
+        (function (tab) { tab.addEventListener ('click', function () { showView (tab.getAttribute ('data-view')); }); }) (tabs[t]);
+    }
+    window.addEventListener ('resize', function () { forgetShown(); renderStrips(); });
+}
+
+function forgetShown () {
+    bankCols.concat ([ chan ]).forEach (function (c) {
+        c.scaleHeight = null;
+        for (var k in c.controls) if (c.controls.hasOwnProperty (k)) c.controls[k].shown = null;
+    });
+}
+
+function showView (v) {
+    view = v;
+    var tabFor = v === 'chan' ? chan.bank + (chan.ch >= 8 ? '1' : '0') : v;
+    var tabs = document.querySelectorAll ('.tab');
+    for (var t = 0; t < tabs.length; ++t) tabs[t].classList.toggle ('on', tabs[t].getAttribute ('data-view') === tabFor);
+    document.body.classList.toggle ('channels', v !== 'centre');
+    document.body.classList.toggle ('bankView', v !== 'centre' && v !== 'chan');
+    document.body.classList.toggle ('chanView', v === 'chan');
+    if (v !== 'centre' && v !== 'chan') {
+        chanFrom = v;
+        var bank = v.substring (0, 2), offset = v.charAt (2) === '1' ? 8 : 0;
+        bankCols.forEach (function (c) { c.bank = bank; c.ch = offset + c.index; });
+    }
+    dragging = {};
+    forgetShown();
+    renderStrips();
+}
+
+function openChannel (bank, ch) {
+    chan.bank = bank;
+    chan.ch = ch;
+    $('chanBack').textContent = '◀ ' + BANK_NAMES[bank] + (chanFrom.charAt (2) === '1' ? ' 9-16' : ' 1-8');
+    if (chanFrom.substring (0, 2) !== bank) $('chanBack').textContent = '◀ ' + BANK_NAMES[bank] + (ch >= 8 ? ' 9-16' : ' 1-8');
+    $('chanBody').scrollTop = 0;
+    showView ('chan');
+}
+
+// ---- drawing ----
+function renderControl (col, c) {
+    var v = valueOf (col, c.key);
+    if (v === null) return;
+    if (c.type === 'toggle') {
+        var on = (v >= 0.5) !== c.inverted;
+        if (c.shown !== on) { c.element.classList.toggle ('on', on); c.shown = on; }
+        if (c.key === 'solo' && col.soloLed) col.soloLed.classList.toggle ('on', on);
+    } else if (c.type === 'radio') {
+        var sel = Math.round (v) === c.position;
+        if (c.shown !== sel) { c.element.classList.toggle ('on', sel); c.shown = sel; }
+    } else if (c.shown !== v) {
+        c.shown = v;
+        var n = toNorm (spec (col.bank, c.key), v);
+        if (c.type === 'fader') {
+            var h = c.element.clientHeight;
+            c.cap.style.top = (14 + (1 - posOf (c.key, v) / 100) * (h - 28)) + 'px';
+            col.db.textContent = c.key === 'fader' ? faderText (v) : sendText (v);
+        } else {
+            var deg = (c.reversed ? 1 - n : n) * 300 - 150;
+            c.ptr.style.webkitTransform = 'rotate(' + deg + 'deg)';
+            c.ptr.style.transform = 'rotate(' + deg + 'deg)';
+            c.val.textContent = formatValue (c.key, v);
+        }
+    }
+}
+
+function renderCol (col) {
+    var s = stripOf (col);
+    if (! s) return;
+    if (col !== chan) {
+        // Sends on Fader: the bank tab's faders move a send (amber caps)
+        var f = col.controls.fader, key = sofKey();
+        if (f.key !== key) {
+            f.key = key;
+            f.shown = null;
+            f.element.classList.toggle ('sof', key !== 'fader');
+        }
+    }
+    var name = s.n || String (col.ch + 1);
+    if (col.nm.textContent !== name) col.nm.textContent = name;
+    col.nm.style.background = s.c;
+    col.nm.style.color = s.t;
+    col.sq.style.background = s.c;
+    drawScale (col);
+
+    if (col === chan) {
+        $('chanBody').classList.toggle ('scrolls', chanScrolls());
+        // the de-esser only on the returns, and only in its mode; the compressor type's own controls; linked aux pairs
+        var hasDeEss = !! spec (col.bank, 'deess.on');
+        var deEss = hasDeEss && valueOf (col, 'deess.on') >= 0.5;
+        col.gateParts.classList.toggle ('hidden', deEss);
+        col.deessParts.classList.toggle ('hidden', ! deEss);
+        col.deessMode.classList.toggle ('hidden', ! hasDeEss);
+        col.controls['gate.in'].element.classList.toggle ('hidden', deEss);
+        col.controls['deess.bypass!'].element.classList.toggle ('hidden', ! deEss);
+        col.gateLabel.textContent = deEss ? 'De-esser' : 'Gate';
+        var type = Math.round (valueOf (col, 'comp.type') || 0);
+        col.compGroups.forEach (function (g, i) { g.classList.toggle ('hidden', i !== type); });
+        col.compLabel.textContent = 'Comp ' + [ '60', '76', 'LA', 'G' ][type];
+        for (var a = 2; a <= 8; a += 2) {
+            var linked = auxLinked (a);
+            col.controls['aux' + a].lbl.textContent = linked ? 'Pan' : 'A' + a;
+            col.controls['aux' + (a - 1)].lbl.textContent = linked ? 'A' + (a - 1) + '+' + a : 'A' + (a - 1);
+        }
+    }
+
+    for (var k in col.controls) {
+        if (! col.controls.hasOwnProperty (k)) continue;
+        var c = col.controls[k];
+        var present = !! spec (col.bank, c.key);
+        if (c.absent !== ! present) { c.element.classList.toggle ('absent', ! present); c.absent = ! present; }
+        if (! present) continue;
+        var id = fullId (col, c.key);
+        if (dragging[id] !== undefined || (holdUntil[id] && Date.now() < holdUntil[id])) continue;   // the finger wins
+        renderControl (col, c);
+    }
+}
+
+function renderStrips () {
+    if (! schema || ! strips) return;
+    if (view === 'chan') renderCol (chan);
+    else if (view !== 'centre') { renderSofBar(); bankCols.forEach (renderCol); }
+}
+
+// ---- meters ----
+function meterLevel (db) { return Math.max (0, Math.min (100, (db + 60) / 66 * 100)); }   // -60 .. +6 dBFS
+function tabClass (bar, db) {
+    var cls = db > -6 ? 'clip' : db > -18 ? 'hot' : '';
+    if (bar._cls !== cls) { bar.className = cls; bar._cls = cls; }
+}
+function fall (list, i, db) {
+    var shown = list[i] === undefined ? -99 : list[i];
+    shown = db > shown ? db : Math.max (db, shown - 3);   // falls about 45 dB a second
+    list[i] = shown;
+    return shown;
+}
+function colMeter (col) {
+    var db = shownDb[col.bank][col.ch] === undefined ? -99 : shownDb[col.bank][col.ch];
+    var h = col.led.clientHeight;
+    col.meterGrad.style.height = h + 'px';
+    col.meter.style.height = meterLevel (db) + '%';
+}
+function renderMeters () {
+    if (! meters) return;
+    var tabs = document.querySelectorAll ('.tab');
+    for (var t = 0; t < tabs.length; ++t) {
+        var v = tabs[t].getAttribute ('data-view'), bars = tabs[t].querySelector ('.tabMeters').children;
+        for (var b = 0; b < bars.length; ++b) {
+            var db;
+            if (v === 'centre') db = fall (shownDb.main, b, meters.main[b]);
+            else {
+                var bk = v.substring (0, 2), i = (v.charAt (2) === '1' ? 8 : 0) + b;
+                db = fall (shownDb[bk], i, meters[bk][i]);
+            }
+            bars[b].style.height = meterLevel (db) + '%';
+            tabClass (bars[b], db);
+        }
+    }
+    if (view === 'chan') {
+        colMeter (chan);
+        chan.compGr.style.width = Math.min (100, meters[chan.bank + 'Comp'][chan.ch] / 20 * 100) + '%';
+        chan.gateGr.style.width = Math.min (100, meters[chan.bank + 'Gate'][chan.ch] / 40 * 100) + '%';
+    } else if (view !== 'centre')
+        bankCols.forEach (colMeter);
+}
+
+// ---- connection ----
+
+function connect () {
+    clearTimeout (retryTimer);
+    var url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws' + location.search;
+    try { socket = new WebSocket (url); } catch (e) { retry(); return; }
+    socket.onopen = function () { failures = 0; showLink (true); };
+    socket.onmessage = function (e) {
+        var m;
+        try { m = JSON.parse (e.data); } catch (err) { return; }
+        if (m.type === 'state') { state = m; render(); }
+        else if (m.type === 'schema') { schema = m; renderStrips(); }
+        else if (m.type === 'strips') { strips = m; renderStrips(); }
+        else if (m.type === 'meters') { meters = m; renderMeters(); }
+    };
+    socket.onclose = function () { showLink (false); retry(); };
+    socket.onerror = function () { try { socket.close(); } catch (e) {} };
+}
+function retry () {
+    ++failures;
+    clearTimeout (retryTimer);
+    retryTimer = setTimeout (connect, Math.min (5000, 500 * failures));
+}
+function showLink (on) {
+    $('link').classList.toggle ('on', on);
+    $('linkText').textContent = on ? 'Connected' + (state && state.version ? ' · ' + state.version : '') : 'Not connected';
+    $('banner').classList.toggle ('show', ! on);
+    $('bannerTitle').textContent = failures > 0 ? 'Lost Oxide-3216, reconnecting…' : 'Connecting to Oxide-3216…';
+    $('bannerText').textContent = failures > 2
+        ? 'Is Oxide open with the remote on, and this device on the same network? Scan the QR code again if it changed.'
+        : 'Keep this page open. It reconnects by itself.';
+}
+// an iPad that slept comes back with a dead socket: reconnect straight away
+document.addEventListener ('visibilitychange', function () {
+    if (! document.hidden && ! DEMO && (! socket || socket.readyState > WebSocket.OPEN)) connect();
+});
+
+// ---- demo (opened from a file): a pretend tape machine ----
+
+var demo = { pos: 0, playing: false, record: false, wind: 0, shuttle: 0, held: false, loop: false, punch: false, scrub: false,
+             storing: false, message: '', inP: 0, outP: 0, arm: [], mem: [] };
+function fmt (s) {
+    var t = Math.floor (Math.max (0, s) * 10);
+    function two (n) { return (n < 10 ? '0' : '') + n; }
+    return two (Math.floor (t / 600)) + ':' + two (Math.floor (t / 10) % 60) + '.' + (t % 10);
+}
+function demoHandle (m) {
+    var d = demo;
+    if (m.type === 'press') {
+        var a = m.action;
+        if (a === 'play') { d.playing = true; d.wind = 0; d.shuttle = 0; }
+        else if (a === 'stop') { d.playing = false; d.wind = 0; d.shuttle = 0; }
+        else if (a === 'record') d.record = ! d.record;
+        else if (a === 'rtz') { d.pos = 0; d.message = ''; }
+        else if (a === 'store') { d.storing = ! d.storing; d.message = d.storing ? 'Now press a number' : ''; }
+        else if (a === 'setIn') d.inP = d.pos;
+        else if (a === 'setOut') d.outP = d.pos;
+        else if (a === 'goIn') d.pos = d.inP;
+        else if (a === 'goOut') d.pos = d.outP;
+        else if (a === 'loop') d.loop = ! d.loop;
+        else if (a === 'punch') d.punch = ! d.punch;
+        else if (a === 'jog') d.scrub = false;
+        else if (a === 'scrub') d.scrub = true;
+        else if (a === 'disarmAll') d.arm = [];
+    } else if (m.type === 'wind') { if (m.dir) { d.wind = m.dir; d.playing = false; } d.held = m.held; }
+    else if (m.type === 'arm') d.arm[m.track] = ((d.arm[m.track] || 0) + 1) % 3;
+    else if (m.type === 'memory') {
+        if (d.storing) { d.mem[m.m] = d.pos; d.storing = false; d.message = (m.m + 1) + ' = ' + fmt (d.pos); }
+        else if (d.mem[m.m] !== undefined) { d.pos = d.mem[m.m]; d.message = 'To ' + (m.m + 1) + ' (' + fmt (d.pos) + ')'; }
+        else d.message = (m.m + 1) + ' is empty';
+    }
+    else if (m.type === 'jog') d.pos = Math.max (0, d.pos + m.turns);
+    else if (m.type === 'shuttle') { d.shuttle = [0, 0.5, 1, 2, 4, 8, 16, 32][Math.abs (m.step)] * (m.step < 0 ? -1 : 1); d.playing = false; }
+    else if (m.type === 'param') {
+        var parts = /^(ch|rt)(d+).(.*)$/.exec (m.id);
+        if (parts) { var sc = schema[parts[1]], idx = sc.keys.indexOf (parts[3]); if (idx >= 0) strips[parts[1]][parseInt (parts[2], 10) - 1].v[idx] = m.v; }
+        renderStrips();
+        return;
+    }
+    demoState();
+}
+// the demo's channel strips (the same ids and ranges as Oxide's)
+function demoChannels () {
+    var list = [ [ 'phase', 0, 1, 2, 0 ], [ 'gain', -20, 30, 0, 0 ], [ 'trim', -30, 20, 0, 0 ], [ 'gain.link', 0, 1, 2, 1 ],
+                 [ 'hpf', 20, 300, 1, 20 ], [ 'pan', -1, 1, 0, 0 ], [ 'order', 0, 5, 3, 0 ], [ 'eq.in', 0, 1, 2, 1 ], [ 'gate.in', 0, 1, 2, 0 ],
+                 [ 'main', 0, 1, 2, 1 ], [ 'mute', 0, 1, 2, 0 ], [ 'solo', 0, 1, 2, 0 ], [ 'fader', 0, 100, 0, 80 ],
+                 [ 'eq.hf.gain', -15, 15, 0, 0 ], [ 'eq.hf.freq', 1500, 16000, 1, 8000 ], [ 'eq.hmf.gain', -15, 15, 0, 0 ], [ 'eq.hmf.freq', 600, 7000, 1, 3000 ],
+                 [ 'eq.lmf.gain', -15, 15, 0, 0 ], [ 'eq.lmf.freq', 200, 2500, 1, 500 ], [ 'eq.lf.gain', -15, 15, 0, 0 ], [ 'eq.lf.freq', 40, 400, 1, 100 ],
+                 [ 'gate.thr', -80, -10, 0, -80 ], [ 'gate.range', -60, 0, 0, -40 ], [ 'gate.fast', 0, 1, 2, 0 ], [ 'gate.release', 0.02, 2, 1, 0.12 ],
+                 [ 'comp.input', 0, 10, 0, 0 ], [ 'comp.output', -12, 12, 0, 0 ], [ 'comp.attack', 1, 7, 0, 3 ], [ 'comp.release', 1, 7, 0, 4 ],
+                 [ 'comp.ratio', 0, 3, 3, 0 ], [ 'comp.all', 0, 1, 2, 0 ], [ 'comp.60.thr', -50, 0, 0, -20 ], [ 'comp.60.ratio', 1, 60, 1, 4 ],
+                 [ 'comp.60.out', -20, 20, 0, 0 ], [ 'comp.60.oe', 0, 1, 2, 0 ], [ 'comp.la.peak', 0, 100, 0, 40 ], [ 'comp.la.gain', 0, 30, 0, 0 ],
+                 [ 'comp.la.limit', 0, 1, 3, 0 ], [ 'comp.g.thr', -40, 0, 0, -20 ], [ 'comp.g.ratio', 1, 60, 1, 4 ], [ 'comp.g.release', 0.1, 4, 1, 0.3 ],
+                 [ 'comp.g.fast', 0, 1, 2, 0 ], [ 'comp.in', 0, 1, 2, 0 ], [ 'comp.type', 0, 3, 3, 0 ] ];
+    for (var k = 1; k <= 4; ++k) list.push ([ 'sub' + k, 0, 1, 2, 0 ]);
+    for (var a = 1; a <= 8; ++a) { list.push ([ 'aux' + a, 0, 1, 0, 0 ]); list.push ([ 'aux' + a + '.pre', 0, 1, 2, 0 ]); }
+    var rt = list.concat ([ [ 'deess.on', 0, 1, 2, 0 ], [ 'deess.freq', 2000, 12000, 1, 6000 ], [ 'deess.reduction', 0, 20, 0, 8 ],
+                            [ 'deess.wide', 0, 1, 2, 0 ], [ 'deess.gentle', 0, 1, 2, 0 ], [ 'deess.bypass', 0, 1, 2, 0 ] ]);
+    function bankSchema (l) {
+        var s = { keys: [], min: [], max: [], scale: [], def: [] };
+        l.forEach (function (p) { s.keys.push (p[0]); s.min.push (p[1]); s.max.push (p[2]); s.scale.push (p[3]); s.def.push (p[4]); });
+        return s;
+    }
+    schema = { type: 'schema', ch: bankSchema (list), rt: bankSchema (rt) };
+    var colours = [ [ '#e9e6da', '#111111' ], [ '#d63a2f', '#ffffff' ], [ '#2f6fd6', '#ffffff' ], [ '#3fa34d', '#000000' ] ];
+    var names = [ 'Kick', 'Snare', 'Hat', 'Tom 1', 'Tom 2', 'OH L', 'OH R', 'Bass', 'Gtr', 'Keys', 'Vox', 'BV 1', 'BV 2', 'Room', 'Click', 'Spare' ];
+    strips = { type: 'strips', ch: [], rt: [], auxLink: [ false, false, false, false ] };
+    [ 'ch', 'rt' ].forEach (function (b) {
+        for (var i = 0; i < 16; ++i) {
+            var c = colours[i < 4 ? 1 : i < 8 ? 2 : i < 10 ? 3 : 0];
+            strips[b].push ({ n: names[i], c: c[0], t: c[1], v: schema[b].def.slice() });
+        }
+    });
+    meters = { type: 'meters', ch: [], rt: [], chComp: [], rtComp: [], chGate: [], rtGate: [], main: [ -99, -99 ] };
+}
+function demoMeters () {
+    var t = Date.now() / 1000;
+    [ 'ch', 'rt' ].forEach (function (b, k) {
+        for (var i = 0; i < 16; ++i) {
+            meters[b][i] = Math.round (-30 + 22 * Math.sin (t * (1.3 + i * 0.17) + k) * Math.sin (t * 0.7 + i));
+            meters[b + 'Comp'][i] = Math.max (0, Math.round (6 * Math.sin (t + i)));
+            meters[b + 'Gate'][i] = 0;
+        }
+    });
+    meters.main = [ Math.round (-12 + 6 * Math.sin (t * 2)), Math.round (-12 + 6 * Math.sin (t * 2.1)) ];
+    renderMeters();
+}
+
+function demoState () {
+    var d = demo, speed = d.playing ? 1 : d.shuttle ? d.shuttle : d.wind * (d.held ? 40 : 20);
+    var mems = [];
+    for (var i = 0; i < 99; ++i) mems.push (d.mem[i] !== undefined ? fmt (d.mem[i]) : '');
+    var arm = [], rec = [];
+    for (var t = 0; t < 16; ++t) { arm.push (d.arm[t] || 0); rec.push (d.playing && d.record && (d.arm[t] || 0) > 0); }
+    state = { type: 'state', version: 'demo', time: fmt (d.pos), playing: d.playing, record: d.record,
+              speed: d.playing ? 'Play' : speed ? (speed < 0 ? '◀◀ ' : '▶▶ ') + Math.abs (speed).toFixed (Math.abs (speed) < 10 ? 1 : 0) + 'x' : 'Stop',
+              wind: d.shuttle ? 0 : d.wind, inPoint: fmt (d.inP), outPoint: fmt (d.outP), loop: d.loop, punch: d.punch, scrub: d.scrub,
+              storing: d.storing, message: d.message, arm: arm, recording: rec, memories: mems };
+    render();
+}
+
+build();
+(function () {   // a link can open a view: #ch0 = In 1-8 ... #rt1 = Out 9-16; #rt0/3 = Out 3's channel strip
+    var h = /^#((ch|rt)[01])(?:\/(\d+))?$/.exec (location.hash);
+    if (! h) return;
+    showView (h[1]);
+    if (h[3]) openChannel (h[2], Math.max (0, Math.min (15, parseInt (h[3], 10) - 1)));
+}) ();
+if (DEMO) {
+    showLink (true);
+    demoChannels();
+    renderStrips();
+    setInterval (demoMeters, 66);
+    $('linkText').textContent = 'Demo (not connected)';
+    setInterval (function () {
+        var d = demo, speed = d.playing ? 1 : d.shuttle ? d.shuttle : d.wind * (d.held ? 40 : 20);
+        d.pos = Math.max (0, d.pos + speed * 0.1);
+        if (d.pos === 0 && speed < 0) { d.wind = 0; d.shuttle = 0; }
+        demoState();
+    }, 100);
+    demoState();
+} else {
+    showLink (false);
+    connect();
+}
+</script>
+</body>
+</html>

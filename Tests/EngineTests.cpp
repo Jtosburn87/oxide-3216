@@ -9,6 +9,7 @@
 #include "TapeFiles.h"
 #include "AudioImport.h"
 #include "MidiControl.h"
+#include "RemoteServer.h"
 #include <cstdio>
 #include <deque>
 #include <vector>
@@ -2931,6 +2932,35 @@ namespace
         check (other.midi.sendsToScenes (0), "a track's Send to scene control is saved");
     }
 
+    void testStopAndCopySettings()
+    {
+        std::puts ("Stop takes Record off (tracks stay armed); a strip's copyable settings");
+        TestEngine e;
+        e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }));
+        auto& tape = e.tape;
+        tape.setArmState (0, TapeMachine::ArmState::armed);
+        tape.setRecordEnabled (true);
+        tape.play();
+        tape.stop();
+        check (! tape.isRecordEnabled(), "Stop takes the master Record off");
+        check (tape.getArmState (0) == TapeMachine::ArmState::armed, "the track stays armed");
+
+        auto& s = *e.inputStrips[9];   // ch10: its prefix must not catch ch1's and the reverse
+        const auto settings = s.copyableSettings();
+        const auto has = [&] (const Param* p) { return std::find (settings.begin(), settings.end(), p) != settings.end(); };
+        check (! has (s.controls.fader) && ! has (s.controls.solo), "fader and solo are not copied");
+        check (has (s.controls.gain) && has (s.controls.pan) && has (s.controls.mute) && has (s.eq.gain[0])
+                   && has (s.comp.type) && has (s.gate.release) && has (s.controls.auxLevel[3]), "knobs and switches are");
+        bool ownOnly = true;
+        for (auto* p : settings)
+            ownOnly = ownOnly && p->id.startsWith ("ch10.");
+        check (ownOnly, "only the strip's own parameters");
+        bool ch1Clean = true;
+        for (auto* p : e.inputStrips[0]->copyableSettings())
+            ch1Clean = ch1Clean && p->id.startsWith ("ch1.");
+        check (ch1Clean, "ch1 does not pick up ch10-16");
+    }
+
     void testArmPlayback()
     {
         std::puts ("Tape: record arm yellow plays the tape back until Record, red is input only");
@@ -3900,6 +3930,118 @@ namespace
     }
 }
 
+
+/** One HTTP request to the remote server on this computer; everything it sends back until it goes quiet. */
+static std::string httpExchange (int port, const juce::String& request)
+{
+    juce::StreamingSocket client;
+    if (! client.connect ("127.0.0.1", port, 2000))
+        return {};
+    client.write (request.toRawUTF8(), (int) request.getNumBytesAsUTF8());
+    juce::MemoryBlock got;
+    std::vector<char> buffer (65536);
+    for (int quiet = 0; quiet < 10;)
+    {
+        if (client.waitUntilReady (true, 30) <= 0)
+        {
+            ++quiet;
+            continue;
+        }
+        const int n = client.read (buffer.data(), (int) buffer.size(), false);
+        if (n <= 0)
+            break;
+        got.append (buffer.data(), (size_t) n);
+    }
+    return std::string (static_cast<const char*> (got.getData()), got.getSize());
+}
+
+/** The Wi-Fi remote's server: the key in the link, the page, the WebSocket state and messages from the phone. */
+static void testRemoteServer()
+{
+    std::puts ("Wi-Fi remote server");
+    RemoteServer::Options options;
+    options.address = "127.0.0.1";   // (the real remote: every adapter; here no firewall prompt)
+    options.key = "secret123";
+    options.page = "<html>tape remote</html>";
+    RemoteServer server (52896, options);
+    juce::var received;
+    server.makeState = [] { return juce::String ("{\"type\":\"state\",\"time\":\"00:12.3\"}"); };
+    server.onMessage = [&received] (const juce::var& m) { received = m; };
+    int meterTicks = 0;
+    server.addFeed ([] { return juce::String ("{\"type\":\"strips\",\"n\":\"Kick\"}"); }, false);
+    server.addFeed ([&meterTicks] { return juce::String ("{\"type\":\"meters\",\"t\":") + juce::String (++meterTicks) + "}"; }, true);
+    for (int i = 0; i < 50 && ! server.isListening(); ++i)
+        juce::Thread::sleep (20);
+    check (server.isListening(), "remote listening");
+
+    const auto page = httpExchange (52896, "GET /?k=secret123 HTTP/1.1\r\nHost: x\r\n\r\n");
+    check (page.rfind ("HTTP/1.1 200", 0) == 0 && page.find ("tape remote") != std::string::npos, "the page is served with the right key");
+    const auto wrong = httpExchange (52896, "GET /?k=old HTTP/1.1\r\nHost: x\r\n\r\n");
+    check (wrong.rfind ("HTTP/1.1 403", 0) == 0 && wrong.find ("tape remote") == std::string::npos, "a wrong key gets nothing");
+    const auto none = httpExchange (52896, "GET / HTTP/1.1\r\nHost: x\r\n\r\n");
+    check (none.rfind ("HTTP/1.1 403", 0) == 0, "no key gets nothing");
+    const auto socketNoKey = httpExchange (52896, "GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                                                  "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n");
+    check (socketNoKey.rfind ("HTTP/1.1 403", 0) == 0, "no WebSocket without the key");
+    check (RemoteServer::acceptKey ("dGhlIHNhbXBsZSBub25jZQ==") == "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=", "WebSocket accept key (RFC 6455 example)");
+
+    juce::StreamingSocket client;
+    if (! client.connect ("127.0.0.1", 52896, 2000))
+    {
+        check (false, "phone connects");
+        return;
+    }
+    const juce::String request = "GET /ws?k=secret123 HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                                 "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
+    client.write (request.toRawUTF8(), (int) request.getNumBytesAsUTF8());
+    for (int i = 0; i < 50 && server.numClients() == 0; ++i)
+        juce::Thread::sleep (20);
+    juce::Thread::sleep (100);   // the handshake
+    server.tick();               // a new phone gets the state
+    juce::MemoryBlock got;
+    std::vector<char> buffer (65536);
+    while (client.waitUntilReady (true, 300) > 0)
+    {
+        const int n = client.read (buffer.data(), (int) buffer.size(), false);
+        if (n <= 0)
+            break;
+        got.append (buffer.data(), (size_t) n);
+    }
+    const std::string raw (static_cast<const char*> (got.getData()), got.getSize());
+    check (raw.rfind ("HTTP/1.1 101", 0) == 0 && raw.find ("00:12.3") != std::string::npos, "WebSocket with the key gets the state");
+    check (raw.find ("Kick") != std::string::npos && raw.find ("\"meters\"") != std::string::npos, "a new phone gets the strips and the meters");
+    server.tick();   // nothing changed: only the meters go again
+    juce::MemoryBlock again;
+    while (client.waitUntilReady (true, 300) > 0)
+    {
+        const int n = client.read (buffer.data(), (int) buffer.size(), false);
+        if (n <= 0)
+            break;
+        again.append (buffer.data(), (size_t) n);
+    }
+    const std::string second (static_cast<const char*> (again.getData()), again.getSize());
+    check (second.find ("Kick") == std::string::npos && second.find ("\"meters\"") != std::string::npos,
+           "an unchanged feed is not sent again; an every-tick one is");
+
+    const juce::String text ("{\"type\":\"arm\",\"track\":3}");
+    juce::MemoryBlock frame;
+    const juce::uint8 mask[4] = { 9, 8, 7, 6 };
+    const juce::uint8 head[2] = { 0x81, (juce::uint8) (0x80 | text.length()) };
+    frame.append (head, 2);
+    frame.append (mask, 4);
+    for (int i = 0; i < text.length(); ++i)
+    {
+        const auto b = (juce::uint8) ((juce::uint8) text[i] ^ mask[i % 4]);
+        frame.append (&b, 1);
+    }
+    client.write (frame.getData(), (int) frame.getSize());
+    juce::Thread::sleep (200);
+    server.processIncoming();
+    check (received.getProperty ("type", {}).toString() == "arm" && (int) received.getProperty ("track", -1) == 3,
+           "a message from the phone reaches Oxide");
+    client.close();
+}
+
 int main (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI juceInit;
@@ -3950,6 +4092,7 @@ int main (int argc, char** argv)
     testMidiControllers();
     testMidiFiles();
     testArmPlayback();
+    testStopAndCopySettings();
     testSceneMidi();
     testMidiControl();
     testWowFlutterKnobs();
@@ -3965,6 +4108,7 @@ int main (int argc, char** argv)
     testOldTrimSession();
     testImport();
     testNoDeviceIsSafe();
+    testRemoteServer();
 
     for (int i = 1; i < argc; ++i)
     {

@@ -4,7 +4,7 @@
 # Has to come before project().
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Oldest macOS the app runs on")
 
-project(Oxide3216 VERSION 0.1.9 LANGUAGES C CXX)
+project(Oxide3216 VERSION 0.1.10 LANGUAGES C CXX)
 
 # Beta builds: bump the version above with each set of changes. The label is what the app and the zip show.
 set(OXIDE_VERSION_LABEL "${PROJECT_VERSION}-beta")
@@ -53,6 +53,7 @@ add_library(Oxide3216Core STATIC
     Source/MidiEngine.cpp
     Source/MidiOut.cpp
     Source/MidiControl.cpp
+    Source/RemoteServer.cpp
     Source/TapeMachine.cpp)
 target_include_directories(Oxide3216Core PUBLIC Source)
 if(WIN32)
@@ -130,7 +131,9 @@ target_sources(Oxide3216 PRIVATE
     Source/ConsoleLookAndFeel.cpp
     Source/Desk.cpp
     Source/Widgets.cpp
-    Source/MidiControlUI.cpp)
+    Source/MidiControlUI.cpp
+    Source/Remote.cpp
+    third_party/qrcodegen/qrcodegen.cpp)
 
 target_link_libraries(Oxide3216 PRIVATE
     Oxide3216Core
@@ -146,5 +149,9 @@ target_link_libraries(EngineTests PRIVATE
     juce::juce_recommended_warning_flags)
 
 # The Oxide 3216 logo, drawn in the top bar.
-juce_add_binary_data(Oxide3216Assets SOURCES Resources/oxide-3216-logo.svg)
+# The Wi-Fi remote's web page (served by the app itself) is in here too.
+juce_add_binary_data(Oxide3216Assets SOURCES Resources/oxide-3216-logo.svg Resources/remote.html)
 target_link_libraries(Oxide3216 PRIVATE Oxide3216Assets)
+if(WIN32)
+    target_link_libraries(Oxide3216 PRIVATE iphlpapi ws2_32)   # the Wi-Fi remote's network list
+endif()

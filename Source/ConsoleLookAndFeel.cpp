@@ -200,9 +200,13 @@ void ConsoleLookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, int 
     g.setColour (juce::Colours::black.withAlpha (0.6f));
     g.fillRoundedRectangle (cap.translated (0.0f, 3.0f), 2.0f);
 
-    juce::ColourGradient grad (juce::Colour (0xff55595c), cap.getX(), cap.getY(),
-                               juce::Colour (0xff17191a), cap.getX(), cap.getBottom(), false);
-    grad.addColour (0.14, juce::Colour (0xff25282a));
+    // A tinted cap ("capTint"): the fader is moving something other than its own level (sends on fader).
+    const auto tintProp = slider.getProperties()["capTint"];
+    const bool tinted = ! tintProp.isVoid();
+    const auto tint = tinted ? juce::Colour ((juce::uint32) (juce::int64) tintProp) : juce::Colour();
+    juce::ColourGradient grad (tinted ? tint.brighter (0.2f) : juce::Colour (0xff55595c), cap.getX(), cap.getY(),
+                               tinted ? tint.darker (0.9f) : juce::Colour (0xff17191a), cap.getX(), cap.getBottom(), false);
+    grad.addColour (0.14, tinted ? tint.darker (0.3f) : juce::Colour (0xff25282a));
     g.setGradientFill (grad);
     g.fillRoundedRectangle (cap, 2.0f);
     g.setColour (juce::Colour (0xffe8e8e4));

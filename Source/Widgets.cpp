@@ -224,11 +224,75 @@ Fader::Fader (Param& p, int labels) : slider (p), labelWidth (labels)
         return v <= 0.0 ? juce::String ("-inf dB") : juce::String (Dsp::faderDb ((float) v), 1) + " dB";
     };
     addAndMakeVisible (slider);
+
+    sendSlider.setSliderStyle (juce::Slider::LinearVertical);
+    sendSlider.setSliderSnapsToMousePosition (false);
+    sendSlider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+    sendSlider.setRange (0.0, 100.0);
+    sendSlider.setDoubleClickReturnValue (true, 80.0, juce::ModifierKeys::commandModifier);   // 0 dB
+    sendSlider.getProperties().set ("capTint", (juce::int64) (juce::uint32) ConsoleColours::amber.getARGB());
+    sendSlider.textFromValueFunction = [] (double v)
+    {
+        const float level = sendLevelAt (v);
+        return level <= 0.0f ? juce::String ("send -inf dB")
+                             : "send " + juce::String (juce::Decibels::gainToDecibels (level * level * 1.5f), 1) + " dB";
+    };
+    sendSlider.onValueChange = [this]
+    {
+        if (send != nullptr)
+            send->set (sendLevelAt (sendSlider.getValue()));
+    };
+    addChildComponent (sendSlider);
+}
+
+Fader::~Fader()
+{
+    setSend (nullptr);
+}
+
+float Fader::sendLevelAt (double pos)
+{
+    if (pos <= 0.0)
+        return 0.0f;
+    const float gain = juce::Decibels::decibelsToGain (Dsp::faderDb ((float) pos), -1000.0f);
+    return juce::jmin (1.0f, std::sqrt (gain / 1.5f));
+}
+
+double Fader::faderPosOf (float level)
+{
+    if (level <= 0.0f)
+        return 0.0;
+    const float db = juce::Decibels::gainToDecibels (level * level * 1.5f, -1000.0f);
+    return juce::jlimit (0.0, 100.0, (double) db / 0.75 + 80.0);
+}
+
+void Fader::setSend (Param* p)
+{
+    if (p == send)
+        return;
+    if (send != nullptr)
+        send->removeListener (this);
+    send = p;
+    if (send != nullptr)
+    {
+        send->addListener (this);
+        sendSlider.setValue (faderPosOf (send->get()), juce::dontSendNotification);
+    }
+    sendSlider.setVisible (send != nullptr);
+    slider.setVisible (send == nullptr);
+    sendSlider.setTitle (send != nullptr ? send->name : juce::String());
+}
+
+void Fader::paramChanged (Param&)
+{
+    // (also stops the cap at the send's top while it is dragged further up)
+    sendSlider.setValue (faderPosOf (send->get()), juce::dontSendNotification);
 }
 
 void Fader::resized()
 {
     slider.setBounds (getLocalBounds().withTrimmedLeft (labelWidth));
+    sendSlider.setBounds (slider.getBounds());
 }
 
 void Fader::paint (juce::Graphics& g)
@@ -357,7 +421,7 @@ void TransportKey::paintIcon (juce::Graphics& g, juce::Rectangle<float> r, juce:
         case play:        triangle (centre.x + s * 0.08f, 1.0f); break;
         case stop:        g.fillRect (juce::Rectangle<float> (s * 0.85f, s * 0.85f).withCentre (centre)); break;
         case record:
-            g.setColour (juce::Colour (0xffe8402f));
+            g.setColour (getToggleState() && blinkLit() ? juce::Colours::white : juce::Colour (0xffe8402f));   // white on the flashing key
             g.fillEllipse (juce::Rectangle<float> (s * 0.95f, s * 0.95f).withCentre (centre));
             break;
         case erase:
@@ -434,13 +498,24 @@ void TransportKey::paintButton (juce::Graphics& g, bool isMouseOver, bool isButt
         g.fillEllipse (led.x - 2.2f, led.y - 2.2f, 4.4f, 4.4f);
     }
 
+    // The record key while Record is on flashes red, the whole key (glow round it too).
+    if (icon == record && on && ! isTimerRunning())
+        startTimer (50);
+    const bool flash = icon == record && on && blinkLit();
+    if (flash)
+    {
+        g.setColour (juce::Colour (0xffe8302a).withAlpha (0.35f));
+        g.fillRoundedRectangle (b.withTrimmedTop (2.0f).expanded (2.0f), 5.0f);
+    }
+
     // The key: dark, bevelled, pressed in a pixel while held.
     auto key = b.withTrimmedTop (2.0f).reduced (1.0f);
     g.setColour (juce::Colour (0xff0b0c0d));
     g.fillRoundedRectangle (key.expanded (1.0f), 3.0f);
     if (isButtonDown)
         key.translate (0.0f, 1.0f);
-    const auto face = isButtonDown ? juce::Colour (0xff2c3033) : juce::Colour (0xff3a3e41);
+    const auto face = flash ? juce::Colour (isButtonDown ? 0xffb8261f : 0xffe0322a)
+                            : isButtonDown ? juce::Colour (0xff2c3033) : juce::Colour (0xff3a3e41);
     g.setGradientFill (juce::ColourGradient (face.brighter (0.12f), 0, key.getY(), face.darker (0.35f), 0, key.getBottom(), false));
     g.fillRoundedRectangle (key, 2.5f);
     g.setColour (juce::Colours::white.withAlpha (isButtonDown ? 0.08f : 0.2f));
@@ -451,6 +526,26 @@ void TransportKey::paintButton (juce::Graphics& g, bool isMouseOver, bool isButt
         g.fillRoundedRectangle (key, 2.5f);
     }
     paintIcon (g, key, juce::Colour (0xffe9ebec).withMultipliedAlpha (isEnabled() ? 1.0f : 0.4f));
+}
+
+bool TransportKey::blinkLit() const
+{
+    return (juce::Time::getMillisecondCounter() / 400) % 2 == 0;
+}
+
+void TransportKey::timerCallback()
+{
+    if (! (icon == record && getToggleState()))
+    {
+        stopTimer();
+        repaint();
+        return;
+    }
+    if (blinkLit() != shownLit)
+    {
+        shownLit = ! shownLit;
+        repaint();
+    }
 }
 
 //==============================================================================

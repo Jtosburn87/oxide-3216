@@ -20,6 +20,7 @@ public:
     ChannelStrip (ParamSet&, const juce::String& idPrefix, const juce::String& defaultName, bool withDeEsser = false,
                   float defaultFader = 80.0f);
 
+    ParamSet& paramSet;
     const juce::String idPrefix;
     juce::String name;   // scribble strip
     int scribbleColour = 0;   // scribble strip colour (StripStyle::stripColour): 0 white = no group; others group the bank's faders
@@ -54,6 +55,10 @@ public:
     static constexpr std::array<Chain, 6> chainOrders { { { 0, 1, 2 }, { 0, 2, 1 }, { 1, 0, 2 }, { 1, 2, 0 }, { 2, 0, 1 }, { 2, 1, 0 } } };
     Chain chain() const noexcept { return chainOrders[(size_t) juce::jlimit (0, 5, juce::roundToInt (controls.order->get()))]; }
     void setChain (const Chain&);
+
+    /** What the channel window's Copy / Paste carries: every parameter of the strip except the fader and solo
+        (not the name, colour or inserts, which are not parameters). */
+    std::vector<Param*> copyableSettings() const;
 
     /** Linked aux pairs (A1+A2, A3+A4, ...), set by the engine; null = never linked. While a pair is linked
         the strip feeds it in stereo: the odd send knob is the level, the even one its pan (0.5 = centre,

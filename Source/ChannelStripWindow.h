@@ -31,6 +31,7 @@ private:
 
     juce::Label scribble;
     juce::TextButton prevButton, nextButton;   // at the two ends of the header
+    juce::TextButton copyButton { "Copy" }, pasteButton { "Paste" };   // the strip's settings, to another channel of the same bank
     Knob gain, trim, hpf, pan;
     ParamButton phase;
     ChainLinkButton gainLink;
@@ -75,6 +76,9 @@ private:
     class ChainBlocks;
     std::unique_ptr<ChainBlocks> chainBlocks;   // the signal chain at the top right: blocks to drag, and Lock
 
+    void copySettings();
+    void pasteSettings();
+    juce::String bankKind() const;   // "ch" or "rt": paste only goes to the bank it was copied from
     void showAuxLink (int pair, bool linked);
     void updateVisibility();
     void timerCallback() override;
