@@ -72,7 +72,7 @@ void MeterBridge::timerCallback()
     }
     if (std::exchange (wasHidden, false))
         for (int t = 0; t < TapeMachine::numTracks; ++t)
-            tape.takeOutputPeak (t);   // forget what built up while the window was hidden
+            tape.takeMeterPeak (t);   // forget what built up while the window was hidden
 
     ++frame;
     bool changed = false;
@@ -80,7 +80,7 @@ void MeterBridge::timerCallback()
     for (int t = 0; t < TapeMachine::numTracks; ++t)
     {
         // Peak bar: jumps up, falls about 27 dB a second.
-        const float pk = tape.takeOutputPeak (t);
+        const float pk = tape.takeMeterPeak (t);   // red: the input; yellow / off: the tape
         const float db = pk > 1.0e-5f ? 20.0f * std::log10 (pk) - referenceDbfs : -100.0f;
         auto& shown = shownDb[(size_t) t];
         const float before = shown;
@@ -121,7 +121,7 @@ void MeterBridge::paint (juce::Graphics& g)
     auto header = all.reduced (margin, 0).withY (12).withHeight (headerH - 8);
     g.setColour (silk);
     g.setFont (ConsoleLookAndFeel::uiFont (13.0f, true));
-    g.drawText ("TAPE OUT", header, juce::Justification::centredLeft, false);
+    g.drawText ("TAPE IN / OUT", header, juce::Justification::centredLeft, false);
     g.setColour (silk.withAlpha (0.6f));
     g.setFont (ConsoleLookAndFeel::uiFont (11.0f));
     g.drawText (juce::String::fromUTF8 ("0 = \xe2\x88\x92") + juce::String ((int) -referenceDbfs) + " dBFS", header, juce::Justification::centredRight, false);

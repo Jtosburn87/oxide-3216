@@ -72,7 +72,7 @@ main { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: tou
 .key.lit-red   { background: linear-gradient(#e8604f, #b3352a); color: #fff; }
 .key.lit-blue  { background: linear-gradient(#5aa8ea, #2f77b6); color: #fff; }
 /* Record on: the whole key flashes */
-#kRec.lit-red { -webkit-animation: recflash 0.8s step-end infinite; animation: recflash 0.8s step-end infinite; }
+#kRec.lit-red:not(.rolling) { -webkit-animation: recflash 0.8s step-end infinite; animation: recflash 0.8s step-end infinite; }
 @-webkit-keyframes recflash { 50% { background: linear-gradient(#4a5053, #33383b); color: var(--legend); } }
 @keyframes recflash { 50% { background: linear-gradient(#4a5053, #33383b); color: var(--legend); } }
 .row { display: grid; grid-gap: 8px; }
@@ -187,7 +187,9 @@ body.chanView #chan { display: flex; flex-direction: column; }
 .fader.sof .cap { background: linear-gradient(#f3c968, #c08f2e 45%, #6e5016 55%, #c9962e); }
 #bankInner { display: flex; flex: 1; flex-shrink: 0; min-width: 640px; padding: 0 2px; }
 .bcol { flex: 1 1 0; min-width: 0; border-left: 1px solid #222426; }
-.bcol .faderArea { height: 360px; flex: none; }   /* fixed: a short screen scrolls instead */
+/* the faders take all the height there is (a tall phone gets the longest travel); a short screen scrolls instead */
+.bcol .faderArea { flex: 1 0 auto; min-height: 360px; align-items: stretch; }
+.bcol .faderArea .fader, .bcol .faderArea .led { height: auto; }   /* stretched to the area: no % of a flexed height (old Safari) */
 
 /* channel view: one channel, laid out as its console strip */
 #chanHead { flex: none; display: flex; align-items: center; padding: 6px 8px; background: #0a0b0c; border-bottom: 1px solid #3a3f42; }
@@ -591,6 +593,7 @@ function render () {
 
     lit ($('kPlay'), 'lit-green', state.playing);
     lit ($('kRec'), 'lit-red', state.record);
+    $('kRec').classList.toggle ('rolling', !! state.playing);   // recording: steady red, no flash
     lit ($('kRew'), 'lit-amber', state.wind < 0);
     lit ($('kFf'), 'lit-amber', state.wind > 0);
     lit ($('kLoop'), 'lit-blue', state.loop);
@@ -604,6 +607,7 @@ function render () {
     var arm = $('armKeys').children;
     for (var t = 0; t < arm.length; ++t) {
         var s = state.arm ? state.arm[t] : 0;
+        if (s === 1 && state.record) s = 2;   // yellow takes the input once Record is on: red
         arm[t].classList.toggle ('s1', s === 1);
         arm[t].classList.toggle ('s2', s === 2);
         arm[t].classList.toggle ('rec', !! (state.recording && state.recording[t]));

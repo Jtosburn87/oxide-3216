@@ -109,6 +109,7 @@ void TapeMachinePanel::timerCallback()
     rew.setToggleState (tape.getWindDirection() < 0, juce::dontSendNotification);
     ff.setToggleState (tape.getWindDirection() > 0, juce::dontSendNotification);
     rec.setToggleState (tape.isRecordEnabled(), juce::dontSendNotification);
+    rec.setSteady (tape.isPlaying());   // recording: steady red
     loopButton.setToggleState (tape.loopOn.load(), juce::dontSendNotification);
     punchButton.setToggleState (tape.punchOn.load(), juce::dontSendNotification);
 }

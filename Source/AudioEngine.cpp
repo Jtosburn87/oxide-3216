@@ -525,6 +525,12 @@ void AudioEngine::render (const float* const* inputs, int numInputs, float* cons
     }
     for (int k = 0; k < Config::numAux; ++k)
         buses.aux[k] = aux[(size_t) k].data();
+    // Soloing: the effects (auxes returning to main) are heard with the soloed strips, fed by those strips alone.
+    // Never while exporting or bouncing: the file always gets the whole mix.
+    if (anySolo && mainLeft == nullptr && mainRight == nullptr && ! bouncing.load (std::memory_order_relaxed))
+        for (int k = 0; k < Config::numAux; ++k)
+            if (auxMain[(size_t) k]->on())
+                buses.soloAuxes |= 1u << k;
 
     for (auto* eq : groupEq)
         eq->update();
@@ -555,6 +561,8 @@ void AudioEngine::render (const float* const* inputs, int numInputs, float* cons
         juce::FloatVectorOperations::clear (mixR.data(), n);
         juce::FloatVectorOperations::clear (soloL.data(), n);
         juce::FloatVectorOperations::clear (soloR.data(), n);
+        juce::FloatVectorOperations::clear (soloReturnL.data(), n);
+        juce::FloatVectorOperations::clear (soloReturnR.data(), n);
         for (int k = 0; k < Config::numSubs; ++k)
         {
             juce::FloatVectorOperations::clear (subL[(size_t) k].data(), n);
@@ -716,6 +724,11 @@ void AudioEngine::render (const float* const* inputs, int numInputs, float* cons
             returnDelay[(size_t) k * 2 + 1].process (returnR.data(), n, d);
             juce::FloatVectorOperations::add (mixL.data(), returnL.data(), n);
             juce::FloatVectorOperations::add (mixR.data(), returnR.data(), n);
+            if ((buses.soloAuxes >> k) & 1u)
+            {
+                juce::FloatVectorOperations::add (soloReturnL.data(), returnL.data(), n);
+                juce::FloatVectorOperations::add (soloReturnR.data(), returnR.data(), n);
+            }
         }
 
         // The aux outputs (headphone cues) wait as long as main, so what a player hears on a cue lines up with what
@@ -826,6 +839,11 @@ void AudioEngine::render (const float* const* inputs, int numInputs, float* cons
         // The solo bus, in step with main.
         soloDelayL.process (soloL.data(), n, outputDelay);
         soloDelayR.process (soloR.data(), n, outputDelay);
+        // The effects heard with the solo: already in step with the dry mix, they wait for the master inserts only.
+        soloReturnDelayL.process (soloReturnL.data(), n, outputDelay - compensation);
+        soloReturnDelayR.process (soloReturnR.data(), n, outputDelay - compensation);
+        juce::FloatVectorOperations::add (soloL.data(), soloReturnL.data(), n);
+        juce::FloatVectorOperations::add (soloR.data(), soloReturnR.data(), n);
         const float soloT = anySolo ? 1.0f : 0.0f;
 
         // Main outs: the main mix, or the solo bus while anything is soloed (the patch bay has no monitor out of its

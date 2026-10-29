@@ -32,4 +32,7 @@ struct BusPointers
     float* aux[Config::numAux] {};
     float* soloL = nullptr;   // solo bus: what the monitor outs carry while anything is soloed
     float* soloR = nullptr;
+    /** While anything is soloed: bit k = aux k returns to main (an effect). It is heard with the solo, and only the
+        soloed strips send to it. */
+    unsigned soloAuxes = 0;
 };

@@ -40,7 +40,8 @@ THE CONSOLE
 Left bank: 16 input channels. Right bank: 16 tape-return channels. Each strip's fader has a column
 beside it (after the reference console): Mute, Main and S1-S4 assigns, the channel meter, and Solo with
 its LED. Solo goes to the monitor outs and to the main outs (there is no separate monitor out on
-the patch bay); exports and Bounce Song ignore it and always take the full mix. Pan sits at the foot of the knob area.
+the patch bay); exports and Bounce Song ignore it and always take the full mix. A soloed channel is heard
+with its effects: every aux assigned to Main comes back with the solo, fed only by the soloed channels. Pan sits at the foot of the knob area.
  Centre: tape machine,
 group EQs, Tempo, inserts and aux returns, bus faders and the main fader. The stereo bus
 compressor has a window of its own: the SBC button above the Master insert slots opens it (SBC lights
@@ -71,7 +72,8 @@ Every strip: phase (Ø), gain (drives the preamp), trim (after the preamp), gain
 (the chain button between them, on by default: turning the gain turns the trim the other way,
 so you drive the preamp harder or cleaner at the same level), high-pass filter, 4-band EQ, gate (Fast atk = fast attack with the pop),
 compressor, 8 aux sends (P = pre-fader), sub assigns S1-S4, main assign, pan,
-mute, solo, fader. Double-click a scribble strip to rename it.
+mute, solo, fader. Double-click a scribble strip to rename it. The channel number is printed at the
+top of the strip (right of Input) and in the colour box at the bottom.
 Channel colours: click a scribble strip to select it (Shift+click selects the ones between, Ctrl+click
 adds or removes one), then click the colour box left of a name: Red, Orange, Yellow, Green, Blue,
 Indigo, Violet, White or Black for every selected channel. The name is written in the opposite colour
@@ -115,7 +117,8 @@ interface input your mic is on; that patches it into TB In on the patch bay. Hol
 double-click it to latch. Setup chooses which auxes (1-8) it goes to and sets the TB limiter. The
 monitors dim while you talk.
 
-Scenes (Scene box, under the Console buttons): 99 snapshots of every fader and knob. Switches,
+Scenes (Scene box, under the Console buttons): 99 snapshots of every fader and knob, and the channel
+mutes (with a fade, a channel unmutes as it starts and mutes as it ends). Other switches,
 names, plugins, the patch bay and the tape machine are not part of a scene. The red readout shows
 the selected scene; it flashes until you press GO to recall it, and the amber dot lights when a
 fader or knob has moved since. The arrows pick the previous / next stored scene. Right-click the
@@ -177,12 +180,13 @@ TAPE
 ----
 Arm tracks to monitor and record their input; unarmed tracks play back. Each Record arm button
 steps grey (off) > yellow (armed: the tape plays back to its return strip until Record is on in
-the transport, then it takes the input and records) > red (armed: input only, nothing from tape).
+the transport, then it takes the input and records - the button turns red) > red (armed: input only,
+nothing from tape). The Tape Machine window meters show the input on red tracks and the tape otherwise.
 Rew and FF wind like a real machine: they speed up over 3 seconds to 20x play speed and slow
 down to arrive at the start or the end of the recording. Stop brakes; Play takes over at once.
 Hold Rew or FF down (the keys, or their keyboard shortcuts) and the tape winds up to 40x while held;
 let go and it settles back to 20x.
-Rec arms recording (the whole key flashes red while it is on); Play rolls the tape. Stop takes
+Rec arms recording (the whole key flashes red while it is on, steady red while recording); Play rolls the tape. Stop takes
 Rec off again; the tracks stay armed. Recording is shifted by the interface's latency
 (plus any plugin delay) so overdubs line up with what you heard. If they still land early
 or late with your interface, correct it under Audio device > Recording offset.
@@ -289,7 +293,8 @@ session.json inside a session folder. The last session reopens at start-up.
 Session > Export tracks, both into the session's Bounced Audio folder:
 - Bounce Song (Ctrl+E): plays the song in real time and records the main mix (after the limiter,
   without the click) to a 24-bit stereo WAV, so you can mix as it plays. Whole song (to the end of the
-  tape or the last MIDI clip, plus 3 s) or In to Out. Finish or Stop ends it early; Cancel throws it away.
+  tape or the last MIDI clip, plus 3 s) or In to Out; the window has its own Set In / Set Out (from the
+  tape position) and stays open while you move the tape. Finish or Stop ends it early; Cancel throws it away.
 - Export From Tape (Ctrl+Shift+E): the tape tracks you tick, whole tape or In to Out, straight off the
   tape, one mono 24-bit WAV each ("<name> Track 01.wav", plus the return strip's name if renamed).
 

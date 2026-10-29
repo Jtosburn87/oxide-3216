@@ -513,8 +513,11 @@ void TapeMachine::process (const float* const* tapeIn, float* const* tapeOut, in
         float* dst = recordBuf[(size_t) t].data();
         const float* in = tapeIn[t];
         if (armed && in != nullptr)
+        {
             for (int i = 0; i < n; ++i)
                 dst[i] = in[i] * gainScratch[(size_t) i];
+            raisePeak (inPeak[(size_t) t], dst, n);   // the meter bridge on a red track
+        }
         else
             std::memset (dst, 0, sizeof (float) * (size_t) n);
     }
@@ -615,13 +618,7 @@ void TapeMachine::process (const float* const* tapeIn, float* const* tapeOut, in
 
     // Tape out meters (the meter bridge).
     for (int t = 0; t < numTracks; ++t)
-    {
-        float pk = 0.0f;
-        for (int i = 0; i < n; ++i)
-            pk = juce::jmax (pk, std::abs (tapeOut[t][i]));
-        auto current = outPeak[(size_t) t].load (std::memory_order_relaxed);
-        while (pk > current && ! outPeak[(size_t) t].compare_exchange_weak (current, pk, std::memory_order_relaxed)) {}
-    }
+        raisePeak (outPeak[(size_t) t], tapeOut[t], n);
 
     position.store (pos);
 }
@@ -1166,4 +1163,13 @@ float TapeMachine::punchGain (juce::int64 p, juce::int64 punchIn, juce::int64 pu
     // Raised cosine: the old and new gains always add up to one.
     const float x = ((float) edge + 0.5f) / (float) fade;
     return 0.5f - 0.5f * std::cos (x * juce::MathConstants<float>::pi);
+}
+
+void TapeMachine::raisePeak (std::atomic<float>& peak, const float* data, int n) noexcept
+{
+    float pk = 0.0f;
+    for (int i = 0; i < n; ++i)
+        pk = juce::jmax (pk, std::abs (data[i]));
+    auto current = peak.load (std::memory_order_relaxed);
+    while (pk > current && ! peak.compare_exchange_weak (current, pk, std::memory_order_relaxed)) {}
 }

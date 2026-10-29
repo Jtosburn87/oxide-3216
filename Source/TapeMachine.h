@@ -197,6 +197,15 @@ public:
 
     /** Peak of a track's tape out since the last call (the meter bridge). Any thread. */
     float takeOutputPeak (int track) noexcept { return outPeak[(size_t) track].exchange (0.0f); }
+    /** Peak of what a track takes in to record (after the record level) since the last call; 0 while it takes none. */
+    float takeInputPeak (int track) noexcept { return inPeak[(size_t) track].exchange (0.0f); }
+    /** The meter bridge: the input on a track that takes it (red), the playback otherwise (yellow until Record, off).
+        Clears both. */
+    float takeMeterPeak (int track) noexcept
+    {
+        const float in = takeInputPeak (track), out = takeOutputPeak (track);
+        return takesInput (track) ? in : out;
+    }
 
     /** Tape character on/off. Always on in the app; the tests switch it off to check storage bit-for-bit. */
     std::atomic<bool> characterOn { true };
@@ -247,6 +256,8 @@ private:
     juce::CriticalSection storageLock;
     void clearTrackFile (int track) noexcept;
     std::array<std::atomic<float>, numTracks> outPeak {};
+    std::array<std::atomic<float>, numTracks> inPeak {};
+    static void raisePeak (std::atomic<float>&, const float*, int) noexcept;
 
     // Vari-speed (rate != 1): the tape is read at fractional positions and recorded through a resampler.
     static constexpr double maxRate = 4.6;   // 30 ips + 12 % on a tape recorded at 7.5

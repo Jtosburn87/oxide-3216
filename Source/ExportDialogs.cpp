@@ -185,6 +185,179 @@ namespace
 
     std::unique_ptr<juce::DocumentWindow> bounceWindow;
 
+    /** The bounce windows (setup, then the run): the close button, where there is one, cancels. */
+    struct BounceWindow : juce::DocumentWindow
+    {
+        using juce::DocumentWindow::DocumentWindow;
+        void closeButtonPressed() override { juce::MessageManager::callAsync ([] { bounceWindow = nullptr; }); }
+    };
+
+    void showInWindow (juce::Component* content, const juce::String& title, int buttons)
+    {
+        bounceWindow = std::make_unique<BounceWindow> (title, room, buttons);
+        bounceWindow->setUsingNativeTitleBar (true);
+        bounceWindow->setContentOwned (content, true);
+        bounceWindow->setAlwaysOnTop (true);
+        bounceWindow->centreWithSize (bounceWindow->getWidth(), bounceWindow->getHeight());
+        bounceWindow->setVisible (true);
+    }
+
+    void startBounce (AudioEngine& engine, juce::File file, juce::int64 start, juce::int64 end, double tail, double rate)
+    {
+        auto run = std::make_unique<BounceRun> (engine, file, start, end, tail, rate);
+        juce::String error;
+        if (! run->begin (error))
+        {
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Bounce Song", error);
+            return;
+        }
+        run->onClosed = [] { bounceWindow = nullptr; };
+        showInWindow (run.release(), "Bounce Song", juce::DocumentWindow::minimiseButton);
+    }
+
+    //==========================================================================
+    /** Before a bounce: the range, its own Set In / Set Out (the tape's In and Out, as on the console, from where the
+        tape is now) and the file name. A window that stays open, so the tape can be moved to the points meanwhile. */
+    class BounceSetup : public juce::Component,
+                        private juce::Timer
+    {
+    public:
+        BounceSetup (AudioEngine& e, juce::File f, juce::PropertiesFile& s, double rate)
+            : engine (e), folder (std::move (f)), settings (s), deviceRate (rate)
+        {
+            intro.setText ("Plays the song in real time and records the main mix (after the limiter, without the click) to a "
+                           "24-bit WAV in\n" + folder.getFullPathName() + "\n\nMix as it plays.", juce::dontSendNotification);
+            intro.setFont (ConsoleLookAndFeel::uiFont (13.0f));
+            intro.setJustificationType (juce::Justification::topLeft);
+            for (auto* l : { &intro, &rangeLabel, &inLabel, &outLabel, &nameLabel })
+                l->setColour (juce::Label::textColourId, legend);
+            for (auto* l : { &inTime, &outTime })
+            {
+                l->setFont (juce::FontOptions (juce::Font::getDefaultMonospacedFontName(), 15.0f, juce::Font::plain));
+                l->setColour (juce::Label::textColourId, juce::Colour (0xffff5a45));
+                l->setColour (juce::Label::backgroundColourId, juce::Colour (0xff0b0c0d));
+                l->setJustificationType (juce::Justification::centred);
+            }
+            rangeLabel.setText ("Range", juce::dontSendNotification);
+            inLabel.setText ("In", juce::dontSendNotification);
+            outLabel.setText ("Out", juce::dontSendNotification);
+            nameLabel.setText ("File name", juce::dontSendNotification);
+
+            range.addItem ("Whole song (with a 3 s tail)", 1);
+            range.addItem ("In to Out", 2);
+            range.setSelectedId (engine.tape.hasRegion() && settings.getValue ("bounceRange") == "inOut" ? 2 : 1, juce::dontSendNotification);
+            setIn.setTooltip ("Set the In point where the tape is now");
+            setOut.setTooltip ("Set the Out point where the tape is now");
+            setIn.onClick  = [this] { engine.tape.setInPoint (engine.tape.getPosition()); pointsSet(); };
+            setOut.onClick = [this] { engine.tape.setOutPoint (engine.tape.getPosition()); pointsSet(); };
+            name.setText (juce::File::createLegalFileName (engine.projectName.toString()), false);
+            name.onReturnKey = [this] { go(); };
+            startButton.onClick = [this] { go(); };
+            cancelButton.onClick = [] { juce::MessageManager::callAsync ([] { bounceWindow = nullptr; }); };
+
+            for (juce::Component* c : { (juce::Component*) &intro, (juce::Component*) &rangeLabel, (juce::Component*) &range,
+                                        (juce::Component*) &inLabel, (juce::Component*) &inTime, (juce::Component*) &setIn,
+                                        (juce::Component*) &outLabel, (juce::Component*) &outTime, (juce::Component*) &setOut,
+                                        (juce::Component*) &nameLabel, (juce::Component*) &name,
+                                        (juce::Component*) &startButton, (juce::Component*) &cancelButton })
+                addAndMakeVisible (c);
+            timerCallback();
+            startTimerHz (10);
+            setSize (480, 330);
+        }
+
+        void paint (juce::Graphics& g) override { g.fillAll (room); }
+
+        void resized() override
+        {
+            auto r = getLocalBounds().reduced (16, 12);
+            intro.setBounds (r.removeFromTop (92));
+            r.removeFromTop (6);
+            const auto row = [&r] { auto x = r.removeFromTop (28); r.removeFromTop (8); return x; };
+            auto x = row();
+            rangeLabel.setBounds (x.removeFromLeft (70));
+            range.setBounds (x);
+            for (auto [label, time, button] : { std::tuple { &inLabel, &inTime, &setIn }, std::tuple { &outLabel, &outTime, &setOut } })
+            {
+                x = row();
+                label->setBounds (x.removeFromLeft (70));
+                time->setBounds (x.removeFromLeft (110));
+                x.removeFromLeft (8);
+                button->setBounds (x.removeFromLeft (90));
+            }
+            x = row();
+            nameLabel.setBounds (x.removeFromLeft (70));
+            name.setBounds (x);
+            auto buttons = r.removeFromBottom (28);
+            cancelButton.setBounds (buttons.removeFromRight (90));
+            buttons.removeFromRight (8);
+            startButton.setBounds (buttons.removeFromRight (90));
+        }
+
+    private:
+        AudioEngine& engine;
+        juce::File folder;
+        juce::PropertiesFile& settings;
+        double deviceRate;
+        juce::Label intro, rangeLabel, inLabel, outLabel, inTime, outTime, nameLabel;
+        juce::ComboBox range;
+        juce::TextButton setIn { "Set In" }, setOut { "Set Out" }, startButton { "Start" }, cancelButton { "Cancel" };
+        juce::TextEditor name;
+
+        /** m:ss.t (the In and Out points to a tenth). */
+        static juce::String pointText (juce::int64 samples, double sr)
+        {
+            const double s = (double) samples / juce::jmax (1.0, sr);
+            return clockText (s) + "." + juce::String ((int) (s * 10.0) % 10);
+        }
+
+        void pointsSet()
+        {
+            if (engine.tape.hasRegion())
+                range.setSelectedId (2, juce::dontSendNotification);   // marking a range means bouncing it
+            timerCallback();
+        }
+
+        void timerCallback() override   // In and Out can change on the console too
+        {
+            auto& tape = engine.tape;
+            const double sr = tape.getSampleRate();
+            inTime.setText (pointText (tape.getInPoint(), sr), juce::dontSendNotification);
+            outTime.setText (pointText (tape.getOutPoint(), sr), juce::dontSendNotification);
+            const bool region = tape.hasRegion();
+            const auto text = region ? "In to Out (" + rangeText (tape) + ")" : juce::String ("In to Out (Out must be after In)");
+            if (range.getItemText (1) != text)
+                range.changeItemText (2, text);
+            range.setItemEnabled (2, region);
+            if (! region && range.getSelectedId() == 2)
+                range.setSelectedId (1, juce::dontSendNotification);
+        }
+
+        void go()
+        {
+            auto& t = engine.tape;
+            const bool inOut = range.getSelectedId() == 2 && t.hasRegion();
+            settings.setValue ("bounceRange", inOut ? "inOut" : "whole");
+            auto fileName = juce::File::createLegalFileName (name.getText().trim());
+            if (fileName.isEmpty())
+                fileName = "Bounce";
+            const auto file = folder.getChildFile (fileName.endsWithIgnoreCase (".wav") ? fileName : fileName + ".wav");
+            const auto start = inOut ? t.getInPoint() : (juce::int64) 0;
+            const auto end = inOut ? t.getOutPoint() : songEnd (engine);
+            const double tail = inOut ? 0.0 : 3.0;
+            auto& e = engine;
+            const double rate = deviceRate;
+            askToReplace ("Bounce Song", { file }, [&e, file, start, end, tail, rate]
+            {
+                juce::MessageManager::callAsync ([&e, file, start, end, tail, rate]
+                {
+                    bounceWindow = nullptr;   // the setup window (and this panel)
+                    startBounce (e, file, start, end, tail, rate);
+                });
+            });
+        }
+    };
+
     //==========================================================================
     /** Writes the chosen tape tracks on a worker thread (the audio keeps running). */
     class ExportTapeJob : public juce::ThreadWithProgressWindow
@@ -384,60 +557,14 @@ void ExportDialogs::bounceSong (AudioEngine& engine, const juce::File& folder, j
                                                 "Audio is off. A bounce plays the song in real time, so switch the audio interface on first (Power).");
         return;
     }
-    auto& tape = engine.tape;
     if (songEnd (engine) <= 0)
     {
         juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Bounce Song", "There is nothing on the tape or the MIDI page yet.");
         return;
     }
 
-    const bool region = tape.hasRegion();
-    auto* w = new juce::AlertWindow ("Bounce Song",
-                                     "Plays the song in real time and records the main mix (after the limiter, without the click) to a 24-bit WAV "
-                                     "in\n" + folder.getFullPathName() + "\n\nMix as it plays.",
-                                     juce::MessageBoxIconType::NoIcon);
-    w->addComboBox ("range", { "Whole song (with a 3 s tail)", region ? "In to Out (" + rangeText (tape) + ")" : juce::String ("In to Out (set In and Out first)") }, "Range");
-    auto* range = w->getComboBoxComponent ("range");
-    range->setItemEnabled (2, region);
-    range->setSelectedItemIndex (region && settings.getValue ("bounceRange") == "inOut" ? 1 : 0);
-    w->addTextEditor ("name", juce::File::createLegalFileName (engine.projectName.toString()), "File name");
-    w->addButton ("Start", 1, juce::KeyPress (juce::KeyPress::returnKey));
-    w->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
-
-    const double rate = device->getCurrentSampleRate();
-    w->enterModalState (true, juce::ModalCallbackFunction::create ([&engine, &settings, w, folder, rate] (int button)
-    {
-        if (button != 1)
-            return;
-        auto& t = engine.tape;
-        const bool inOut = w->getComboBoxComponent ("range")->getSelectedItemIndex() == 1 && t.hasRegion();
-        settings.setValue ("bounceRange", inOut ? "inOut" : "whole");
-        auto name = juce::File::createLegalFileName (w->getTextEditorContents ("name").trim());
-        if (name.isEmpty())
-            name = "Bounce";
-        const auto file = folder.getChildFile (name.endsWithIgnoreCase (".wav") ? name : name + ".wav");
-        const auto start = inOut ? t.getInPoint() : (juce::int64) 0;
-        const auto end = inOut ? t.getOutPoint() : songEnd (engine);
-        const double tail = inOut ? 0.0 : 3.0;
-
-        askToReplace ("Bounce Song", { file }, [&engine, file, start, end, tail, rate]
-        {
-            auto run = std::make_unique<BounceRun> (engine, file, start, end, tail, rate);
-            juce::String error;
-            if (! run->begin (error))
-            {
-                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Bounce Song", error);
-                return;
-            }
-            run->onClosed = [] { bounceWindow = nullptr; };
-            bounceWindow = std::make_unique<juce::DocumentWindow> ("Bounce Song", room, juce::DocumentWindow::minimiseButton);
-            bounceWindow->setUsingNativeTitleBar (true);
-            bounceWindow->setContentOwned (run.release(), true);
-            bounceWindow->setAlwaysOnTop (true);
-            bounceWindow->centreWithSize (bounceWindow->getWidth(), bounceWindow->getHeight());
-            bounceWindow->setVisible (true);
-        });
-    }), true);
+    showInWindow (new BounceSetup (engine, folder, settings, device->getCurrentSampleRate()), "Bounce Song",
+                  juce::DocumentWindow::minimiseButton | juce::DocumentWindow::closeButton);
 }
 
 void ExportDialogs::exportFromTape (AudioEngine& engine, const juce::File& folder, juce::PropertiesFile& settings)

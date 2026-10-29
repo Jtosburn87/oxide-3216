@@ -4,7 +4,7 @@
 #include "TapeMachine.h"
 
 /** The tape machine's meter section, after a 1980s cassette multitrack: for each track a number tab,
-    a 15-LED peak bar from -20 to +6, a record LED and a record function switch (arms the track).
+    a 15-LED peak bar from -20 to +6 (the input on a track armed red, the tape otherwise), a record LED and a record function switch (arms the track).
     Two rows of eight: tracks 1-8 above 9-16. Drawn at a fixed design size and scaled to its bounds.
     The right-hand part of the Tape machine window.
 

@@ -7,6 +7,8 @@ SceneMemory::SceneMemory (ParamSet& p) : params (p)
 
 bool SceneMemory::isSceneControl (const Param& p)
 {
+    if (p.scale == Param::Scale::toggle)
+        return p.id.endsWith (".mute");   // channel mutes (ch1.mute, rt1.mute ...)
     return (p.scale == Param::Scale::linear || p.scale == Param::Scale::log)
         && ! p.id.startsWith ("tape.") && ! p.id.startsWith ("osc.") && ! p.id.startsWith ("scene.")
         && ! p.id.startsWith ("tempo.") && ! p.id.startsWith ("click.");   // the song's tempo is not a mix setting
@@ -79,12 +81,16 @@ bool SceneMemory::recall (int s)
     for (const auto& [id, value] : scenes[(size_t) s].values)
         if (auto* p = params.find (id); p != nullptr && isSceneControl (*p))
         {
-            if (seconds < 0.01)
-                p->set (value);
+            if (seconds < 0.01 || (p->scale == Param::Scale::toggle && value < 0.5f))
+                p->set (value);   // at once (an unmute comes in as the fade starts)
+            else if (p->scale == Param::Scale::toggle)
+                muteAtEnd.push_back ({ p, value });   // a mute waits for the fade out
             else if (p->get() != value)
                 fading.push_back ({ p, p->toNormalised (p->get()), p->toNormalised (value), value, p->get() });
         }
-    if (! fading.empty())
+    if (fading.empty())
+        applyMutesAtEnd();
+    else
     {
         fadeStart = juce::Time::getMillisecondCounterHiRes();
         fadeLength = seconds * 1000.0;
@@ -126,6 +132,13 @@ void SceneMemory::stopFade()
 {
     stopTimer();
     fading.clear();
+    applyMutesAtEnd();   // stopped early (store, clear, another recall): the mutes still land
+}
+
+void SceneMemory::applyMutesAtEnd()
+{
+    for (auto [param, value] : std::exchange (muteAtEnd, {}))
+        param->set (value);
 }
 
 void SceneMemory::select (int s)

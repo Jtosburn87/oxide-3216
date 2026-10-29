@@ -474,7 +474,8 @@ void TransportKey::paintButton (juce::Graphics& g, bool isMouseOver, bool isButt
     const auto labelArea = b.removeFromTop ((float) labelHeight);
     const auto name = getName().toUpperCase();
     const bool hasLed = ! ledColour.isTransparent();
-    const float ledRoom = hasLed ? 8.0f : 0.0f;
+    const float ledR = icon == record ? 3.2f : 2.2f;   // the record LED is a size bigger
+    const float ledRoom = hasLed ? ledR + 5.8f : 0.0f;
     float fontSize = 9.0f, textW = 0.0f;
     for (;; fontSize -= 0.5f)   // long names (RECORD) get a touch smaller rather than pushing the LED off the key
     {
@@ -488,14 +489,15 @@ void TransportKey::paintButton (juce::Graphics& g, bool isMouseOver, bool isButt
     g.drawText (name, juce::Rectangle<float> (textX, labelArea.getY(), textW + 1.0f, labelArea.getHeight()), juce::Justification::centredLeft, false);
     if (hasLed)
     {
-        const juce::Point<float> led (textX + textW + 5.0f, labelArea.getCentreY());
+        const juce::Point<float> led (textX + textW + 2.8f + ledR, labelArea.getCentreY());
+        const float glow = ledR * 2.0f;
         if (on)
         {
             g.setColour (ledColour.withAlpha (0.3f));
-            g.fillEllipse (led.x - 4.5f, led.y - 4.5f, 9.0f, 9.0f);
+            g.fillEllipse (led.x - glow, led.y - glow, glow * 2.0f, glow * 2.0f);
         }
         g.setColour (on ? ledColour : ledColour.withMultipliedBrightness (0.22f));
-        g.fillEllipse (led.x - 2.2f, led.y - 2.2f, 4.4f, 4.4f);
+        g.fillEllipse (led.x - ledR, led.y - ledR, ledR * 2.0f, ledR * 2.0f);
     }
 
     // The record key while Record is on flashes red, the whole key (glow round it too).
@@ -530,7 +532,7 @@ void TransportKey::paintButton (juce::Graphics& g, bool isMouseOver, bool isButt
 
 bool TransportKey::blinkLit() const
 {
-    return (juce::Time::getMillisecondCounter() / 400) % 2 == 0;
+    return steady || (juce::Time::getMillisecondCounter() / 400) % 2 == 0;
 }
 
 void TransportKey::timerCallback()
@@ -620,6 +622,7 @@ ArmButton::ArmButton (TapeMachine& t, int k) : juce::TextButton (juce::String (k
     tape.arm[(size_t) track]->addListener (this);
     tape.armPlay[(size_t) track]->addListener (this);
     update();
+    startTimerHz (15);
 }
 
 ArmButton::~ArmButton()
@@ -631,7 +634,8 @@ ArmButton::~ArmButton()
 void ArmButton::update()
 {
     const auto s = tape.getArmState (track);
-    const bool yellow = s == TapeMachine::ArmState::playback;
+    shownRecord = tape.isRecordEnabled();
+    const bool yellow = s == TapeMachine::ArmState::playback && ! shownRecord;   // with Record on it takes the input: red
     setColour (juce::TextButton::buttonOnColourId, yellow ? ConsoleColours::amber : juce::Colour (0xffd0473c));
     setColour (juce::TextButton::textColourOnId, yellow ? juce::Colour (0xff1b1b1b) : juce::Colours::white);
     setToggleState (s != TapeMachine::ArmState::off, juce::dontSendNotification);
@@ -641,6 +645,12 @@ void ArmButton::update()
 void ArmButton::clicked()
 {
     tape.stepArmState (track);
+}
+
+void ArmButton::timerCallback()
+{
+    if (tape.isRecordEnabled() != shownRecord)
+        update();
 }
 
 void ParamButton::mouseDown (const juce::MouseEvent& e)

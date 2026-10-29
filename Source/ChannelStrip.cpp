@@ -77,7 +77,7 @@ float ChannelStrip::targetFader() const noexcept
     return controls.mute->on() ? 0.0f : Dsp::faderGain (controls.fader->get());
 }
 
-ChannelStrip::Targets ChannelStrip::targets() const noexcept
+ChannelStrip::Targets ChannelStrip::targets (unsigned soloAuxes) const noexcept
 {
     Targets t {};
     float l, r;
@@ -117,6 +117,12 @@ ChannelStrip::Targets ChannelStrip::targets() const noexcept
             t.aux[k + 1] = auxGain (controls.auxLevel[k + 1]->get());
         }
     }
+
+    // Something else is soloed: this strip stays out of the effects heard with the solo.
+    if (! soloed)
+        for (int k = 0; k < Config::numAux; ++k)
+            if ((soloAuxes >> k) & 1u)
+                t.aux[k] = 0.0f;
     return t;
 }
 
@@ -214,7 +220,7 @@ void ChannelStrip::process (const float* in, float* direct, const BusPointers& b
     raisePeak (inputPeak, inPk);
 
     // Bus sends, each with its gain ramped across the block.
-    const auto t = targets();
+    const auto t = targets (buses.soloAuxes);
 
     Dsp::addRamped (buses.mainL, direct, lastMain[0], t.main[0], n);
     Dsp::addRamped (buses.mainR, direct, lastMain[1], t.main[1], n);

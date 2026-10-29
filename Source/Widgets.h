@@ -119,9 +119,10 @@ private:
 };
 
 /** A tape track's record arm: grey (off), yellow (armed, the tape plays back until Record is on), red (armed,
-    input only). A click steps grey -> yellow -> red -> grey. */
+    input only). A click steps grey -> yellow -> red -> grey. Yellow shows red while Record is on. */
 class ArmButton : public juce::TextButton,
-                  private Param::Listener
+                  private Param::Listener,
+                  private juce::Timer
 {
 public:
     ArmButton (TapeMachine&, int track);
@@ -133,6 +134,8 @@ private:
     void update();
     void paramChanged (Param&) override { update(); }
     void clicked() override;
+    void timerCallback() override;   // yellow turns red while Record is on
+    bool shownRecord = false;
 };
 
 /** A ParamButton drawn as a chain: two links joined while on, pulled apart while off. */
@@ -232,14 +235,17 @@ public:
 
     static constexpr int labelHeight = 12;
 
+    /** The record key: steady red while the tape records; while Record is on with the tape stopped it flashes. */
+    void setSteady (bool s) { if (std::exchange (steady, s) != s) repaint(); }
+
 private:
     const Icon icon;
     const juce::Colour ledColour;
 
     void paintIcon (juce::Graphics&, juce::Rectangle<float>, juce::Colour) const;
     void timerCallback() override;
-    bool blinkLit() const;   // the record key while on: the whole key flashes red
-    bool shownLit = false;
+    bool blinkLit() const;   // the record key while on: the whole key flashes red (steady while recording)
+    bool shownLit = false, steady = false;
 };
 
 /** A female XLR socket as on a console's front panel: metal shell, latch tab on top, three contact holes.

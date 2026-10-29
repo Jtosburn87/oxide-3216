@@ -1790,6 +1790,20 @@ namespace
             clickResponse (e, 8);   // let the left side of the return glide down
             const auto quiet = clickResponse (e, 12);
             check (near (quiet[2 * 256 + 10 + 64], 0.25f * pan, 1.0e-3f), "return panned right: only the (compensated) dry click on the left");
+
+            // Solo: the soloed strip is heard with its effect, in step; a strip that isn't soloed stays out of it.
+            e.auxReturnPan[0]->set (0.0f);
+            e.inputStrips[0]->controls.solo->set (1.0f);
+            clickResponse (e, 8);
+            const auto soloed = clickResponse (e, 12);
+            const auto ps = peaksAbove (soloed, 0.1f);
+            check (ps.size() == 1 && ps[0] == p[0] && near (soloed[(size_t) ps[0]], 0.25f * (pan + 1.5f), 1.0e-3f),
+                   "solo: the strip's aux send comes back through the effect, lined up with the dry signal");
+            e.inputStrips[0]->controls.solo->set (0.0f);
+            e.inputStrips[1]->controls.solo->set (1.0f);   // a silent strip soloed instead
+            clickResponse (e, 8);
+            check (peaksAbove (clickResponse (e, 12), 0.01f).empty(), "solo elsewhere: an unsoloed strip's send is not heard through the effect");
+            e.inputStrips[1]->controls.solo->set (0.0f);
         }
         {
             // A plugin with a mono input on the stereo master: gets (L+R)/2, output on both sides.
@@ -2139,7 +2153,7 @@ namespace
 
     void testScenes()
     {
-        std::puts ("Scenes: faders and knobs only, saved with the session");
+        std::puts ("Scenes: faders, knobs and mutes, saved with the session");
         TestEngine e;
         e.prepare (48000.0, channels ({ 0 }), channels ({ 0, 1 }));
         auto& s = e.scenes;
@@ -2168,7 +2182,8 @@ namespace
         check (s.recall (s.getSelected()), "go recalls the selected scene");
         check (ch.controls.fader->get() == 70.0f && ch.controls.pan->get() == -0.5f && ch.eq.gain[FourBandEq::HF]->get() == 6.0f,
                "faders and knobs come back");
-        check (ch.controls.mute->on() && e.tape.pitch->get() == 4.0f, "switches and the tape machine stay as they are");
+        check (! ch.controls.mute->on(), "mutes come back too");
+        check (e.tape.pitch->get() == 4.0f && ! e.inputStrips[3]->controls.solo->on(), "other switches and the tape machine stay as they are");
 
         // Fades are stored with scenes as their fade out. Scene 05 again, now with a 2 s fade; scene 10 has 0 (the
         // knob when it was stored).
@@ -2186,15 +2201,18 @@ namespace
         const float mid = ch.controls.fader->get();
         std::printf ("      fader halfway through the fade: %.1f\n", mid);
         check (mid > 35.0f && mid < 55.0f, "halfway through the fade the fader is about halfway");
+        check (! ch.controls.mute->on(), "a channel going out of the scene mutes only when the fade ends");
         e.inputStrips[5]->controls.fader->set (33.0f);   // grab another fader mid-fade
         const auto otherBefore = e.inputStrips[5]->controls.fader->get();
         s.advanceFade (t0 + 2500.0);
         check (! s.isFading() && ch.controls.fader->get() == 20.0f && ch.eq.gain[FourBandEq::HF]->get() == -3.0f, "the fade ends exactly on the scene");
+        check (ch.controls.mute->on(), "and then it mutes");
         check (e.inputStrips[5]->controls.fader->get() == otherBefore, "a fader moved by hand during the fade stays where it was put");
         check (! SceneMemory::isSceneControl (*s.fadeTime), "the fade time itself is not part of a scene");
         s.fadeTime->set (4.0f);
         s.recall (4);
         check (! s.isFading() && ch.controls.fader->get() == 70.0f, "leaving scene 10 (fade 0) is instant, whatever the knob says");
+        check (! ch.controls.mute->on(), "an unmute is instant");
         check (s.fadeTime->get() == 2.0f, "and the knob shows scene 05's fade");
 
         // Through a session file and back.

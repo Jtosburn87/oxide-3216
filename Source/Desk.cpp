@@ -145,6 +145,8 @@ StripComponent::StripComponent (ChannelStrip& s, const juce::OwnedArray<ChannelS
     colourBox.setTooltip ("Colour of the selected channels (White: no group)");
     colourBox.onClick = [this] { chooseColour(); };
     colourBox.colour = stripColour (strip.scribbleColour);
+    colourBox.text = stripTextColour (strip.scribbleColour);
+    colourBox.number = juce::String (strip.idPrefix.getTrailingIntValue());   // the channel number, printed in the box
     colourScribble (scribble, strip.scribbleColour);
     shownColour = strip.scribbleColour;
     add (colourBox);
@@ -485,6 +487,18 @@ void StripComponent::paint (juce::Graphics& g)
     for (auto& s : sections)
         paintSection (g, s.title, s.box, stripGrey, s.titleIndent);
 
+    // The channel number (fixed), at the right end of the Input title line.
+    if (! sections.empty())
+    {
+        const auto top = sections.front().box;
+        const auto badge = juce::Rectangle<float> ((float) top.getRight() - 30.0f, (float) top.getY() - 7.0f, 24.0f, 14.0f);
+        g.setColour (juce::Colour (0xff17191a));
+        g.fillRoundedRectangle (badge, 3.0f);
+        g.setColour (legend);
+        g.setFont (ConsoleLookAndFeel::uiFont (11.0f, true));
+        g.drawText (colourBox.number, badge, juce::Justification::centred, false);
+    }
+
     // The meter's scale, printed to its left, and what it shows (input or output) underneath.
     const auto m = meter.getBounds();
     g.setFont (ConsoleLookAndFeel::uiFont (8.5f));
@@ -676,6 +690,9 @@ void StripComponent::ColourBox::paint (juce::Graphics& g)
     g.fillRoundedRectangle (r, 2.0f);
     g.setColour (juce::Colours::black.withAlpha (0.55f));
     g.drawRoundedRectangle (r, 2.0f, 1.0f);
+    g.setColour (text);
+    g.setFont (ConsoleLookAndFeel::uiFont (number.length() > 1 ? 10.0f : 11.0f, true));
+    g.drawText (number, r, juce::Justification::centred, false);
 }
 
 void StripComponent::update (const StripComponent* source)
@@ -689,6 +706,7 @@ void StripComponent::update (const StripComponent* source)
         shownColour = strip.scribbleColour;
         colourScribble (scribble, shownColour);
         colourBox.colour = stripColour (shownColour);
+        colourBox.text = stripTextColour (shownColour);
         colourBox.repaint();
         fader.slider.setTooltip (shownColour == 0 ? juce::String()
                                  : juce::String (stripColourName (shownColour)) + " group: the faders of this colour move together. Right-click drag moves this one alone.");
@@ -1299,6 +1317,7 @@ void CentreSection::update()
     rew.setToggleState (tape.getWindDirection() < 0, juce::dontSendNotification);
     ff.setToggleState (tape.getWindDirection() > 0, juce::dontSendNotification);
     rec.setToggleState (tape.isRecordEnabled(), juce::dontSendNotification);
+    rec.setSteady (tape.isPlaying());   // recording: steady red
     loopButton.setToggleState (tape.loopOn.load(), juce::dontSendNotification);
     punchButton.setToggleState (tape.punchOn.load(), juce::dontSendNotification);
     if (tape.getInPoint() != shownIn || tape.getOutPoint() != shownOut)

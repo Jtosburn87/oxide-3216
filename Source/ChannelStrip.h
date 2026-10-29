@@ -102,7 +102,8 @@ private:
     {
         float main[2], solo[2], sub[Config::numSubs][2], aux[Config::numAux];
     };
-    Targets targets() const noexcept;
+    /** soloAuxes: BusPointers::soloAuxes (a strip that is not soloed sends nothing to those). */
+    Targets targets (unsigned soloAuxes = 0) const noexcept;
     float targetGain() const noexcept;
     float targetFader() const noexcept;
 };

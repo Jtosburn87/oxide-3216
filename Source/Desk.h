@@ -100,6 +100,8 @@ private:
     struct ColourBox : juce::Component, juce::SettableTooltipClient
     {
         juce::Colour colour;
+        juce::Colour text;      // the number, readable on the colour
+        juce::String number;    // the channel number (fixed)
         std::function<void()> onClick;
         void paint (juce::Graphics&) override;
         void mouseDown (const juce::MouseEvent&) override { if (onClick) onClick(); }

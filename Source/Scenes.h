@@ -8,12 +8,13 @@
 #include <vector>
 
 /** Scene memory, as on a Yamaha digital console: 99 scenes, each a snapshot of the console's faders and knobs
-    (every continuous control). Switches (mutes, solos, assigns, In buttons, type selectors), names, plugins, the
-    patch bay and the tape machine are not part of a scene and stay as they are on recall.
+    (every continuous control) and the channel mutes. Other switches (solos, assigns, In buttons, type selectors),
+    names, plugins, the patch bay and the tape machine are not part of a scene and stay as they are on recall.
 
     The readout shows the selected scene; the arrows and the Scene Memory window move the selection, and Go
-    recalls it, gliding there over the fade time (0 = at once, up to 5 s). A control you move during a fade is
-    yours: the fade lets go of it. Message thread only. */
+    recalls it, gliding there over the fade time (0 = at once, up to 5 s). Mutes switch rather than glide: a channel
+    coming in unmutes as the fade starts, one going out mutes as it ends (so its fade out is heard). A control you
+    move during a fade is yours: the fade lets go of it. Message thread only. */
 class SceneMemory : private juce::Timer
 {
 public:
@@ -128,6 +129,8 @@ private:
     // A fade in progress: each control glides from where it was to the scene, in its knob's own travel.
     struct Glide { Param* param; float from, to, target, lastSet; };   // from, to: normalised; target: the scene value
     std::vector<Glide> fading;
+    std::vector<std::pair<Param*, float>> muteAtEnd;   // mutes switched on when the fade ends
+    void applyMutesAtEnd();
     double fadeStart = 0.0, fadeLength = 0.0;
     void timerCallback() override;
     void stopFade();

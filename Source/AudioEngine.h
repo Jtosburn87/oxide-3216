@@ -287,6 +287,7 @@ private:
     Block tbLimOut {};
     Block clickOut {};
     Block soloL {}, soloR {};
+    Block soloReturnL {}, soloReturnR {};   // the effects heard with a solo (see BusPointers::soloAuxes)
     std::array<Block, Config::numSubs> subL {}, subR {};
     std::array<Block, Config::numAux> aux {};
 
@@ -307,7 +308,7 @@ private:
     // Outputs held back by the plugin delay so they stay in step with main (see pdcOn).
     std::array<Dsp::DelayLine, Config::numAux> auxOutDelay;
     std::array<Dsp::DelayLine, Config::numSubs * 2> subOutDelay;
-    Dsp::DelayLine clickDelay, soloDelayL, soloDelayR;
+    Dsp::DelayLine clickDelay, soloDelayL, soloDelayR, soloReturnDelayL, soloReturnDelayR;
     int clickTail = 0;    // samples of delayed click still to come out after it stops
     juce::SpinLock bounceLock;
     juce::AudioFormatWriter::ThreadedWriter* bounceWriter = nullptr;
