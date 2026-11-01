@@ -20,6 +20,7 @@ ChannelStrip::ChannelStrip (ParamSet& params, const juce::String& prefix, const 
     controls.gain  = &params.add (id ("gain"), "Gain", -20.0f, 30.0f, 0.0f);
     controls.trim  = &params.add (id ("trim"), "Trim", -30.0f, 20.0f, 0.0f);   // the gain's range turned round
     controls.gainLink = &params.addToggle (id ("gain.link"), "Gain / trim link", true);
+    controls.preampType = &params.addStepped (id ("preamp.type"), "Preamp type", 2, 0);   // 0 Oxide, 1 the 73
     controls.hpf   = &params.add (id ("hpf"), "HPF", 20.0f, 300.0f, 20.0f, Param::Scale::log);
     controls.pan   = &params.add (id ("pan"), "Pan", -1.0f, 1.0f, 0.0f);
     controls.order = &params.addStepped (id ("order"), "Chain order", (int) chainOrders.size(), 0);
@@ -138,7 +139,7 @@ void ChannelStrip::prepare (double sr)
     comp.prepare (sr);
     gainGain.prepare (sr, targetGain());
     trimGain.prepare (sr, Dsp::dbToGain (controls.trim->get()));
-    preamp.prepare (sr, controls.gain->get(), isColoured());
+    preamp.prepare (sr, controls.gain->get(), isColoured(), is73());
     faderGain.prepare (sr, targetFader());
 
     const auto t = targets();
@@ -162,6 +163,7 @@ void ChannelStrip::process (const float* in, float* direct, const BusPointers& b
     const float faderT = targetFader();
     preamp.setGain (controls.gain->get());
     const bool coloured = isColoured();
+    const bool seventyThree = is73();
 
     const float hpf = controls.hpf->get();
     const bool hpOn = hpf >= hpfOffBelow;
@@ -199,7 +201,7 @@ void ChannelStrip::process (const float* in, float* direct, const BusPointers& b
     {
         float x = in != nullptr ? in[i] : 0.0f;
         x *= gainGain.next (gainT);
-        x = preamp.process (x, coloured);
+        x = preamp.process (x, coloured, seventyThree);
         x *= trimGain.next (trimT);
         inPk = juce::jmax (inPk, std::abs (x));
         if (hpOn)   x = hp.process (x);

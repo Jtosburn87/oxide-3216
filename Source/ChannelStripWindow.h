@@ -53,6 +53,7 @@ private:
     CompressorPanel compPanel;
     ParamButton compIn;
     juce::OwnedArray<RadioParamButton> compTypeButtons;   // 60, 76, LA, G
+    juce::OwnedArray<RadioParamButton> preampTypeButtons;   // OX, 73 (the preamp colour's voice)
     juce::OwnedArray<Knob> auxKnobs;
     juce::OwnedArray<ParamButton> auxPre;
     ParamButton mainButton, mute, solo;

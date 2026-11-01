@@ -1315,16 +1315,16 @@ namespace
     /** Harmonic levels (relative to the fundamental) of a sine through a Preamp. amp is in clipLevel units
         (0.5 = +20 dBu). Measured over whole cycles after half a second of settling. */
     struct PreampHarmonics { float h2, h3; };
-    PreampHarmonics preampHarmonics (float gainDb, double freq, float amp)
+    PreampHarmonics preampHarmonics (float gainDb, double freq, float amp, bool seventyThree = false)
     {
         constexpr double sr = 48000.0, twoPi = juce::MathConstants<double>::twoPi;
         Preamp p;
-        p.prepare (sr, gainDb, true);
+        p.prepare (sr, gainDb, true, seventyThree);
         const int warm = 24000, len = 24000;   // 0.5 s each: whole cycles at 1 kHz and 40 Hz
         double re[4] {}, im[4] {};
         for (int i = 0; i < warm + len; ++i)
         {
-            const float y = p.process (amp * Preamp::clipLevel * (float) std::sin (twoPi * freq * i / sr), true);
+            const float y = p.process (amp * Preamp::clipLevel * (float) std::sin (twoPi * freq * i / sr), true, seventyThree);
             if (i >= warm)
                 for (int h = 1; h <= 3; ++h)
                 {
@@ -1377,6 +1377,94 @@ namespace
         r.e.inputStrips[0]->takeInputPeak();
         r.run (1000.0f, 0.1f, 10);
         check (near (r.e.inputStrips[0]->takeInputPeak(), 0.1f * std::pow (10.0f, 1.5f), 1.0e-3f), "colour off: clean gain");
+    }
+
+    void testPreamp73()
+    {
+        std::puts ("Preamp 73 voice: transformer low end, lopsided clip, blocking");
+        constexpr double sr = 48000.0, twoPi = juce::MathConstants<double>::twoPi;
+
+        const auto quiet = preampHarmonics (0.0f, 1000.0, 0.05f, true);
+        check (quiet.h2 + quiet.h3 < 1.0e-4f, "73: clean at normal levels (-18 dBFS, 1 kHz)");
+        const auto low = preampHarmonics (0.0f, 40.0, 0.5f, true), mid = preampHarmonics (0.0f, 1000.0, 0.5f, true);
+        std::printf ("      +20 dBu, gain 0: 40 Hz 2nd %.4f %% 3rd %.4f %%, 1 kHz 3rd %.5f %%\n", low.h2 * 100.0f, low.h3 * 100.0f, mid.h3 * 100.0f);
+        check (low.h3 > 0.0002f && low.h3 < 0.002f && low.h3 > 2.0f * low.h2, "73: 3rd dominant at 40 Hz, about 0.05 %");
+        check (low.h3 > 10.0f * mid.h3, "73: the 3rd is a low-end thing (10x less at 1 kHz)");
+
+        // Gain at -18 dBFS, 1 kHz: about unity (the original's +0.05 dB at this drive).
+        {
+            Preamp p;
+            p.prepare (sr, 0.0f, true, true);
+            double in2 = 0, out2 = 0;
+            for (int i = 0; i < 48000; ++i)
+            {
+                const float x = 0.126f * (float) std::sin (twoPi * 1000.0 * i / sr);
+                const float y = p.process (x, true, true);
+                if (i >= 24000) { in2 += x * x; out2 += y * y; }
+            }
+            const float db = (float) (10.0 * std::log10 (out2 / in2));
+            std::printf ("      gain at -18 dBFS, 1 kHz: %+.3f dB\n", db);
+            check (std::abs (db - 0.05f) < 0.03f, "73: unity at normal levels");
+        }
+
+        // 6 dB past the rails: the positive half goes higher than the negative (a lopsided clip), within bounds.
+        {
+            Preamp p;
+            p.prepare (sr, 0.0f, true, true);
+            float hi = 0, lo = 0;
+            bool finite = true;
+            for (int i = 0; i < 48000; ++i)
+            {
+                const float y = p.process (2.0f * Preamp::clipLevel * (float) std::sin (twoPi * 1000.0 * i / sr), true, true);
+                finite = finite && std::isfinite (y);
+                if (i >= 24000) { hi = std::max (hi, y); lo = std::min (lo, y); }
+            }
+            std::printf ("      6 dB past the rails: +%.2f / %.2f (rails at %.2f)\n", hi, lo, Preamp::clipLevel);
+            check (finite && hi > 1.2f * -lo && hi < 2.2f * Preamp::clipLevel && -lo > 0.5f * Preamp::clipLevel, "73: lopsided clip");
+        }
+
+        // Blocking: after 23 dB past the rails a quiet tone ducks out, then comes back.
+        {
+            Preamp p;
+            p.prepare (sr, 0.0f, true, true);
+            for (int i = 0; i < 24000; ++i)
+                p.process (14.0f * Preamp::clipLevel * (float) std::sin (twoPi * 100.0 * i / sr), true, true);
+            const auto probe = [&] (int samples)
+            {
+                double s = 0;
+                for (int i = 0; i < samples; ++i)
+                {
+                    const float y = p.process (0.1f * (float) std::sin (twoPi * 2000.0 * i / sr), true, true);
+                    s += y * std::sin (twoPi * 2000.0 * i / sr);
+                }
+                return (float) (2.0 * s / samples / 0.1);
+            };
+            probe (960);                        // the first 20 ms (the overload's own LF tail)
+            const float early = probe (1920);   // 20 to 60 ms
+            probe (16320);                      // to 400 ms
+            const float late = std::abs (probe (4800));
+            std::printf ("      quiet tone after a big overload: %.3f from 20 to 60 ms, %.3f after 400 ms\n", std::abs (early), late);
+            check (std::abs (early) < 0.05f && late > 0.95f && late < 1.05f, "73: blocks after a big overload, then recovers");
+        }
+
+        // Through the engine: Oxide by default; switching to the 73 at normal level does not jump.
+        SineRig r;
+        r.e.preampColour->set (1.0f);
+        auto& strip = *r.e.inputStrips[0];
+        check (! strip.is73(), "preamp voice is Oxide by default");
+        const auto copied = strip.copyableSettings();
+        check (std::find (copied.begin(), copied.end(), strip.controls.preampType) != copied.end(), "preamp voice is copied with the strip");
+        r.measure (1000.0f, 0.1f);
+        strip.controls.preampType->set (1.0f);
+        strip.takeInputPeak();
+        r.run (1000.0f, 0.1f, 10);
+        const float during = strip.takeInputPeak();
+        r.run (1000.0f, 0.1f, 40);
+        strip.takeInputPeak();
+        r.run (1000.0f, 0.1f, 10);
+        const float after = strip.takeInputPeak();
+        std::printf ("      switching to the 73 at -20 dBFS: peak %.4f during, %.4f after\n", during, after);
+        check (strip.is73() && std::abs (during - 0.1f) < 0.004f && std::abs (after - 0.1f) < 0.004f, "switching voices does not jump");
     }
 
     /** Steady-state output peak of a BusCompressor fed with the same sine on both sides. */
@@ -4091,6 +4179,7 @@ int main (int argc, char** argv)
     testTalkback();
     testInterfaceOuts();
     testPreampColour();
+    testPreamp73();
     testBusCompressor();
     testMasterSection();
     testPatchBay();

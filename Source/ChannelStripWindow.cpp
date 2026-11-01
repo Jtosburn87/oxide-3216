@@ -239,6 +239,14 @@ ChannelStripPanel::ChannelStripPanel (ChannelStrip& s, StripBank& consoleBank, i
     add (trim);
     add (phase);
     add (gainLink);
+    const char* const preampTips[] = { "OX: Oxide's own preamp voice (mostly 2nd harmonic, a soft knee into the rails)",
+                                       "73: preamp in the style of the 1073 (transformer low end, a hard lopsided clip that blocks when driven hard)" };
+    for (int t = 0; t < 2; ++t)
+    {
+        auto* b = preampTypeButtons.add (new RadioParamButton (*s.controls.preampType, t, t == 0 ? "OX" : "73"));
+        b->setTooltip (juce::String (preampTips[t]) + ". Needs the console colour on (sections menu).");
+        add (*b);
+    }
     add (hpf);
     add (inMeter);
 
@@ -524,6 +532,11 @@ void ChannelStripPanel::resized()
         trim.setBounds (knobAt (rightOf (b), b.getY() + 12));
         gainLink.setBounds (juce::Rectangle<int> (22, 12).withCentre ({ b.getCentreX(), gain.getBottom() - 6 }));
         phase.setBounds (juce::Rectangle<int> (30, 20).withCentre ({ gain.getBounds().getCentreX(), b.getY() + 70 + 19 }));
+        // The preamp voice under the phase switch, left of the meter.
+        auto voices = juce::Rectangle<int> (b.getX() + 4, b.getY() + 104, trim.getBounds().getCentreX() - 6 - 4 - (b.getX() + 4), 18);
+        const int vw = voices.getWidth() / 2;
+        for (auto* v : preampTypeButtons)
+            v->setBounds (voices.removeFromLeft (vw).reduced (1, 0));
         hpf.setBounds (knobAt (leftOf (b), b.getY() + 128));
         inMeter.setBounds (trim.getBounds().getCentreX() - 6, b.getY() + 72, 12, b.getBottom() - 8 - (b.getY() + 72));
     }

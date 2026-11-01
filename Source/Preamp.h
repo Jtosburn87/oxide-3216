@@ -3,6 +3,7 @@
 #include <cmath>
 #include <algorithm>
 #include "Dsp.h"
+#include "Fg73Voice.h"
 
 /** Console colour for a channel's preamp, voiced after a Neve 1073: a class A amp between an input
     and an output transformer. It runs straight after the gain (the trim follows it), on every input and return strip.
@@ -19,18 +20,23 @@
     - Exaggeration: over the top 10 dB of the gain everything above grows to 1.4x a real 1073
       (harmonics x1.4, a softer knee), so the gain fully up is a touch dirtier than the real thing.
 
-    Harmonics stop at the 3rd below the knee, so this runs at the session rate without oversampling. */
+    Harmonics stop at the 3rd below the knee, so this runs at the session rate without oversampling.
+
+    That is the Oxide voice. Each strip can switch to the 73 voice instead (Fg73Voice): the same rails and
+    gain, with a transformer-heavy low end and a hard, lopsided clip. */
 class Preamp
 {
 public:
     static constexpr float clipLevel = 2.5118864f;   // +26 dBu with 0 dBFS = +18 dBu
 
-    void prepare (double sampleRate, float gainDb, bool on) noexcept
+    void prepare (double sampleRate, float gainDb, bool on, bool seventyThree = false) noexcept
     {
         constexpr double twoPi = 6.283185307179586;
         fluxCoeff = (float) (1.0 - std::exp (-twoPi * fluxHz / sampleRate));
         dcCoeff = (float) std::exp (-twoPi * dcHz / sampleRate);
         mix.prepare (sampleRate, on ? 1.0f : 0.0f, 20.0f);
+        voiceMix.prepare (sampleRate, seventyThree ? 1.0f : 0.0f, 20.0f);
+        fg.prepare (sampleRate);
         reset();
         setGain (gainDb);
     }
@@ -44,6 +50,7 @@ public:
         k3 = 2.0f * amp3rd * fb * ex;
         kT = 2.0f * transformer3rd * ex;
         knee = 1.0f - kneeWidth * ex;
+        fg.setGain (gainDb);
     }
 
     /** 1 at the gain fully up, 1 below the top 10 dB; smooth in between. */
@@ -53,16 +60,39 @@ public:
         return 1.0f + 0.4f * t * t * (3.0f - 2.0f * t);
     }
 
-    /** x is the signal after the gain. on: the console colour switch (crossfades over 20 ms). */
-    float process (float x, bool on) noexcept
+    /** x is the signal after the gain. on: the console colour switch; seventyThree: the 73 voice (Fg73Voice)
+        instead of Oxide's own. Each change crossfades over 20 ms. */
+    float process (float x, bool on, bool seventyThree = false) noexcept
     {
         const float target = on ? 1.0f : 0.0f;
         const float m = mix.next (target);
+        const float vm = voiceMix.next (seventyThree ? 1.0f : 0.0f);
         if (! on && m < 1.0e-6f)
         {
-            if (flux != 0.0f || dcIn != 0.0f || dcOut != 0.0f)
+            if (flux != 0.0f || dcIn != 0.0f || dcOut != 0.0f || fgRunning)
                 reset();
             return x;
+        }
+
+        // Each voice runs only while it is heard (both during a crossfade); the 73 starts from rest.
+        float d73 = 0.0f;
+        if (vm > 1.0e-6f)
+        {
+            if (! fgRunning)
+            {
+                fg.reset();
+                fgRunning = true;
+            }
+            d73 = fg.process (x) - x;
+        }
+        else
+        {
+            fgRunning = false;
+        }
+        if (vm > 1.0f - 1.0e-6f)
+        {
+            flux = dcIn = dcOut = 0.0f;
+            return x + m * d73;
         }
 
         const float v = x * (1.0f / clipLevel);
@@ -80,10 +110,15 @@ public:
         const float d = diff - dcIn + dcCoeff * dcOut;
         dcIn = diff;
         dcOut = d;
-        return x + m * d;
+        return x + m * (d + vm * (d73 - d));
     }
 
-    void reset() noexcept { flux = dcIn = dcOut = 0.0f; }
+    void reset() noexcept
+    {
+        flux = dcIn = dcOut = 0.0f;
+        fg.reset();
+        fgRunning = false;
+    }
 
 private:
     // Voicing (see the class comment). For a sine of peak A (in clipLevel units): 2nd = a2 A / 2, 3rd = (k3 / 2) A^2 / 4.
@@ -107,5 +142,7 @@ private:
     float fluxCoeff = 0, dcCoeff = 0;
     float a2 = 0, k3 = 0, kT = 0, knee = 0.7f;
     float flux = 0, dcIn = 0, dcOut = 0;
-    Dsp::Smoothed mix;
+    Dsp::Smoothed mix, voiceMix;
+    Fg73Voice fg;
+    bool fgRunning = false;
 };

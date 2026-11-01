@@ -8,6 +8,7 @@
 #include "InsertsUI.h"
 #include "SessionController.h"
 #include "Cassette.h"
+#include "ChannelStripWindow.h"
 
 class Oxide3216Application : public juce::JUCEApplication
 {
@@ -157,7 +158,9 @@ public:
 
         AudioEngine e;
         {
-            // "--snapshot out.png 1.0 settings" renders the audio device window instead of the desk.
+            // "--snapshot out.png 1.0 settings" renders the audio device window instead of the desk;
+            // "... channel" input 1's channel window (its preamp on the 73 voice).
+            std::unique_ptr<Desk> deskForChannel;
             std::unique_ptr<juce::Component> view;
             std::unique_ptr<juce::TemporaryFile> tempSettings;
             std::unique_ptr<juce::PropertiesFile> tempProps;
@@ -197,6 +200,12 @@ public:
                 auto panel = std::make_unique<PatchBayPanel> (e, nullptr);
                 panel->setSize (1500, 520);
                 view = std::move (panel);
+            }
+            else if (args.contains ("channel"))
+            {
+                deskForChannel = std::make_unique<Desk> (e);
+                e.inputStrips[0]->controls.preampType->set (1.0f);
+                view = std::make_unique<ChannelStripPanel> (*e.inputStrips[0], deskForChannel->getBank (Desk::inputSection), 0);
             }
             else if (args.contains ("settings"))
             {

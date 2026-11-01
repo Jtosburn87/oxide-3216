@@ -31,6 +31,7 @@ public:
         Param* gain;    // dB, -20..+30: the preamp's gain (drives the colour)
         Param* trim;    // dB, -30..+20: level after the preamp
         Param* gainLink;   // on: turning the gain by hand turns the trim the other way (turnGain)
+        Param* preampType;   // the preamp colour's voice: 0 Oxide, 1 the 73 (Fg73Voice)
         Param* hpf;     // Hz, 20..300 (20 = off)
         Param* pan;     // -1..+1
         Param* main;    // main assign
@@ -69,6 +70,8 @@ public:
     /** The console colour switch (one for the whole desk), set by the engine; null = clean preamp. */
     const Param* colour = nullptr;
     bool isColoured() const noexcept { return colour != nullptr && colour->on(); }
+    /** The preamp's 73 voice is chosen (Controls::preampType). */
+    bool is73() const noexcept { return juce::roundToInt (controls.preampType->get()) == 1; }
 
     FourBandEq eq;
     Gate gate;
