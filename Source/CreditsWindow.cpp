@@ -67,7 +67,7 @@ CreditsWindow::CreditsWindow()
     closeButton.onClick = [this] { if (auto* w = findParentComponentOfClass<juce::DialogWindow>()) w->exitModalState (0); };
     addAndMakeVisible (closeButton);
 
-    setSize (560, 440);
+    setSize (560, 464);
 }
 
 void CreditsWindow::paint (juce::Graphics& g)
@@ -77,17 +77,22 @@ void CreditsWindow::paint (juce::Graphics& g)
     if (logo != nullptr)
         logo->drawWithin (g, top.toFloat(), juce::RectanglePlacement::centred, 1.0f);
 
+    g.setColour (legend);
+    g.setFont (juce::FontOptions (15.0f));
+    g.drawText ("by LEFTNoiseAudio", getLocalBounds().reduced (pad).withTrimmedTop (logoH + 4).removeFromTop (20),
+                juce::Justification::centred);
+
     g.setColour (legend.withAlpha (0.6f));
     g.setFont (juce::FontOptions (14.0f));
     g.drawText ("Version " + juce::JUCEApplication::getInstance()->getApplicationVersion(),
-                getLocalBounds().reduced (pad).withTrimmedTop (logoH + 4).removeFromTop (20),
+                getLocalBounds().reduced (pad).withTrimmedTop (logoH + 28).removeFromTop (20),
                 juce::Justification::centred);
 }
 
 void CreditsWindow::resized()
 {
     auto r = getLocalBounds().reduced (pad);
-    r.removeFromTop (logoH + 34);
+    r.removeFromTop (logoH + 58);
     auto bottom = r.removeFromBottom (30);
     closeButton.setBounds (bottom.removeFromRight (90));
     r.removeFromBottom (8);

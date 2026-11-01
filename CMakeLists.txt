@@ -93,13 +93,18 @@ target_compile_definitions(Oxide3216Core INTERFACE
 
 juce_add_gui_app(Oxide3216
     PRODUCT_NAME "Oxide-3216"
-    COMPANY_NAME "Oxide-3216"
+    COMPANY_NAME "LEFTNoiseAudio"
+    COMPANY_COPYRIGHT "LEFTNoiseAudio"
     ICON_BIG "${CMAKE_SOURCE_DIR}/Resources/oxide-3216-icon.svg"
     VERSION ${PROJECT_VERSION}
     # macOS bundle. Without the microphone entry macOS gives the app silence on every input.
     BUNDLE_ID "com.oxide3216.Oxide3216"
     MICROPHONE_PERMISSION_ENABLED TRUE
     MICROPHONE_PERMISSION_TEXT "Oxide-3216 records from your audio interface's inputs.")
+
+# JUCE writes the .exe's version info (version, company, copyright) once and never again, so an existing
+# build folder kept 0.1.0. Removing it on every configure makes the next build write it from this file.
+file(REMOVE "${CMAKE_CURRENT_BINARY_DIR}/Oxide3216_artefacts/JuceLibraryCode/Oxide3216_resources.rc")
 
 target_sources(Oxide3216 PRIVATE
     Source/ImportAudioDialog.cpp

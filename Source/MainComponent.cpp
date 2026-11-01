@@ -9,6 +9,7 @@ using namespace ConsoleColours;
 namespace
 {
     constexpr int topBarH = 48;
+    constexpr int brandW = 96;   // "by LEFTNoiseAudio" to the right of the logo
 
     /** Touchscreens: a pinch that starts on the panels zooms the console. Controls opt out, so a
         touch that starts on a fader, knob, button or text field works that control and leaves the view
@@ -344,6 +345,15 @@ void MainComponent::paint (juce::Graphics& g)
         g.reduceClipRegion (plateR.toNearestInt());
         logo->draw (g, 1.0f, juce::RectanglePlacement (juce::RectanglePlacement::stretchToFit).getTransformToFit (inset, plateR));
     }
+
+    // Two-line maker credit beside the logo.
+    const juce::Rectangle<int> brand (188, topBarH / 2 - 14, brandW, 28);
+    g.setColour (bridgeText.withAlpha (0.65f));
+    g.setFont (ConsoleLookAndFeel::uiFont (11.0f));
+    g.drawText ("by", brand.withHeight (13), juce::Justification::centredLeft);
+    g.setColour (bridgeText);
+    g.setFont (ConsoleLookAndFeel::uiFont (12.0f, true));
+    g.drawText ("LEFTNoiseAudio", brand.withTrimmedTop (13), juce::Justification::centredLeft, false);
 }
 
 void MainComponent::resized()
@@ -352,7 +362,7 @@ void MainComponent::resized()
     // _ / square / X at the right end.
     windowButtons.setBounds (getLocalBounds().removeFromTop (topBarH).removeFromRight (WindowButtons::width + 4).reduced (2, 6).withTrimmedRight (2));
     bar.removeFromRight (WindowButtons::width + 8);
-    bar.removeFromLeft (214);
+    bar.removeFromLeft (214 + brandW);
     zoomLabel.setBounds (bar.removeFromLeft (48));
     zoomSlider.setBounds (bar.removeFromLeft (150));
     bar.removeFromLeft (24);
