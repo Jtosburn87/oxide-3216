@@ -71,8 +71,86 @@ void InsertSlot::openWindow (InsertChain& chain, int slot, PluginContext& contex
         context.windows.open (*p, chain.name + "  |  slot " + juce::String (slot + 1) + "  |  " + chain.getDescription (slot).name);
 }
 
+void InsertSlot::remove (InsertChain& chain, int slot, PluginContext& context)
+{
+    if (chain.getProcessor (slot) == nullptr)
+        return;
+    chain.clearSlot (slot);
+    if (context.changed)
+        context.changed();
+}
+
+juce::var InsertSlot::dragDescription (InsertChain& chain, int slot)
+{
+    return juce::Array<juce::var> { "insertSlot", (juce::int64) (juce::pointer_sized_int) &chain, slot };
+}
+
+namespace
+{
+    /** The slot a drag came from: null if it isn't one. */
+    InsertChain* draggedChain (const juce::var& d, int& slot)
+    {
+        if (! d.isArray() || d.size() != 3 || d[0].toString() != "insertSlot")
+            return nullptr;
+        slot = (int) d[2];
+        return reinterpret_cast<InsertChain*> ((juce::pointer_sized_int) (juce::int64) d[1]);
+    }
+}
+
+bool InsertSlot::isDragFromOtherSlot (const juce::var& description, const InsertChain& to, int toSlot)
+{
+    int slot = 0;
+    const auto* from = draggedChain (description, slot);
+    return from != nullptr && ! (from == &to && slot == toSlot);
+}
+
+void InsertSlot::drop (const juce::var& description, InsertChain& to, int toSlot, PluginContext& context, Param* mainAssign)
+{
+    int fromSlot = 0;
+    auto* from = draggedChain (description, fromSlot);
+    if (from == nullptr || (from == &to && fromSlot == toSlot))
+        return;
+    auto* original = from->getProcessor (fromSlot);
+    if (original == nullptr)
+        return;
+
+    const auto desc = from->getDescription (fromSlot);
+    juce::MemoryBlock state;
+    original->getStateInformation (state);
+    juce::String error;
+    auto instance = context.manager.create (desc, context.sampleRate(), Config::maxBlock, error);
+    if (instance == nullptr)
+    {
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Could not duplicate plugin",
+                                                desc.name + " could not be loaded.\n\n" + error);
+        return;
+    }
+    if (state.getSize() > 0)
+        instance->setStateInformation (state.getData(), (int) state.getSize());
+
+    const bool wasEmpty = to.numLoaded() == 0, bypassed = from->isBypassed (fromSlot);
+    to.setSlot (toSlot, std::move (instance), desc);
+    if (to.isStereoRefused (toSlot))
+    {
+        to.clearSlot (toSlot);
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Stereo plugins only",
+                                                desc.name + " has no stereo in/out. A linked aux pair takes stereo plugins only.");
+        return;
+    }
+    to.setBypassed (toSlot, bypassed);
+    if (wasEmpty && mainAssign != nullptr)
+        mainAssign->set (1.0f);
+    if (context.changed)
+        context.changed();
+}
+
 void InsertSlot::click (InsertChain& chain, int slot, PluginContext& context, Param* mainAssign, juce::Component& target)
 {
+    if (juce::ModifierKeys::currentModifiers.isAltDown())
+    {
+        remove (chain, slot, context);
+        return;
+    }
     if (chain.getProcessor (slot) != nullptr)
         openWindow (chain, slot, context);
     else
@@ -449,7 +527,7 @@ void InsertsSection::SlotBox::refresh()
     const auto where = "slot " + juce::String (slot + 1);
     setTooltip (state == 0 ? "Empty " + where + ": click to choose a plugin"
               : state == 3 ? name + " (" + where + ") has no stereo in/out, so it is left out while the aux pair is linked"
-                           : name + " (" + where + (state == 2 ? ", bypassed" : "") + "): click to open, right-click for bypass / replace / remove");
+                           : name + " (" + where + (state == 2 ? ", bypassed" : "") + "): click to open, Alt+click to remove, drag onto another slot to duplicate, right-click for bypass / replace / remove");
     repaint();
 }
 
@@ -464,6 +542,11 @@ void InsertsSection::SlotBox::paint (juce::Graphics& g)
     g.fillRoundedRectangle (r, 2.0f);
     g.setColour (rim);
     g.drawRoundedRectangle (r.reduced (0.5f), 2.0f, 1.0f);
+    if (dropHover)
+    {
+        g.setColour (juce::Colours::white);
+        g.drawRoundedRectangle (r.reduced (1.0f), 2.0f, 2.0f);
+    }
 
     g.setColour (text);
     auto font = ConsoleLookAndFeel::uiFont (9.5f, shownState == 1);
@@ -477,9 +560,31 @@ void InsertsSection::SlotBox::paint (juce::Graphics& g)
         g.fillRect ((float) textArea.getX(), r.getCentreY(), (float) textArea.getWidth(), 1.0f);
 }
 
+void InsertsSection::SlotBox::mouseDrag (const juce::MouseEvent& e)
+{
+    auto& chain = *owner.cells[cell].chain;
+    if (dragging || e.mods.isPopupMenu() || owner.context == nullptr || chain.getProcessor (slot) == nullptr || e.getDistanceFromDragStart() < 6)
+        return;
+    dragging = true;
+    owner.startDragging (InsertSlot::dragDescription (chain, slot), this);
+}
+
+bool InsertsSection::SlotBox::isInterestedInDragSource (const SourceDetails& d)
+{
+    return owner.context != nullptr && InsertSlot::isDragFromOtherSlot (d.description, *owner.cells[cell].chain, slot);
+}
+
+void InsertsSection::SlotBox::itemDropped (const SourceDetails& d)
+{
+    dropHover = false;
+    auto& c = owner.cells[cell];
+    InsertSlot::drop (d.description, *c.chain, slot, *owner.context, c.mainAssign);
+    owner.slotChanged();
+}
+
 void InsertsSection::SlotBox::mouseUp (const juce::MouseEvent& e)
 {
-    if (owner.context == nullptr || ! getLocalBounds().contains (e.getPosition()))
+    if (dragging || owner.context == nullptr || ! getLocalBounds().contains (e.getPosition()))
         return;
     auto& c = owner.cells[cell];
     auto& chain = *c.chain;
@@ -505,5 +610,183 @@ void InsertsSection::SlotBox::mouseUp (const juce::MouseEvent& e)
         else if (result == 3) chain.clearSlot (s);
         else                  InsertSlot::choose (chain, s, ctx, section.cells[safe->cell].mainAssign, *safe);
         section.slotChanged();
+    });
+}
+
+//==============================================================================
+AraSlotBox::AraSlotBox (AraSlots& s, PluginContext& c, int t)
+    : slots (s), context (c), track (t)
+{
+    setMouseClickGrabsKeyboardFocus (false);
+}
+
+void AraSlotBox::paint (juce::Graphics& g)
+{
+    using namespace ConsoleColours;
+    const auto r = getLocalBounds().toFloat().reduced (0.5f);
+    const bool loaded = slots.isLoaded (track), bypassed = slots.isBypassed (track);
+    g.setColour (loaded && ! bypassed ? juce::Colour (0xff3a2f14) : juce::Colour (0xff0b0c0d));
+    g.fillRoundedRectangle (r, 2.0f);
+    g.setColour (dropHover ? amber : juce::Colours::white.withAlpha (0.28f));
+    g.drawRoundedRectangle (r, 2.0f, dropHover ? 2.0f : 1.0f);
+
+    g.setFont (ConsoleLookAndFeel::uiFont (10.5f, loaded));
+    g.setColour (! loaded ? juce::Colours::white.withAlpha (0.38f) : bypassed ? juce::Colours::white.withAlpha (0.45f) : amber);
+    const auto text = loaded ? slots.getDescription (track).name : juce::String ("ARA");
+    g.drawFittedText (text, getLocalBounds().reduced (3, 0), juce::Justification::centred, 1, 0.8f);
+}
+
+void AraSlotBox::mouseDown (const juce::MouseEvent& e)
+{
+    pressed = false;
+    dragging = false;
+    if (e.mods.isPopupMenu())
+    {
+        if (slots.isLoaded (track))
+            showMenu();
+        return;
+    }
+    if (e.mods.isAltDown())
+    {
+        remove();
+        return;
+    }
+    pressed = true;
+}
+
+void AraSlotBox::mouseDrag (const juce::MouseEvent& e)
+{
+    if (! pressed || dragging || ! slots.isLoaded (track) || e.getDistanceFromDragStart() < 6)
+        return;
+    if (auto* container = juce::DragAndDropContainer::findParentDragContainerFor (this))
+    {
+        dragging = true;
+        container->startDragging ("araSlot", this);
+    }
+}
+
+void AraSlotBox::mouseUp (const juce::MouseEvent& e)
+{
+    const bool click = pressed && ! dragging && contains (e.getPosition());
+    pressed = false;
+    if (! click)
+        return;
+    if (slots.isLoaded (track))
+        openWindow();
+    else
+        choosePlugin();
+}
+
+bool AraSlotBox::isInterestedInDragSource (const SourceDetails& d)
+{
+    return d.description == "araSlot" && d.sourceComponent.get() != this;
+}
+
+void AraSlotBox::itemDragEnter (const SourceDetails&) { dropHover = true; repaint(); }
+void AraSlotBox::itemDragExit (const SourceDetails&)  { dropHover = false; repaint(); }
+
+void AraSlotBox::itemDropped (const SourceDetails& d)
+{
+    dropHover = false;
+    repaint();
+    if (auto* from = dynamic_cast<AraSlotBox*> (d.sourceComponent.get()))
+        if (from->slots.isLoaded (from->track))
+            load (from->slots.getDescription (from->track), false);
+}
+
+void AraSlotBox::waitForScan()
+{
+    juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "ARA plugins",
+        "Oxide is asking your plugins which of them offer ARA. It only has to do this once and takes a minute or two; "
+        "the list opens when it has finished.");
+}
+
+void AraSlotBox::choosePlugin()
+{
+    if (! AraSlots::isAvailable())
+    {
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "ARA plugins", "This build of Oxide-3216 has no ARA.");
+        return;
+    }
+    auto& manager = context.manager;
+    if (manager.isAraScanRunning())
+    {
+        waitForScan();
+        return;
+    }
+    if (manager.needsAraScan())
+    {
+        juce::Component::SafePointer<AraSlotBox> self (this);
+        manager.startAraScan ([self] { if (self != nullptr) self->choosePlugin(); });
+        waitForScan();
+        return;
+    }
+
+    const auto list = manager.araEffects();
+    juce::PopupMenu menu;
+    for (int i = 0; i < list.size(); ++i)
+        menu.addItem (i + 1, list[i].name + (list[i].manufacturerName.isNotEmpty() ? "  (" + list[i].manufacturerName + ")" : juce::String()));
+    if (list.isEmpty())
+        menu.addItem (-1, "No ARA plugins found: scan your plugins (Options)", false);
+    juce::Component::SafePointer<AraSlotBox> self (this);
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [self, list] (int result)
+    {
+        if (self != nullptr && result > 0)
+            self->load (list[result - 1], true);
+    });
+}
+
+void AraSlotBox::load (const juce::PluginDescription& d, bool openIt)
+{
+    const auto create = [this] (const juce::PluginDescription& p, juce::String& error)
+    {
+        return context.manager.create (p, context.sampleRate(), Config::maxBlock, error);
+    };
+    juce::Component::SafePointer<AraSlotBox> self (this);
+    slots.load (track, create, d, {}, {}, [self, openIt] (const juce::String& problem)
+    {
+        if (problem.isNotEmpty())
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "ARA plugins", problem);
+        if (self == nullptr)
+            return;
+        self->repaint();
+        self->context.changed();
+        if (problem.isEmpty() && openIt)
+            self->openWindow();
+    });
+}
+
+void AraSlotBox::openWindow()
+{
+    if (auto* p = slots.getProcessor (track))
+        context.windows.open (*p, "Track " + juce::String (track + 1) + ": " + slots.getDescription (track).name);
+}
+
+void AraSlotBox::remove()
+{
+    if (! slots.isLoaded (track))
+        return;
+    slots.clear (track);
+    repaint();
+    context.changed();
+}
+
+void AraSlotBox::showMenu()
+{
+    juce::PopupMenu menu;
+    menu.addItem (1, "Open");
+    menu.addItem (2, "Bypass", true, slots.isBypassed (track));
+    menu.addItem (3, "Replace...");
+    menu.addSeparator();
+    menu.addItem (4, "Remove");
+    juce::Component::SafePointer<AraSlotBox> self (this);
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [self] (int result)
+    {
+        if (self == nullptr)
+            return;
+        if (result == 1)      self->openWindow();
+        else if (result == 2) { self->slots.setBypassed (self->track, ! self->slots.isBypassed (self->track)); self->repaint(); }
+        else if (result == 3) self->choosePlugin();
+        else if (result == 4) self->remove();
     });
 }

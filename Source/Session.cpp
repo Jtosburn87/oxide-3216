@@ -111,6 +111,8 @@ Session::Result Session::write (AudioEngine& e, const juce::File& folder, TrackR
     root->setProperty ("controls", juce::var (controls));
     root->setProperty ("scenes", e.scenes.toVar());
     root->setProperty ("tempoMap", e.tempo.mapToVar());   // empty: one tempo (the tempo controls)
+    root->setProperty ("automation", e.automation.toVar());   // fader, pan and mute curves on the tape
+    root->setProperty ("ara", e.ara.save (folder));   // the Tape Machine window's ARA slots (their edits in files beside this one)
     root->setProperty ("midi", e.midi.toVar());   // the MIDI page: tracks, clips, instruments (routing is in the patch)
 
     auto* names = new juce::DynamicObject();
@@ -221,6 +223,8 @@ void Session::reset (AudioEngine& e)
     e.midi.removeAllTracks();
     e.tempo.clearMap();
     forEachChain (e, [] (InsertChain& c) { c.clearAll(); });
+    e.ara.clearAll();
+    e.automation.clearAll();
     e.tape.eraseAll();
     e.tape.setInPoint (0);
     e.tape.setOutPoint (0);
@@ -426,6 +430,16 @@ Session::Result Session::load (AudioEngine& e, PluginManager* plugins, const juc
         for (int m = 0; m < juce::jmin (memories->size(), TapeMachine::numMemories); ++m)
             e.tape.setMemory (m, (juce::int64) (*memories)[m]);
     e.scenes.fromVar (json["scenes"]);   // sessions from before scenes have none
+    e.automation.fromVar (json["automation"]);
+    // The ARA slots, now that the tape is loaded: the plugins read it.
+    {
+        const auto create = [&] (const juce::PluginDescription& d, juce::String& error) -> std::unique_ptr<juce::AudioPluginInstance>
+        {
+            return plugins != nullptr ? plugins->create (d, deviceRate, Config::maxBlock, error) : nullptr;
+        };
+        for (auto& missing : e.ara.restore (json["ara"], folder, create))
+            r.warnings.add ("Missing ARA plugin: " + missing);
+    }
     e.tape.locate ((juce::int64) tapeInfo["position"]);
     return r;
 }
@@ -472,6 +486,7 @@ Session::Result Session::exportMix (AudioEngine& e, const juce::File& file, juce
     tape.loopOn = false;
     e.oscillatorMuted = true;
     forEachChain (e, [] (InsertChain& c) { for (int s = 0; s < InsertChain::numSlots; ++s) if (auto* p = c.getProcessor (s)) p->setNonRealtime (true); });
+    e.ara.setNonRealtime (true);
 
     tape.locate (start);
     tape.play();
@@ -497,6 +512,7 @@ Session::Result Session::exportMix (AudioEngine& e, const juce::File& file, juce
 
     tape.stop();
     forEachChain (e, [] (InsertChain& c) { for (int s = 0; s < InsertChain::numSlots; ++s) if (auto* p = c.getProcessor (s)) p->setNonRealtime (false); });
+    e.ara.setNonRealtime (false);
     tape.exporting = false;
     tape.loopOn = wasLoop;
     e.oscillatorMuted = wasMuted;

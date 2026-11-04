@@ -4,6 +4,8 @@
 #include "AudioSettingsComponent.h"
 #include "PatchBay.h"
 #include "PluginManager.h"
+#include "MidiPage.h"
+#include "TapeMachineWindow.h"
 #include "PluginWindows.h"
 #include "InsertsUI.h"
 #include "SessionController.h"
@@ -189,6 +191,43 @@ public:
                 }
                 e.auxInserts[0]->setBypassed (2, true);
                 view = std::make_unique<InsertChainEditor> (*e.auxInserts[0], *context, e.auxReturnPan[0]);
+            }
+            else if (args.contains ("tapewindow") || args.contains ("midipage"))
+            {
+                // The Tape Machine window with Pitcher on track 3, or the MIDI/WAV page with automation lanes open.
+                tempSettings = std::make_unique<juce::TemporaryFile> ("settings");
+                tempProps = std::make_unique<juce::PropertiesFile> (tempSettings->getFile(), juce::PropertiesFile::Options());
+                pm = std::make_unique<PluginManager> (*tempProps);
+                windows = std::make_unique<PluginWindows>();
+                context.reset (new PluginContext { *pm, *windows, [] { return 48000.0; }, nullptr });
+                if (args.contains ("tapewindow"))
+                {
+                    juce::OwnedArray<juce::PluginDescription> found;
+                    auto& vst3 = *pm->formats.getFormat (0);
+                    vst3.findAllTypesForFile (found, vst3.getDefaultLocationsToSearch()[0].getChildFile ("Pitcher.vst3").getFullPathName());
+                    if (! found.isEmpty())
+                        e.ara.load (2, [&] (const juce::PluginDescription& d, juce::String& error) { return pm->create (d, 48000.0, Config::maxBlock, error); },
+                                    *found[0], {}, {}, nullptr);
+                    view = std::make_unique<TapeMachinePanel> (e, *context);
+                }
+                else
+                {
+                    std::vector<float> wave (480000);
+                    for (size_t i = 0; i < wave.size(); ++i)
+                        wave[i] = 0.5f * (float) std::sin ((double) i * 0.0004) * (float) std::sin ((double) i * 0.03);
+                    e.tape.writeTrack (0, 0, wave.data(), (int) wave.size());
+                    e.tape.setLength ((juce::int64) wave.size());
+                    const int strip = Automation::stripIndex (true, 0);
+                    e.automation.setCurve (strip, Automation::fader, { { 0, 0.8f }, { 96000, 0.8f }, { 192000, 0.4f }, { 288000, 0.7f } });
+                    e.automation.setCurve (strip, Automation::pan, { { 48000, 0.5f }, { 240000, 0.9f }, { 400000, 0.2f } });
+                    e.automation.setMuteRange (strip, 120000, 170000, true);
+                    e.automation.setMode (strip, Automation::Mode::touch);
+                    auto page = std::make_unique<MidiPage> (e, *context);
+                    page->setSize (1600, 800);
+                    page->setTapeAutomationOpen (0, true);
+                    page->peaks->update (100000);
+                    view = std::move (page);
+                }
             }
             else if (args.contains ("patchbay"))
             {

@@ -4,6 +4,7 @@
 #include "AudioEngine.h"
 #include "InsertsUI.h"
 #include "TempoPanel.h"
+#include "TapeLanes.h"
 
 /** The MIDI page (the MIDI button in the top bar shows it in place of the console): a DAW-style arrange window
     on the same tape. Along the top the transport, where the tape is (bars and minutes), the grid (Bars or Min:Sec)
@@ -19,6 +20,8 @@ public:
 
     /** "Console" was clicked. */
     std::function<void()> onShowConsole;
+    /** A tape lane's Ch button: open a console channel's strip window (return bank or input bank, 0-based). */
+    std::function<void (bool returnBank, int strip)> onOpenStrip;
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -65,8 +68,42 @@ public:
 
     static constexpr int headerW = 300, rulerH = 28, toolbarH = 50;
     int laneH = 82;   // track height: the vertical zoom (Timeline zoom buttons)
-    /** One step taller (+1) or shorter (-1) for every track. */
+    /** One step taller (+1) or shorter (-1) for every track (and every tape lane). */
     void zoomLanes (int direction);
+
+    // The tape: 16 lanes (1 at the top), above or below the MIDI tracks, all scrolling as one.
+    bool midiOnTop = false;
+    /** Scroll Lock: the play line stays in the middle and scrolling across moves the tape. Off: scroll freely. */
+    bool scrollLock = true;
+    std::array<int, Config::numTracks> tapeH;
+    static constexpr int blockGap = 8;   // between the MIDI tracks and the tape
+    std::unique_ptr<TapePeaks> peaks;
+    // Positions below the ruler, before scrolling (content y).
+    int midiBlockH() const;   // one lane for the "no MIDI tracks" line when there are none
+    int tapeBlockH() const;
+    int midiTop() const  { return midiOnTop ? 0 : tapeBlockH() + blockGap; }
+    int tapeTop() const  { return midiOnTop ? midiBlockH() + blockGap : 0; }
+    int contentH() const { return midiBlockH() + blockGap + tapeBlockH(); }
+    int tapeLaneTop (int track) const;
+    /** The MIDI row (index into usedSlots) or tape lane at a content y, or -1. */
+    int midiRowAt (double y) const;
+    int tapeLaneAt (double y) const;
+    void setTapeLaneHeight (int track, int h);
+
+    // Automation: a channel's Fader, Pan and Mute lanes open under its tape lane or MIDI track (the track's A button).
+    std::array<bool, Config::numTracks> tapeAutoOpen {};
+    std::array<bool, Config::numMidiTracks> midiAutoOpen {};
+    /** The automation strip a tape track or a MIDI track plays through, or -1. */
+    int stripOfTape (int track) const;
+    int stripOfMidi (int slot) const;
+    /** The rows open now: content y, the strip (may be -1) and what they automate. */
+    struct AutoRow { int y = 0, strip = -1; Automation::Target target = Automation::fader; };
+    std::vector<AutoRow> autoRows() const;
+    void setTapeAutomationOpen (int track, bool);
+    void setMidiAutomationOpen (int slot, bool);
+    int midiRowTop (int row) const;   // content y
+    void setMidiOnTop (bool);
+    void setScrollLock (bool);
 
 private:
     class Toolbar;
@@ -78,6 +115,9 @@ private:
     std::unique_ptr<Toolbar> toolbar;
     juce::Component headerHolder;            // the track headers, scrolled with the timeline
     juce::OwnedArray<TrackHeader> headers;
+    juce::OwnedArray<TapeLaneHeader> tapeHeaders;
+    juce::OwnedArray<AutoLaneHeader> tapeAutoHeaders, midiAutoHeaders;   // midiAutoHeaders: one per MIDI row
+    int headerTick = 0;
     std::unique_ptr<Timeline> timeline;
     std::unique_ptr<PianoRoll> roll;
     std::unique_ptr<EditorPanel> editorPanel;
@@ -88,12 +128,19 @@ private:
         void scrollBarMoved (juce::ScrollBar*, double start) override { if (moved) moved (start); }
     } vWatch;
     int editorH = 330;
+    /** The editor (piano roll) folded down to a bar, so the tracks and the tape have the page. */
+    bool editorCollapsed = false;
+    static constexpr int collapsedEditorH = 28;
+    juce::TextButton collapseEditor;
+    int editorTop = 0;   // where the editor (or its folded bar) starts
+    void setEditorCollapsed (bool);
     std::uint32_t shownRevision = ~0u;
     std::uint32_t shownTempo = ~0u;
     std::uint32_t tempoPrint() const { return engine.tempo.getMapRevision() * 1000u + (std::uint32_t) (engine.tempo.getBeatsPerBar() * 20 + engine.tempo.getBeatUnit()); }
     juce::Array<int> shownSlots;
 
     void rebuildHeaders();
+    void refreshAutoHeaders();
     void layoutHeaders();
     void timerCallback() override;
 

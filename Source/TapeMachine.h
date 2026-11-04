@@ -164,6 +164,12 @@ public:
     bool takeTrackCleared (int track) noexcept { return trackCleared[(size_t) track].exchange (false); }
     /** The tape now matches the files (just loaded, or a new session): forget pending changes. Message thread. */
     void markFilesInStep() noexcept;
+    // The same for the MIDI page's waveforms (TapePeaks), kept apart so the two never take each other's changes.
+    /** True once for each chunk changed since the last call. */
+    bool takePeakChanged (int track, int chunk) noexcept;
+    /** True once after a track was erased (or replaced) as a whole: forget its waveform. */
+    bool takePeakCleared (int track) noexcept { return peakCleared[(size_t) track].exchange (false); }
+    int getMaxChunks() const noexcept { return (int) maxChunks; }
     /** Hold this while reading the tape from a worker thread: erased chunks are only freed under it. */
     juce::CriticalSection& getStorageLock() noexcept { return storageLock; }
 
@@ -185,6 +191,15 @@ public:
     int getRecordDelay() const noexcept      { return recordDelay(); }
     void setLatency (int samples) noexcept   { latency.store (juce::jmax (0, samples)); }
     juce::int64 getDroppedSamples() const noexcept { return dropped.load(); }
+
+    /** Something that can play a track in place of the tape (the ARA slots). */
+    struct PlaybackSource
+    {
+        virtual ~PlaybackSource() = default;
+        /** Audio thread: what plays from this tape position, into dest. False: nothing, the tape plays as it is. */
+        virtual bool render (int track, juce::int64 position, float* dest, int numSamples) noexcept = 0;
+    };
+    void setPlaybackSource (PlaybackSource* s) noexcept { playbackSource.store (s); }
 
     /** Export: every track plays back (armed ones too) and nothing records. */
     std::atomic<bool> exporting { false };
@@ -252,8 +267,13 @@ private:
     std::array<std::atomic<std::uint32_t>, numTracks> trackRevision {};
     std::array<std::unique_ptr<std::atomic<bool>[]>, numTracks> chunkChanged;   // maxChunks each
     std::array<std::atomic<bool>, numTracks> trackCleared {};
+    std::array<std::unique_ptr<std::atomic<bool>[]>, numTracks> peakChanged;   // maxChunks each
+    std::array<std::atomic<bool>, numTracks> peakCleared {};
     std::array<std::atomic<juce::int64>, numTracks> writtenEnd {};
     juce::CriticalSection storageLock;
+    std::atomic<PlaybackSource*> playbackSource { nullptr };
+    /** One track's playback from the tape, or from the playback source (a track taking its input never uses that). */
+    void playbackRead (int track, juce::int64 start, float* dest, int numSamples, bool armed) noexcept;
     void clearTrackFile (int track) noexcept;
     std::array<std::atomic<float>, numTracks> outPeak {};
     std::array<std::atomic<float>, numTracks> inPeak {};

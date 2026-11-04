@@ -84,7 +84,7 @@ void RackUnit::update()
     bypass.setToggleState (s.bypassed, juce::dontSendNotification);
     setMouseCursor (s.idle ? juce::MouseCursor::NormalCursor : juce::MouseCursor::PointingHandCursor);
     setTooltip (s.idle ? juce::String ("Not used while this aux pair is linked")
-              : s.loaded ? "Click to open " + s.name + ". Right-click or the list button to change it"
+              : s.loaded ? "Click to open " + s.name + ". Alt+click to remove, drag onto another slot to duplicate, right-click or the list button to change it"
                          : "Click to add a plugin to slot " + juce::String (slot + 1));
     repaint();
 }
@@ -96,9 +96,32 @@ void RackUnit::resized()
     bypass.setBounds (area.getRight() - 8 - 42, (getHeight() - 22) / 2, 42, 22);
 }
 
+void RackUnit::mouseDrag (const juce::MouseEvent& e)
+{
+    if (dragging || e.mods.isPopupMenu() || shown.idle || ! shown.loaded || e.getDistanceFromDragStart() < 6)
+        return;
+    if (auto* container = juce::DragAndDropContainer::findParentDragContainerFor (this))
+    {
+        dragging = true;
+        container->startDragging (InsertSlot::dragDescription (chain, slot), this);
+    }
+}
+
+bool RackUnit::isInterestedInDragSource (const SourceDetails& d)
+{
+    return ! shown.idle && InsertSlot::isDragFromOtherSlot (d.description, chain, slot);
+}
+
+void RackUnit::itemDropped (const SourceDetails& d)
+{
+    dropHover = false;
+    InsertSlot::drop (d.description, chain, slot, context, mainAssign);
+    update();
+}
+
 void RackUnit::mouseUp (const juce::MouseEvent& e)
 {
-    if (shown.idle || ! e.mouseWasClicked())
+    if (dragging || shown.idle || ! e.mouseWasClicked())
         return;
     if (e.mods.isPopupMenu())
         InsertSlot::choose (chain, slot, context, mainAssign, *this);
@@ -119,6 +142,14 @@ void RackUnit::paintEar (juce::Graphics& g, juce::Rectangle<float> ear, juce::Co
         g.fillRoundedRectangle (c.x - 7.0f, c.y - 4.5f, 14.0f, 9.0f, 4.5f);
         drawScrew (g, c, seed + (float) i * 1.7f);
     }
+}
+
+void RackUnit::paintOverChildren (juce::Graphics& g)
+{
+    if (! dropHover)
+        return;
+    g.setColour (ConsoleColours::amber);
+    g.drawRect (getLocalBounds(), 2);
 }
 
 void RackUnit::paint (juce::Graphics& g)

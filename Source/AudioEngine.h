@@ -17,6 +17,8 @@
 #include "Tempo.h"
 #include "MidiEngine.h"
 #include "PatchMask.h"
+#include "Automation.h"
+#include "AraSlots.h"
 
 /** Owns the audio device, the console's parameters and its DSP, and runs the real-time callback.
 
@@ -122,6 +124,10 @@ public:
         copied onto the other) and pans them hard left / hard right. */
     void linkStereoReturns (int left, int right);
     TapeMachine tape { params };
+    /** Fader, pan and mute curves on the tape (the MIDI/WAV page). */
+    Automation automation { tape };
+    /** One ARA plugin on each tape track (the Tape Machine window). */
+    AraSlots ara { tape };
     juce::OwnedArray<FourBandEq> groupEq;                  // one stereo group EQ per sub
     std::array<Param*, Config::numSubs> subFader {};       // 0..100, unity at 80 (faders arrive in stage 5)
     std::array<Param*, Config::numAux> auxMaster {};       // 0..100, unity at 80

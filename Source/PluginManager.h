@@ -23,6 +23,14 @@ public:
     /** Instruments only (for the MIDI page's tracks). */
     juce::Array<juce::PluginDescription> instruments() const;
 
+    /** Effects that offer ARA (the Tape Machine window's slots). */
+    juce::Array<juce::PluginDescription> araEffects() const;
+    /** Plugins scanned before Oxide hosted ARA were never asked if they offer it. Until they have been (once, on a
+        background thread, a process per plugin as in a scan), araEffects() may miss some. */
+    bool needsAraScan() const;
+    bool isAraScanRunning() const { return araScan != nullptr; }
+    void startAraScan (std::function<void()> done);
+
     std::unique_ptr<juce::AudioPluginInstance> create (const juce::PluginDescription&, double sampleRate, int blockSize, juce::String& error);
 
     /** Restores a chain saved by InsertChain::toXml. Returns the names of plugins that could not be loaded. */
@@ -34,5 +42,9 @@ public:
     static int runScanner (const juce::StringArray& args);
 
 private:
+    class AraScan;
+    struct AraScanOwner { JUCE_DECLARE_WEAK_REFERENCEABLE (AraScanOwner) } scanOwner;
+    std::unique_ptr<AraScan> araScan;
+    void araScanFinished (const juce::Array<juce::PluginDescription>&, std::function<void()> done);
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
 };

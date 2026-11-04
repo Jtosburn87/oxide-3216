@@ -28,7 +28,14 @@ MeterBridge::MeterBridge (TapeMachine& t) : tape (t)
 juce::Rectangle<float> MeterBridge::columnBounds (int track) const
 {
     const int row = track / 8, col = track % 8;
-    return { margin + 10.0f + (float) col * columnW, rowY0 + (float) row * (rowH + rowGap), columnW, rowH };
+    return { margin + 10.0f + (float) col * columnW, rowY0 + (float) row * (rowH + rowGap + (float) slotRowH), columnW, rowH };
+}
+
+juce::Rectangle<int> MeterBridge::slotBounds (int track)
+{
+    const int row = track / 8, col = track % 8;
+    return juce::Rectangle<float> (margin + 10.0f + (float) col * columnW, rowY0 + rowH + (float) row * (rowH + rowGap + (float) slotRowH) + 4.0f, columnW, 24.0f)
+        .reduced (2.0f, 0.0f).toNearestInt();
 }
 
 juce::Rectangle<float> MeterBridge::switchBounds (int track) const
@@ -129,7 +136,7 @@ void MeterBridge::paint (juce::Graphics& g)
     for (int row = 0; row < 2; ++row)
     {
         // White frame around each row, with "RECORD FUNCTION" printed into its bottom edge.
-        const auto frameBox = juce::Rectangle<float> (margin, rowY0 + (float) row * (rowH + rowGap), (float) designW - 2 * margin, rowH).reduced (0, 2);
+        const auto frameBox = juce::Rectangle<float> (margin, rowY0 + (float) row * (rowH + rowGap + (float) slotRowH), (float) designW - 2 * margin, rowH).reduced (0, 2);
         g.setColour (silk.withAlpha (0.75f));
         g.drawRoundedRectangle (frameBox, 3.0f, 1.0f);
         const juce::String legend = row == 0 ? "RECORD FUNCTION  1 - 8" : "RECORD FUNCTION  9 - 16";

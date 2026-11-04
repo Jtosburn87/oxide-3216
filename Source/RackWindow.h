@@ -8,7 +8,8 @@
     Click the faceplate to open the plugin (or, on an empty slot, pick one); the list button on the
     left always opens the plugin list; BYP bypasses. */
 class RackUnit : public juce::Component,
-                 public juce::SettableTooltipClient
+                 public juce::SettableTooltipClient,
+                 public juce::DragAndDropTarget
 {
 public:
     /** idle: true while the slot can't be used (the even aux of a linked pair). */
@@ -18,13 +19,22 @@ public:
 
     void paint (juce::Graphics&) override;
     void resized() override;
+    void mouseDown (const juce::MouseEvent&) override { dragging = false; }
+    void mouseDrag (const juce::MouseEvent&) override;
     void mouseUp (const juce::MouseEvent&) override;
+
+    void paintOverChildren (juce::Graphics&) override;
+    bool isInterestedInDragSource (const SourceDetails&) override;
+    void itemDragEnter (const SourceDetails&) override { dropHover = true; repaint(); }
+    void itemDragExit (const SourceDetails&) override { dropHover = false; repaint(); }
+    void itemDropped (const SourceDetails&) override;
     void mouseEnter (const juce::MouseEvent&) override { repaint(); }
     void mouseExit (const juce::MouseEvent&) override  { repaint(); }
 
     static constexpr int height = 40, earWidth = 22;
 
 private:
+    bool dragging = false, dropHover = false;
     InsertChain& chain;
     const int slot;
     PluginContext& context;
@@ -52,6 +62,7 @@ private:
 /** Every insert chain at once, as racks of outboard gear: Subs, Aux 1-4, Aux 5-8 and Master.
     The racks wrap onto more rows when the window is narrow. */
 class RackView : public juce::Component,
+                 public juce::DragAndDropContainer,
                  private juce::Timer
 {
 public:

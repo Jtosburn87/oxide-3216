@@ -87,6 +87,8 @@ AudioEngine::AudioEngine()
         for (auto* s : returnStrips) s->auxLink[(size_t) j] = auxLink[(size_t) j];
     }
     resetBusNames();
+
+    automation.bind (inputStrips, returnStrips);
 }
 
 void AudioEngine::linkStereoReturns (int left, int right)
@@ -142,6 +144,7 @@ AudioEngine::~AudioEngine()
     deviceManager.removeChangeListener (this);
     deviceManager.removeAudioCallback (this);
     deviceManager.closeAudioDevice();
+    ara.beforeDelete = nullptr;
 }
 
 void AudioEngine::initialise (const juce::XmlElement* savedState)
@@ -399,6 +402,7 @@ void AudioEngine::prepare (double sampleRate, const juce::BigInteger& activeInpu
     for (auto* s : returnStrips) s->prepare (currentSampleRate);
     reportedLatency.store (reportedRoundTripLatency);
     tape.prepare (currentSampleRate, reportedRoundTripLatency + recordOffset.load());
+    ara.prepare (currentSampleRate, Config::maxBlock);
     mainGainL.prepare (currentSampleRate, Dsp::faderGain (mainFader->get()));
     monitorSolo.prepare (currentSampleRate, 0.0f, 10.0f);
     mainSolo.prepare (currentSampleRate, 0.0f, 10.0f);
@@ -455,6 +459,8 @@ void AudioEngine::render (const float* const* inputs, int numInputs, float* cons
                           int numSamples, float* mainLeft, float* mainRight) noexcept
 {
     juce::ScopedNoDenormals noDenormals;
+
+    automation.process();
 
     if (mainLeft != nullptr)  juce::FloatVectorOperations::clear (mainLeft, numSamples);
     if (mainRight != nullptr) juce::FloatVectorOperations::clear (mainRight, numSamples);

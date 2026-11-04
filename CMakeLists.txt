@@ -37,7 +37,9 @@ endif()
 # Code shared by the app and the tests. JUCE modules are compiled once, into this
 # library (linked PRIVATE); their include paths and defines are re-exported below.
 add_library(Oxide3216Core STATIC
+    Source/AraSlots.cpp
     Source/AudioEngine.cpp
+    Source/Automation.cpp
     Source/AudioImport.cpp
     Source/BusCompressor.cpp
     Source/ChannelStrip.cpp
@@ -69,11 +71,20 @@ if(APPLE)
 else()
     target_compile_definitions(Oxide3216Core PUBLIC JUCE_PLUGINHOST_AU=0)
 endif()
+# Celemony ARA SDK (Apache 2.0), for the Tape Machine window's ARA slots: clone it into sdk/ARA_SDK. Without it Oxide
+# builds as ever, with no ARA.
+option(OXIDE_ARA "Host ARA plugins, if the ARA SDK is there" ON)
+if(OXIDE_ARA AND EXISTS "${CMAKE_SOURCE_DIR}/sdk/ARA_SDK/ARA_API/ARAInterface.h")
+    juce_set_ara_sdk_path("${CMAKE_SOURCE_DIR}/sdk/ARA_SDK")
+    target_include_directories(Oxide3216Core PUBLIC sdk/ARA_SDK sdk/ARA_SDK/ARA_API)
+    target_compile_definitions(Oxide3216Core PUBLIC JUCE_PLUGINHOST_ARA=1)
+endif()
 target_compile_definitions(Oxide3216Core PUBLIC
     JUCE_PLUGINHOST_VST3=1
     JUCE_PLUGINHOST_LADSPA=0
     JUCE_PLUGINHOST_LV2=0
     JUCE_DIRECTSOUND=0
+    JUCE_MODAL_LOOPS_PERMITTED=1
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_USE_MP3AUDIOFORMAT=1
@@ -120,6 +131,7 @@ target_sources(Oxide3216 PRIVATE
     Source/RackWindow.cpp
     Source/BusCompWindow.cpp
     Source/MidiPage.cpp
+    Source/TapeLanes.cpp
     Source/TempoPanel.cpp
     Source/ClickSettings.cpp
     Source/ExportDialogs.cpp

@@ -27,8 +27,21 @@ namespace InsertSlot
     /** Opens (or brings to the front) the window of the slot's plugin. */
     void openWindow (InsertChain&, int slot, PluginContext&);
 
-    /** Clicking a slot's name: an empty slot shows the plugin menu, a loaded one opens its window. */
+    /** Clicking a slot's name: an empty slot shows the plugin menu, a loaded one opens its window.
+        With Alt held down: removes the plugin. */
     void click (InsertChain&, int slot, PluginContext&, Param* mainAssign, juce::Component& target);
+
+    /** Takes the plugin out of a slot. */
+    void remove (InsertChain&, int slot, PluginContext&);
+
+    // Dragging a plugin onto another slot (of any chain) duplicates it: same plugin, settings and bypass, whatever
+    // was on that slot goes. Slots use these with juce::DragAndDropContainer / DragAndDropTarget.
+    /** What a drag from this slot carries. */
+    juce::var dragDescription (InsertChain&, int slot);
+    /** Is this a slot being dragged, other than to itself? */
+    bool isDragFromOtherSlot (const juce::var& description, const InsertChain& to, int toSlot);
+    /** mainAssign: the target chain's, as in choose. */
+    void drop (const juce::var& description, InsertChain& to, int toSlot, PluginContext&, Param* mainAssign);
 
 }
 
@@ -41,7 +54,43 @@ public:
     void paintButton (juce::Graphics&, bool isMouseOver, bool isButtonDown) override;
 };
 
-/** Pop-up editor for one insert chain: four slots, each with a plugin list button, the plugin's name
+/** One tape track's ARA slot (the Tape Machine window). Click: the plugin's window, or the list of ARA plugins on an
+    empty slot. Alt+click: removes the plugin. Drag onto another slot: puts the same plugin there as well, reading that
+    track (the edits belong to the audio they were made on, so they stay behind). Right-click: Bypass, Replace, Remove.
+    Its parent must be a juce::DragAndDropContainer. */
+class AraSlotBox : public juce::Component,
+                   public juce::SettableTooltipClient,
+                   public juce::DragAndDropTarget
+{
+public:
+    AraSlotBox (AraSlots&, PluginContext&, int track);
+
+    void paint (juce::Graphics&) override;
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+
+    bool isInterestedInDragSource (const SourceDetails&) override;
+    void itemDragEnter (const SourceDetails&) override;
+    void itemDragExit (const SourceDetails&) override;
+    void itemDropped (const SourceDetails&) override;
+
+private:
+    AraSlots& slots;
+    PluginContext& context;
+    const int track;
+    bool dropHover = false, pressed = false, dragging = false;
+
+    void choosePlugin();
+    void load (const juce::PluginDescription&, bool openWindow);
+    void openWindow();
+    void showMenu();
+    void remove();
+    void waitForScan();
+};
+
+/** Pop-up editor for one insert chain:
+ four slots, each with a plugin list button, the plugin's name
     (click to open its window), bypass and up/down order buttons; plus the return pan on an aux return. */
 class InsertChainEditor : public juce::Component
 {
@@ -75,6 +124,7 @@ private:
     A Link button between each aux pair makes it one stereo aux, whose two cells merge into one (one stereo
     FX chain, one return balance). */
 class InsertsSection : public juce::Component,
+                       public juce::DragAndDropContainer,
                        private juce::Timer
 {
 public:
@@ -99,13 +149,21 @@ private:
     /** One insert slot: the plugin's name, lit while it runs. Click opens the plugin (empty: the plugin menu),
         right-click gives Bypass / Replace / Remove. */
     class SlotBox : public juce::Component,
-                    public juce::SettableTooltipClient
+                    public juce::SettableTooltipClient,
+                    public juce::DragAndDropTarget
     {
     public:
         SlotBox (InsertsSection&, size_t cell, int slot);
         void paint (juce::Graphics&) override;
+        void mouseDown (const juce::MouseEvent&) override { dragging = false; }
+        void mouseDrag (const juce::MouseEvent&) override;
         void mouseUp (const juce::MouseEvent&) override;
         void refresh();
+
+        bool isInterestedInDragSource (const SourceDetails&) override;
+        void itemDragEnter (const SourceDetails&) override { dropHover = true; repaint(); }
+        void itemDragExit (const SourceDetails&) override { dropHover = false; repaint(); }
+        void itemDropped (const SourceDetails&) override;
 
     private:
         InsertsSection& owner;
@@ -113,6 +171,7 @@ private:
         const int slot;
         juce::String shownName;
         int shownState = -1;   // 0 empty, 1 running, 2 bypassed, 3 refused
+        bool dragging = false, dropHover = false;
     };
 
     struct Cell

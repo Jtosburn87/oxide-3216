@@ -33,6 +33,12 @@ public:
     void reset() { set (def); }
     void toggle() { set (on() ? 0.0f : 1.0f); }
 
+    /** Automation moving the control: audio thread, no listeners (flushAudioChange tells them later). It is no change
+        of the session: the curve is what gets saved. */
+    void setFromAudio (float newValue) noexcept;
+    /** Message thread: tells the listeners about the last setFromAudio. */
+    void flushAudioChange();
+
     float toNormalised (float v) const noexcept;
     float fromNormalised (float n) const noexcept;
 
@@ -41,6 +47,7 @@ public:
 
 private:
     std::atomic<float> value;
+    std::atomic<bool> audioChanged { false };
     juce::ListenerList<Listener> listeners;
     std::atomic<std::uint32_t>* changeCounter = nullptr;   // shared by the whole ParamSet (unsaved-changes detection)
     friend class ParamSet;

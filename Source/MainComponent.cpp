@@ -75,14 +75,14 @@ MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionControll
     {
         if (tapeWindow == nullptr)
         {
-            tapeWindow = std::make_unique<TapeMachineWindow> (engine, settings, [this] { if (saveSettings) saveSettings(); });
+            tapeWindow = std::make_unique<TapeMachineWindow> (engine, pluginContext, settings, [this] { if (saveSettings) saveSettings(); });
             tapeWindow->onShownChanged = [this] (bool) { applyCassetteAnimation(); };
         }
         tapeWindow->show();
         applyCassetteAnimation();
     };
     addAndMakeVisible (tapeMachineButton);
-    midiButton.setTooltip ("The MIDI page: MIDI tracks with VST3 instruments on a timeline, in step with the tape");
+    midiButton.setTooltip ("The MIDI/WAV page: the tape's 16 tracks as waveforms and MIDI tracks with VST3 instruments, on one timeline");
     midiButton.setColour (juce::TextButton::buttonOnColourId, ConsoleColours::amber);
     midiButton.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1b1b1b));
     midiButton.onClick = [this] { showMidiPage (midiPage == nullptr || ! midiPage->isVisible()); };
@@ -115,6 +115,8 @@ MainComponent::MainComponent (AudioEngine& e, PluginManager& pm, SessionControll
     // A plugin window must close before its plugin is deleted.
     forEachChain ([this] (InsertChain& c) { c.beforeDelete = [this] (juce::AudioProcessor* p) { pluginWindows.close (p); }; });
     engine.midi.beforeDelete = [this] (juce::AudioProcessor* p) { pluginWindows.close (p); };
+    engine.ara.beforeDelete = [this] (juce::AudioProcessor* p) { pluginWindows.close (p); };
+    engine.automation.isMouseHeld = [] { return juce::Desktop::getInstance().getMainMouseSource().isDragging(); };
 
     zoomLabel.setText ("Zoom", juce::dontSendNotification);
     zoomLabel.setFont (ConsoleLookAndFeel::uiFont (14.0f));
@@ -199,6 +201,8 @@ MainComponent::~MainComponent()
     tapeWindow = nullptr;
     forEachChain ([] (InsertChain& c) { c.beforeDelete = nullptr; c.onChange = nullptr; });
     engine.midi.beforeDelete = nullptr;
+    engine.ara.beforeDelete = nullptr;
+    engine.automation.isMouseHeld = nullptr;
     pluginWindows.closeAll();
     if (pluginListWindow != nullptr)
         delete pluginListWindow.getComponent();
@@ -371,7 +375,7 @@ void MainComponent::resized()
     bar.removeFromLeft (16);
     tapeMachineButton.setBounds (bar.removeFromLeft (120));
     bar.removeFromLeft (6);
-    midiButton.setBounds (bar.removeFromLeft (64));
+    midiButton.setBounds (bar.removeFromLeft (96));
     bar.removeFromLeft (6);
     creditsButton.setBounds (bar.removeFromLeft (76));
     bar.removeFromLeft (6);
@@ -393,6 +397,7 @@ void MainComponent::showMidiPage (bool show)
     {
         midiPage = std::make_unique<MidiPage> (engine, pluginContext);
         midiPage->onShowConsole = [this] { showMidiPage (false); };
+        midiPage->onOpenStrip = [this] (bool returnBank, int strip) { openStripWindow (returnBank ? Desk::returnSection : Desk::inputSection, strip); };
         addChildComponent (*midiPage);
         patchBay.toFront (false);     // the patch bay pops up over the page too
         midiPage->setBounds (getLocalBounds().withTrimmedTop (topBarH));
@@ -601,7 +606,7 @@ void MainComponent::getCommandInfo (juce::CommandID id, juce::ApplicationCommand
         case shuttleWindowCmd: info.setInfo ("Jog / shuttle window", "Opens the Jog / shuttle window (99 locate memories, MIDI control)", "Windows", 0); break;
         case tapeMachineCmd: info.setInfo ("Tape Machine", "Opens the Tape Machine window (transport, cassette and meters)", "Windows", 0);
                             info.addDefaultKeypress ('t', cmd); break;
-        case midiPageCmd:   info.setInfo ("MIDI page", "Shows the MIDI page in place of the console, or the console again", "Windows", 0);
+        case midiPageCmd:   info.setInfo ("MIDI/WAV page", "Shows the MIDI/WAV page in place of the console, or the console again", "Windows", 0);
                             info.addDefaultKeypress ('m', cmd); break;
         case rackCmd:       info.setInfo ("Rack", "Opens the effects rack", "Windows", 0);
                             info.addDefaultKeypress ('r', cmd); break;

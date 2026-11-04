@@ -165,6 +165,15 @@ zooms down (taller or shorter tracks, or piano roll rows). Alt + drag duplicates
 Drag a MIDI file onto the timeline to make a clip; if the file has a tempo map, a menu asks whether to
 bring the map too (it starts where the clip lands). Notes and controllers keep their MIDI channel.
 
+Automation: the A button on a tape lane or MIDI track opens Fader, Pan and Mute lanes for the console
+channel it plays through (a MIDI track must be routed). The curves live on the tape, so they follow it at
+any tempo or speed. Pointer tool: click to add a point, drag it, Alt + click or right-click to delete it.
+Pencil tool: draw. Mute lane: drag across a stretch to mute it, or start on a muted stretch to unmute.
+Each channel has a mode: Off; Read plays the curves (the controls move, and follow when you locate);
+Touch writes a control you move while the tape rolls, until you let go, then glides back; Latch writes it
+until the tape stops. The mouse, the Wi-Fi remote and MIDI controllers all count as moving it. A stopped
+tape leaves the controls free. Right-click a lane's name to clear it.
+
 Hardware: the Out: menu also has MIDI out (a MIDI output on this computer; the track plays its clips
 and what you play live to it, with or without an instrument), Channel (1-16, or As recorded: each
 note on the channel it was played or imported on; this applies to the instrument too) and MIDI out
@@ -244,6 +253,18 @@ each device remembers its choice) - handy for a player running their own headpho
 too when the page isn't scrolling), a double-tap resets one; double-tap a fader for 0 dB. Fader, mute,
 solo and assigns move their colour group, as on the console. Meters follow each bank's Meters In/Out.
 
+
+Insert slots (console and rack): Alt + click removes a plugin. Drag a plugin onto another slot of any bus to
+duplicate it, with its settings and bypass; whatever was on that slot goes.
+
+ARA slots: under each track's meter in the Tape Machine window is one slot for an ARA plugin (Melodyne,
+Pitcher...). Click an empty slot for the list, click a full one for the plugin's window. The
+plugin plays in place of the tape on that track, before the tape's own character; a track taking its input,
+a bypassed slot, winding and scrubbing play the plain tape. Alt + click removes a plugin. Drag a plugin onto
+another slot to put the same plugin there as well: it starts fresh on that track, because edits belong to the
+audio they were made on. Right-click: Bypass, Replace, Remove. Edits are saved in the session folder ("ARA
+Track 01.bin"). Export From Tape takes the plain tape; Bounce Song and mix export include the plugins.
+The first time you open the list, Oxide asks your plugins which of them offer ARA (once, a minute or two).
 
 PATCH BAY
 ---------

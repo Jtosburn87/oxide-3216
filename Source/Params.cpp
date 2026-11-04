@@ -25,6 +25,24 @@ void Param::set (float newValue)
     }
 }
 
+void Param::setFromAudio (float newValue) noexcept
+{
+    newValue = juce::jlimit (min, max, newValue);
+    if (scale == Scale::toggle)
+        newValue = newValue >= 0.5f ? 1.0f : 0.0f;
+    else if (scale == Scale::stepped)
+        newValue = std::round (newValue);
+
+    if (value.exchange (newValue) != newValue)
+        audioChanged.store (true);
+}
+
+void Param::flushAudioChange()
+{
+    if (audioChanged.exchange (false))
+        listeners.call ([this] (Listener& l) { l.paramChanged (*this); });
+}
+
 float Param::toNormalised (float v) const noexcept
 {
     v = juce::jlimit (min, max, v);

@@ -1,4 +1,5 @@
 ﻿#include "PluginManager.h"
+#include <algorithm>
 
 namespace
 {
@@ -57,9 +58,92 @@ PluginManager::PluginManager (juce::PropertiesFile& s) : settings (s)
     known.addChangeListener (this);
 }
 
+/** Asks every known plugin file again, in a process of its own, so old entries learn their ARA flag; and every other
+    plugin in the usual folders, so an ARA plugin that was never scanned shows up too. */
+class PluginManager::AraScan : public juce::Thread
+{
+public:
+    AraScan (PluginManager& o, std::function<void()> d) : juce::Thread ("ARA scan"), owner (o), done (std::move (d))
+    {
+        for (auto& t : owner.known.getTypes())
+            if (t.pluginFormatName == "VST3" && ! t.hasARAExtension)
+                files.addIfNotAlreadyThere (t.fileOrIdentifier);
+        juce::VST3PluginFormat format;
+        const auto known = owner.known.getTypes();
+        for (auto& file : format.searchPathsForPlugins (format.getDefaultLocationsToSearch(), true, false))
+            if (std::none_of (known.begin(), known.end(), [&file] (const juce::PluginDescription& d) { return d.fileOrIdentifier == file; }))
+                files.addIfNotAlreadyThere (file);
+        startThread (juce::Thread::Priority::low);
+    }
+    ~AraScan() override { stopThread (scanTimeoutMs + 2000); }
+
+    void run() override
+    {
+        OutOfProcessScanner scanner;
+        juce::VST3PluginFormat format;
+        for (auto& file : files)
+        {
+            if (threadShouldExit())
+                return;
+            juce::OwnedArray<juce::PluginDescription> found;
+            if (scanner.findPluginTypesFor (format, found, file))
+                for (auto* d : found)
+                    if (d->hasARAExtension)
+                        ara.add (*d);
+        }
+        juce::MessageManager::callAsync ([this, safe = juce::WeakReference<PluginManager::AraScanOwner> (&owner.scanOwner)]
+        {
+            if (safe != nullptr)
+                owner.araScanFinished (juce::Array<juce::PluginDescription> (ara), done);
+        });
+    }
+
+private:
+    PluginManager& owner;
+    std::function<void()> done;
+    juce::StringArray files;
+    juce::Array<juce::PluginDescription> ara;
+};
+
 PluginManager::~PluginManager()
 {
+    araScan.reset();
     known.removeChangeListener (this);
+}
+
+juce::Array<juce::PluginDescription> PluginManager::araEffects() const
+{
+    juce::Array<juce::PluginDescription> list;
+    for (auto& d : known.getTypes())
+        if (d.hasARAExtension && ! d.isInstrument)
+            list.add (d);
+    return list;
+}
+
+bool PluginManager::needsAraScan() const
+{
+    return ! settings.getBoolValue ("araScanDone", false);
+}
+
+void PluginManager::startAraScan (std::function<void()> done)
+{
+    if (araScan == nullptr)
+        araScan = std::make_unique<AraScan> (*this, std::move (done));
+}
+
+void PluginManager::araScanFinished (const juce::Array<juce::PluginDescription>& found, std::function<void()> done)
+{
+    for (auto& d : found)
+    {
+        if (auto old = known.getTypeForIdentifierString (d.createIdentifierString()))
+            known.removeType (*old);
+        known.addType (d);
+    }
+    settings.setValue ("araScanDone", true);
+    settings.saveIfNeeded();
+    araScan.reset();
+    if (done)
+        done();
 }
 
 void PluginManager::changeListenerCallback (juce::ChangeBroadcaster*)

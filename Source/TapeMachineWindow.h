@@ -4,16 +4,19 @@
 #include "AudioEngine.h"
 #include "Desk.h"
 #include "MeterBridge.h"
+#include "InsertsUI.h"
 
 /** The tape machine as a front panel of its own, after the 1980s cassette multitrack in meterbridge.jpg:
     on the left the red Power key, the moving cassette in its well, the counter, the transport keys, the
     locators, tape speed, pitch and record level; on the right the double-stacked meter section.
-    Everything works: it is the same machine as the one on the console. Fixed design size, scaled to fit. */
+    Under each track's meter its ARA slot. Everything works: it is the same machine as the one on the console.
+    Fixed design size, scaled to fit. */
 class TapeMachinePanel : public juce::Component,
+                         public juce::DragAndDropContainer,
                          private juce::Timer
 {
 public:
-    explicit TapeMachinePanel (AudioEngine&);
+    TapeMachinePanel (AudioEngine&, PluginContext&);
 
     static constexpr int leftW = 340, designW = leftW + MeterBridge::designW, designH = MeterBridge::designH;
 
@@ -40,6 +43,8 @@ private:
     juce::OwnedArray<RadioParamButton> speedButtons;
     Knob pitchKnob, levelKnob, wowKnob, flutterKnob;
     MeterBridge meters;
+    juce::OwnedArray<AraSlotBox> araSlots;
+    std::uint32_t shownAra = ~0u;
 
     juce::Rectangle<int> wellBox, transportBox, controlsBox, ventBox;
 
@@ -51,7 +56,7 @@ private:
 class TapeMachineWindow : public juce::DocumentWindow
 {
 public:
-    TapeMachineWindow (AudioEngine&, juce::PropertiesFile& settings, std::function<void()> saveSettings);
+    TapeMachineWindow (AudioEngine&, PluginContext&, juce::PropertiesFile& settings, std::function<void()> saveSettings);
 
     void show();
     void closeButtonPressed() override;

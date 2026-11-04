@@ -101,7 +101,7 @@ private:
     juce::TimedCallback windKeyWatch { [this] { checkWindKey(); } };
     void checkWindKey();
     void setUpMidiControl();
-    juce::TextButton midiButton { "MIDI" };      // the MIDI page in place of the console (lit while it shows)
+    juce::TextButton midiButton { "MIDI/WAV" };  // the MIDI/WAV page in place of the console (lit while it shows)
     std::unique_ptr<MidiPage> midiPage;
     juce::TextButton creditsButton { "Credits" };   // who made it, and how to get in touch
     juce::TextButton remoteButton { "Remote" };     // the Wi-Fi remote window (QR code for a phone or iPad)

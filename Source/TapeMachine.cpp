@@ -44,6 +44,14 @@ TapeMachine::TapeMachine (ParamSet& params)
         for (size_t i = 0; i < maxChunks; ++i)
             flags[i].store (false);
     }
+    for (auto& flags : peakChanged)
+    {
+        flags = std::make_unique<std::atomic<bool>[]> (maxChunks);
+        for (size_t i = 0; i < maxChunks; ++i)
+            flags[i].store (false);
+    }
+    for (auto& f : peakCleared)
+        f.store (true);
 
     // Vari-speed buffers, made once here (never on the audio thread).
     for (auto& r : vs)
@@ -379,6 +387,7 @@ void TapeMachine::write (int track, juce::int64 start, const float* src, int n) 
         {
             std::memcpy (c + offset, src + done, sizeof (float) * (size_t) len);
             chunkChanged[(size_t) track][(size_t) idx].store (true, std::memory_order_release);
+            peakChanged[(size_t) track][(size_t) idx].store (true, std::memory_order_release);
         }
         else
             dropped.fetch_add (len);   // allocation fell behind; should never happen in practice
@@ -780,7 +789,7 @@ void TapeMachine::processSegment (float* const* tapeOut, int offset, int count,
         const bool needPlay = isPlay && (! armed || punch);
         if (needPlay)
         {
-            readTrack (t, pos, play, count);
+            playbackRead (t, pos, play, count, armed);
             if (character)
             {
                 auto& noise = hiss[(size_t) t];
@@ -834,6 +843,13 @@ void TapeMachine::processSegment (float* const* tapeOut, int offset, int count,
         auto len = length.load();
         while (recordedEnd > len && ! length.compare_exchange_weak (len, recordedEnd)) {}
     }
+}
+
+void TapeMachine::playbackRead (int track, juce::int64 start, float* dest, int numSamples, bool armed) noexcept
+{
+    auto* source = playbackSource.load (std::memory_order_acquire);
+    if (armed || source == nullptr || ! source->render (track, start, dest, numSamples))
+        readTrack (track, start, dest, numSamples);
 }
 
 void TapeMachine::wobblePlayback (int t, float* play, int offset, int count) noexcept
@@ -1007,7 +1023,7 @@ void TapeMachine::processVarispeed (float* const* tapeOut, int n, bool rec, bool
             for (int k = 0; k < K;)
             {
                 const int len = runLength (k);
-                readTrack (t, fetchPos[(size_t) k], stream + 4 + k, len);
+                playbackRead (t, fetchPos[(size_t) k], stream + 4 + k, len, armed);
                 k += len;
             }
             for (int k = 0; k < K; ++k)
@@ -1103,6 +1119,13 @@ void TapeMachine::clearTrackFile (int track) noexcept
 {
     writtenEnd[(size_t) track].store (0);
     trackCleared[(size_t) track].store (true);
+    peakCleared[(size_t) track].store (true);
+}
+
+bool TapeMachine::takePeakChanged (int track, int chunk) noexcept
+{
+    auto& flag = peakChanged[(size_t) track][(size_t) chunk];
+    return flag.load (std::memory_order_relaxed) && flag.exchange (false, std::memory_order_acquire);
 }
 
 bool TapeMachine::takeChunkChanged (int track, int chunk) noexcept
@@ -1114,7 +1137,10 @@ bool TapeMachine::takeChunkChanged (int track, int chunk) noexcept
 void TapeMachine::markChunkChanged (int track, int chunk) noexcept
 {
     if (juce::isPositiveAndBelow (chunk, (int) maxChunks))
+    {
         chunkChanged[(size_t) track][(size_t) chunk].store (true, std::memory_order_release);
+        peakChanged[(size_t) track][(size_t) chunk].store (true, std::memory_order_release);
+    }
 }
 
 void TapeMachine::markFilesInStep() noexcept

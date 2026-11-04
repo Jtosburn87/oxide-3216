@@ -2952,6 +2952,243 @@ namespace
                && loadedM.get (ShuttleMidi::slot3) == m.get (ShuttleMidi::slot3), "saved and loaded");
     }
 
+    void testAutomation()
+    {
+        std::puts ("Automation: curves move the controls, Touch and Latch write them");
+        TestEngine e;
+        juce::BigInteger none;
+        e.prepare (48000.0, none, none);
+        auto& a = e.automation;
+        auto& tape = e.tape;
+        auto* strip = e.returnStrips[2];
+        const int s = Automation::stripIndex (true, 2);
+        std::vector<float> l (512), r (512);
+        const auto run = [&] (int blocks) { for (int i = 0; i < blocks; ++i) e.renderOffline (l.data(), r.data(), 512); };
+
+        // A ramp on the fader, a muted stretch: the value follows the tape, listeners hear of it on the message thread.
+        a.setCurve (s, Automation::fader, { { 0, 0.0f }, { 48000, 1.0f } });
+        a.setMuteRange (s, 24000, 36000, true);
+        check (a.getCurve (s, Automation::mute).size() == 3, "a muted stretch is two steps");
+        const auto startPrint = e.params.changeCount();
+        tape.setPlayOnUntil (10 * 48000);
+        tape.locate (0);
+        tape.play();
+        run (50);    // ~25600
+        const float pos = (float) tape.getPosition();
+        check (near (strip->controls.fader->get(), 100.0f * (pos - 512.0f) / 48000.0f, 2.0f), "the fader follows the curve");
+        check (strip->controls.mute->on(), "muted inside the stretch");
+        check (e.params.changeCount() == startPrint, "automation moves are no change of the session");
+        run (40);
+        check (! strip->controls.mute->on(), "unmuted after it");
+        tape.stop();
+        run (2);
+        strip->controls.fader->set (20.0f);
+        run (4);
+        check (strip->controls.fader->get() == 20.0f, "stopped: the control is free");
+        tape.locate (24000);
+        run (2);
+        check (near (strip->controls.fader->get(), 50.0f, 0.5f), "a locate chases the curve");
+
+        // Off: nothing moves.
+        a.setMode (s, Automation::Mode::off);
+        strip->controls.fader->set (33.0f);
+        tape.locate (0);
+        tape.play();
+        run (10);
+        check (strip->controls.fader->get() == 33.0f, "mode Off: the curve does nothing");
+        tape.stop();
+        run (1);
+
+        // Latch: a move takes over until the tape stops; the curve before and after it stands.
+        a.clearStrip (s);
+        a.setMode (s, Automation::Mode::read);
+        a.setCurve (s, Automation::pan, { { 0, 0.5f }, { 480000, 0.5f } });
+        a.setMode (s, Automation::Mode::latch);
+        tape.locate (9600);
+        tape.play();
+        run (10);
+        strip->controls.pan->set (0.5f);
+        run (2);
+        a.tick();
+        const auto from = tape.getPosition();
+        run (10);
+        strip->controls.pan->set (-0.5f);   // 0.25 of the travel
+        run (10);
+        check (strip->controls.pan->get() == -0.5f, "latched: the control stays where it was moved");
+        tape.stop();
+        run (2);
+        a.tick();
+        const auto to = tape.getPosition();
+        check (Automation::evaluate (a.getCurve (s, Automation::pan), Automation::pan, from - 2000) == 0.5f, "the curve before the write stands");
+        check (near (Automation::evaluate (a.getCurve (s, Automation::pan), Automation::pan, to - 100), 0.25f, 0.01f), "the move is on the curve");
+        check (Automation::evaluate (a.getCurve (s, Automation::pan), Automation::pan, to + 100) == 0.5f, "the curve after the write stands");
+
+        // Touch on a blank curve: back where it was after letting go, the move stays on the curve.
+        a.clearStrip (s);
+        a.setMode (s, Automation::Mode::touch);
+        strip->controls.fader->set (80.0f);
+        tape.locate (0);
+        tape.play();
+        run (10);
+        strip->controls.fader->set (40.0f);
+        run (10);
+        check (! a.getWriting (s, Automation::fader).empty(), "being written");
+        juce::Thread::sleep (juce::roundToInt (Automation::touchReleaseMs) + 60);
+        a.tick();
+        check (a.getWriting (s, Automation::fader).empty(), "Touch lets go");
+        const auto& c = a.getCurve (s, Automation::fader);
+        check (! c.empty(), "the move is on the curve");
+        check (near (Automation::evaluate (c, Automation::fader, 0), 0.8f, 0.001f), "Touch: the start is held at the old level");
+        check (near (Automation::evaluate (c, Automation::fader, c.back().pos + 1), 0.8f, 0.001f), "Touch goes back to where it was");
+        tape.stop();
+        run (1);
+
+        // Saved and read back.
+        a.setCurve (s, Automation::mute, { { 100, 1.0f }, { 200, 0.0f } });
+        a.setMode (s, Automation::Mode::latch);
+        const auto saved = juce::JSON::toString (a.toVar());
+        const auto faderCurve = a.getCurve (s, Automation::fader);
+        a.clearAll();
+        check (! a.hasCurves (s), "cleared");
+        a.fromVar (juce::JSON::parse (saved));
+        check (a.getMode (s) == Automation::Mode::latch, "the mode is read back");
+        check (a.getCurve (s, Automation::mute) == Automation::Curve ({ { 100, 1.0f }, { 200, 0.0f } }), "the mute curve is read back");
+        check (a.getCurve (s, Automation::fader).size() == faderCurve.size(), "fader curve read back");
+    }
+
+    void testAraSlots (juce::String path = {})
+    {
+        std::puts ("ARA slots: a plugin plays the track, and saves its edits with the session");
+        if (! AraSlots::isAvailable())
+        {
+            std::puts ("built without the ARA SDK: skipped");
+            return;
+        }
+        const juce::File pluginFile (path.isNotEmpty() ? juce::File (path)
+                                                       : juce::File::getSpecialLocation (juce::File::globalApplicationsDirectory).getChildFile ("Common Files/VST3/Pitcher.vst3"));
+        if (! pluginFile.exists())
+        {
+            std::puts ("Pitcher.vst3 not installed: skipped");
+            return;
+        }
+
+        juce::AudioPluginFormatManager fm;
+        fm.addFormat (new juce::VST3PluginFormat());
+        juce::OwnedArray<juce::PluginDescription> types;
+        juce::VST3PluginFormat().findAllTypesForFile (types, pluginFile.getFullPathName());
+        check (! types.isEmpty() && types[0]->hasARAExtension, "Pitcher offers ARA");
+        if (types.isEmpty())
+            return;
+
+        auto engine = std::make_unique<TestEngine>();
+        auto& e = *engine;
+        juce::BigInteger none;
+        e.prepare (48000.0, none, none);
+        e.tape.characterOn = false;
+
+        // A note on track 4.
+        std::vector<float> audio (48000 * 2);
+        for (size_t i = 0; i < audio.size(); ++i)
+            audio[i] = 0.25f * (float) std::sin (2.0 * juce::MathConstants<double>::pi * 220.0 * (double) i / 48000.0);
+        e.tape.writeTrack (3, 0, audio.data(), (int) audio.size());
+        e.tape.setLength ((juce::int64) audio.size());
+
+        const auto create = [&] (const juce::PluginDescription& d, juce::String& error) { return fm.createPluginInstance (d, 48000.0, Config::maxBlock, error); };
+        const auto loadOn = [&] (int track)
+        {
+            juce::String problem ("not called");
+            e.ara.load (track, create, *types[0], {}, {}, [&] (const juce::String& p) { problem = p; });
+            check (problem.isEmpty(), "the plugin takes the track");
+        };
+        loadOn (3);
+        check (e.ara.isLoaded (3), "the plugin is in its slot");
+        check (! e.ara.isLoaded (4), "the next slot is empty");
+
+        // Give it time to read the tape: what it plays is what is on the tape.
+        std::vector<float> rendered (48000);
+        const auto renderAt = [&] (juce::int64 at)
+        {
+            std::fill (rendered.begin(), rendered.end(), 0.0f);
+            return e.ara.render (3, at, rendered.data(), (int) rendered.size());
+        };
+        float peak = 0.0f;
+        for (int i = 0; i < 200 && peak < 0.1f; ++i)
+        {
+            e.ara.tick();
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+            check (renderAt (12000), "the plugin renders");
+            peak = juce::FloatVectorOperations::findMaximum (rendered.data(), (int) rendered.size());
+        }
+        check (peak > 0.1f, "the plugin plays the track");
+        float worst = 0.0f;
+        for (size_t i = 0; i < rendered.size(); ++i)
+            worst = juce::jmax (worst, std::abs (rendered[i] - audio[i + 12000]));
+        check (worst < 1.0e-5f, "unedited, it is what is on the tape");
+
+        // Through the tape machine: the same.
+        e.tape.locate (0);
+        std::vector<float> l (512), r (512);
+        e.tape.play();
+        for (int i = 0; i < 8; ++i)
+            e.renderOffline (l.data(), r.data(), 512);
+        e.tape.stop();
+
+        // Bypass and an empty slot leave the tape alone.
+        e.ara.setBypassed (3, true);
+        check (! renderAt (0), "bypassed: the plain tape");
+        e.ara.setBypassed (3, false);
+        check (! e.ara.render (5, 0, rendered.data(), 512), "an empty slot: the plain tape");
+
+        // Recording over the track: the plugin hears about the longer tape.
+        std::vector<float> more (48000, 0.1f);
+        e.tape.writeTrack (3, (juce::int64) audio.size(), more.data(), (int) more.size());
+        e.ara.tick();
+        check (renderAt (0), "plays on after the tape changed");
+
+        // A different take over the same place: the plugin plays the new audio, not its old copy.
+        if (! path.containsIgnoreCase ("Melodyne"))
+        {
+            std::vector<float> take (24000);
+            for (size_t i = 0; i < take.size(); ++i)
+                take[i] = 0.3f * (float) std::sin (2.0 * juce::MathConstants<double>::pi * 330.0 * (double) i / 48000.0);
+            e.tape.writeTrack (3, 12000, take.data(), (int) take.size());
+            std::vector<float> check24k (24000);
+            float bad = 1.0f;
+            for (int i = 0; i < 200 && bad > 1.0e-4f; ++i)
+            {
+                e.ara.tick();
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+                e.ara.render (3, 12000, check24k.data(), (int) check24k.size());
+                bad = 0.0f;
+                for (size_t k = 0; k < take.size(); ++k)
+                    bad = juce::jmax (bad, std::abs (check24k[k] - take[k]));
+            }
+            check (bad <= 1.0e-4f, "the plugin plays the new take");
+        }
+
+        // Saved beside the session and loaded back.
+        const auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("oxide-ara-test");
+        folder.deleteRecursively();
+        folder.createDirectory();
+        const auto saved = e.ara.save (folder);
+        check (folder.getChildFile ("ARA Track 04.bin").getSize() > 0, "the edits are in a file");
+        check (saved.size() == 1, "one slot in the session");
+        const juce::String json = juce::JSON::toString (saved);
+        check (e.ara.restore (juce::JSON::parse (json), folder, create).isEmpty(), "nothing missing on load");
+        check (e.ara.isLoaded (3), "the plugin is back");
+
+        // Duplicate: the same plugin on another track reads that track; remove leaves the file behind no more.
+        loadOn (7);
+        check (e.ara.isLoaded (7), "duplicated");
+        check (e.ara.getDescription (7).name == e.ara.getDescription (3).name, "the same plugin");
+        e.ara.clear (3);
+        e.ara.save (folder);
+        check (! folder.getChildFile ("ARA Track 04.bin").exists(), "a removed slot leaves no file");
+        check (folder.getChildFile ("ARA Track 08.bin").exists(), "the other slot keeps its file");
+        e.ara.clearAll();
+        folder.deleteRecursively();
+    }
+
     void testWowFlutterKnobs()
     {
         std::puts ("Tape: Wow and Flutter knobs");
@@ -4151,6 +4388,7 @@ static void testRemoteServer()
 int main (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI juceInit;
+    if (std::getenv ("TEST_UNBUFFERED") != nullptr) std::setvbuf (stdout, nullptr, _IONBF, 0);
 
     testPassThrough();
     testInputMappingWithInactiveChannels();
@@ -4203,6 +4441,8 @@ int main (int argc, char** argv)
     testSceneMidi();
     testMidiControl();
     testWowFlutterKnobs();
+    testAutomation();
+    testAraSlots();
     testMidiOut();
     testMidiClock();
     testMidiSession();
@@ -4220,6 +4460,7 @@ int main (int argc, char** argv)
     for (int i = 1; i < argc; ++i)
     {
         if (juce::String (argv[i]) == "--devices") listDevices();
+        if (juce::String (argv[i]) == "--ara" && i + 1 < argc) testAraSlots (argv[++i]);
         if (juce::String (argv[i]) == "--bench")   benchmark();
         if (juce::String (argv[i]) == "--vst3" && i + 1 < argc) hostRealPlugin (argv[++i]);
         if (juce::String (argv[i]) == "--restore" && i + 1 < argc) testRestoreInserts (argv[++i]);

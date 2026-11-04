@@ -46,12 +46,14 @@ void ConsoleLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int 
     const auto bounds = juce::Rectangle<int> (x, y, width, height).toFloat();
     const auto c = bounds.getCentre();
     const float outer = juce::jmin (bounds.getWidth(), bounds.getHeight()) * 0.5f;
-    const float skirt = outer - 5.0f;
+    // "compact" (a knob in a row of small buttons): no printed ticks, the skirt fills the box.
+    const bool compact = slider.getProperties().contains ("compact");
+    const float skirt = compact ? outer - 1.5f : outer - 5.0f;
 
     // Printed tick marks.
     g.setColour (juce::Colour (0xffc3c8ca));
     constexpr int ticks = 11;
-    for (int i = 0; i < ticks; ++i)
+    for (int i = 0; i < (compact ? 0 : ticks); ++i)
     {
         const float a = startAngle + (endAngle - startAngle) * (float) i / (ticks - 1);
         const auto p1 = c.getPointOnCircumference (outer - 0.5f, a), p2 = c.getPointOnCircumference (outer - 3.5f, a);

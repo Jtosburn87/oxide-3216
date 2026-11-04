@@ -27,7 +27,7 @@ namespace
 }
 
 //==============================================================================
-TapeMachinePanel::TapeMachinePanel (AudioEngine& e)
+TapeMachinePanel::TapeMachinePanel (AudioEngine& e, PluginContext& context)
     : engine (e), tape (e.tape),
       wowButton (*e.tape.wowFlutter, "W&F"),
       pitchKnob (*e.tape.pitch, "Pitch", juce::Colour (0xffd9d6cc)),
@@ -95,6 +95,8 @@ TapeMachinePanel::TapeMachinePanel (AudioEngine& e)
     addAndMakeVisible (flutterKnob);
 
     addAndMakeVisible (meters);
+    for (int t = 0; t < TapeMachine::numTracks; ++t)
+        addAndMakeVisible (araSlots.add (new AraSlotBox (e.ara, context, t)));
     setSize (designW, designH);
     startTimerHz (30);
 }
@@ -103,6 +105,12 @@ void TapeMachinePanel::timerCallback()
 {
     if (! isShowing())
         return;
+    if (engine.ara.getRevision() != shownAra)
+    {
+        shownAra = engine.ara.getRevision();
+        for (auto* s : araSlots)
+            s->repaint();
+    }
     updateTapeDisplay (tape, cassette, clock);
     power.setToggleState (engine.isPowered(), juce::dontSendNotification);
     play.setToggleState (tape.isPlaying(), juce::dontSendNotification);
@@ -161,9 +169,11 @@ void TapeMachinePanel::resized()
     wowKnob.setBounds (knobs.removeFromLeft (kw4).withSizeKeepingCentre (Knob::preferredWidth, Knob::preferredHeight));
     flutterKnob.setBounds (knobs.withSizeKeepingCentre (Knob::preferredWidth, Knob::preferredHeight));
 
-    ventBox = { 20, 594, 300, 76 };
+    ventBox = { 20, 594, 300, designH - 614 };
 
     meters.setBounds (leftW, 0, MeterBridge::designW, MeterBridge::designH);
+    for (int t = 0; t < araSlots.size(); ++t)
+        araSlots[t]->setBounds (MeterBridge::slotBounds (t).translated (leftW, 0));
 }
 
 void TapeMachinePanel::paint (juce::Graphics& g)
@@ -202,7 +212,7 @@ void TapeMachinePanel::paint (juce::Graphics& g)
 
     // Cooling vents.
     g.setColour (juce::Colours::black.withAlpha (0.7f));
-    for (int row = 0; row < 4; ++row)
+    for (int row = 0; row < (ventBox.getHeight() - 4) / 16; ++row)
         for (float x = (float) ventBox.getX() + 4.0f; x + 22.0f <= (float) ventBox.getRight(); x += 28.0f)
         {
             const float y = (float) ventBox.getY() + 8.0f + (float) row * 16.0f;
@@ -224,7 +234,7 @@ void TapeMachinePanel::paint (juce::Graphics& g)
 class TapeMachineWindow::Content : public juce::Component
 {
 public:
-    explicit Content (AudioEngine& e) : panel (e)
+    Content (AudioEngine& e, PluginContext& c) : panel (e, c)
     {
         addAndMakeVisible (panel);
         setSize (TapeMachinePanel::designW * 9 / 10, TapeMachinePanel::designH * 9 / 10);
@@ -242,12 +252,12 @@ public:
     TapeMachinePanel panel;
 };
 
-TapeMachineWindow::TapeMachineWindow (AudioEngine& e, juce::PropertiesFile& s, std::function<void()> save)
+TapeMachineWindow::TapeMachineWindow (AudioEngine& e, PluginContext& context, juce::PropertiesFile& s, std::function<void()> save)
     : juce::DocumentWindow ("Tape machine", panelColour, juce::DocumentWindow::closeButton | juce::DocumentWindow::minimiseButton),
       settings (s), saveSettings (std::move (save))
 {
     setUsingNativeTitleBar (true);
-    content = new Content (e);
+    content = new Content (e, context);
     setContentOwned (content, true);
     constrainer.setFixedAspectRatio ((double) TapeMachinePanel::designW / TapeMachinePanel::designH);
     constrainer.setSizeLimits (TapeMachinePanel::designW / 2, TapeMachinePanel::designH / 2, TapeMachinePanel::designW * 3, TapeMachinePanel::designH * 3);

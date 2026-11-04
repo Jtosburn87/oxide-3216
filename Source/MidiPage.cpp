@@ -367,6 +367,20 @@ public:
         sync.setTooltip ("MIDI clock out: drum machines and sequencers follow the tape (tempo map, song position, start / stop)");
         styleSmall (sync);
         sync.onClick = [this] { syncMenu(); };
+        scrollLock.setClickingTogglesState (true);
+        scrollLock.setToggleState (page.scrollLock, juce::dontSendNotification);
+        styleSmall (scrollLock);
+        scrollLock.setTooltip ("Scroll Lock: the tape head stays in the middle and scrolling across moves the tape. "
+                               "Off: scroll around freely without moving the tape.");
+        scrollLock.onClick = [this]
+        {
+            page.setScrollLock (scrollLock.getToggleState());
+        };
+        midiOnTop.setClickingTogglesState (true);
+        midiOnTop.setToggleState (page.midiOnTop, juce::dontSendNotification);
+        styleSmall (midiOnTop);
+        midiOnTop.setTooltip ("The MIDI tracks above the tape (lit) or below it");
+        midiOnTop.onClick = [this] { page.setMidiOnTop (midiOnTop.getToggleState()); };
         console.setTooltip ("Back to the console");
         console.onClick = [this] { if (page.onShowConsole) page.onShowConsole(); };
 
@@ -375,7 +389,7 @@ public:
                                     (juce::Component*) &gridBars, (juce::Component*) &gridSecs, (juce::Component*) &snapBox,
                                     (juce::Component*) &snapOn, (juce::Component*) &pointer, (juce::Component*) &pencil,
                                     (juce::Component*) &addTrack, (juce::Component*) &tempoMap, (juce::Component*) &sync,
-                                    (juce::Component*) &console })
+                                    (juce::Component*) &console, (juce::Component*) &scrollLock, (juce::Component*) &midiOnTop })
             addAndMakeVisible (c);
     }
 
@@ -507,6 +521,10 @@ public:
         addTrack.setBounds (r.removeFromRight (106));
         r.removeFromRight (6);
         sync.setBounds (r.removeFromRight (70));
+        r.removeFromRight (6);
+        midiOnTop.setBounds (r.removeFromRight (96));
+        r.removeFromRight (4);
+        scrollLock.setBounds (r.removeFromRight (92));
     }
 
     void paint (juce::Graphics& g) override
@@ -529,6 +547,7 @@ private:
     juce::TextButton tempoMap { juce::CharPointer_UTF8 ("Tempo map \xe2\x96\xbe") };
     juce::TextButton addTrack { "+ MIDI track" }, console { juce::CharPointer_UTF8 ("Console \xe2\x97\x82") };
     juce::TextButton sync { juce::CharPointer_UTF8 ("Sync \xe2\x96\xbe") };
+    juce::TextButton scrollLock { "Scroll Lock" }, midiOnTop { "MIDI on top" };
     juce::Rectangle<int> snapLabel;
 };
 
@@ -567,7 +586,11 @@ public:
         route.setTooltip ("Where the instrument goes: an input channel (a stereo instrument takes a linked pair) or a tape track. "
                           "It is patched in the patch bay too.");
         route.onClick = [this] { chooseRoute(); };
-        for (auto* b : { &rec, &mute, &solo, &instrument, &list, &input, &route })
+        automation.setTooltip ("Automation: show the fader, pan and mute lanes of the channel this track is routed to");
+        automation.setColour (juce::TextButton::buttonOnColourId, amber);
+        automation.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1b1b1b));
+        automation.onClick = [this] { page.setMidiAutomationOpen (slot, ! page.midiAutoOpen[(size_t) slot]); };
+        for (auto* b : { &rec, &mute, &solo, &automation, &instrument, &list, &input, &route })
             addAndMakeVisible (b);
         refresh();
     }
@@ -580,6 +603,7 @@ public:
         if (! name.isBeingEdited())
             name.setText (m.getName (slot), juce::dontSendNotification);
         rec.setToggleState (m.isArmed (slot), juce::dontSendNotification);
+        automation.setToggleState (page.midiAutoOpen[(size_t) slot], juce::dontSendNotification);
         mute.setToggleState (m.isMuted (slot), juce::dontSendNotification);
         solo.setToggleState (m.isSoloed (slot), juce::dontSendNotification);
         auto* p = m.getInstrument (slot);
@@ -617,7 +641,7 @@ public:
         // Short tracks (zoomed out) drop the routing row, then the instrument row.
         auto r = getLocalBounds().reduced (8, getHeight() < 50 ? 5 : 6).withTrimmedLeft (8);
         auto top = r.removeFromTop (22);
-        for (auto* b : { &solo, &mute, &rec })
+        for (auto* b : { &solo, &mute, &rec, &automation })
         {
             b->setBounds (top.removeFromRight (24));
             top.removeFromRight (3);
@@ -664,7 +688,7 @@ public:
 private:
     MidiPage& page;
     juce::Label name;
-    juce::TextButton rec { "R" }, mute { "M" }, solo { "S" }, instrument, list { juce::CharPointer_UTF8 ("\xe2\x89\xa1") }, input, route;
+    juce::TextButton rec { "R" }, mute { "M" }, solo { "S" }, automation { "A" }, instrument, list { juce::CharPointer_UTF8 ("\xe2\x89\xa1") }, input, route;
 
     void openInstrument()
     {
@@ -887,7 +911,14 @@ public:
         setWantsKeyboardFocus (true);
         addAndMakeVisible (hScroll);
         hScroll.setAutoHide (false);
-        hWatch.moved = [this] (double start) { scrollBeats = start; page.refreshAll(); };
+        hWatch.moved = [this] (double start)
+        {
+            if (page.scrollLock)   // the play line stays in the middle: dragging the bar moves the tape under it
+                locateCentreTo (start + getWidth() * 0.5 / pxPerBeat);
+            else
+                scrollBeats = start;
+            page.refreshAll();
+        };
         hScroll.addListener (&hWatch);
         addAndMakeVisible (zoom);
         zoom.onHorizontal = [this] (int d) { zoomAcross (d > 0 ? 1.25 : 0.8); };
@@ -902,7 +933,19 @@ public:
 
     double xForTick (double ticks) const { return (ticks / Tempo::ticksPerQuarter - scrollBeats) * pxPerBeat; }
     double tickForX (double x) const { return (x / pxPerBeat + scrollBeats) * Tempo::ticksPerQuarter; }
-    int laneTop (int row) const { return rulerH + row * page.laneH - scrollY; }
+    int laneTop (int row) const { return rulerH + page.midiRowTop (row) - scrollY; }
+    /** The MIDI row or tape lane under a y in this component, or -1. */
+    int midiRowAtY (double y) const { return y < rulerH ? -1 : page.midiRowAt (y - rulerH + scrollY); }
+    int tapeLaneAtY (double y) const { return y < rulerH ? -1 : page.tapeLaneAt (y - rulerH + scrollY); }
+
+    /** Scroll Lock: moves the tape so that this beat is under the play line (in the middle). */
+    void locateCentreTo (double beats)
+    {
+        auto& tape = page.engine.tape;
+        const double ticks = juce::jmax (0.0, beats * Tempo::ticksPerQuarter);
+        tape.locate ((juce::int64) std::llround (page.engine.tempo.samplesAt (ticks, tape.getSampleRate())));
+        follow();
+    }
     int areaHeight() const { return getHeight() - 26; }   // above the scroll bar and zoom buttons
 
     void updateScroll()
@@ -911,7 +954,7 @@ public:
         const double songBeats = (double) page.midi.songEnd() / Tempo::ticksPerQuarter;
         const double tapeBeats = page.engine.tempo.ticksAt ((double) page.engine.tape.getLength(), page.engine.tape.getSampleRate()) / Tempo::ticksPerQuarter;
         const double total = juce::jmax (songBeats, tapeBeats, scrollBeats + visibleBeats) + 16.0;
-        hScroll.setRangeLimits (0.0, total, juce::dontSendNotification);
+        hScroll.setRangeLimits (juce::jmin (0.0, scrollBeats), total, juce::dontSendNotification);   // locked, the start sits mid-screen
         hScroll.setCurrentRange (scrollBeats, visibleBeats, juce::dontSendNotification);
     }
 
@@ -931,6 +974,7 @@ public:
         pxPerBeat = juce::jlimit (4.0, 400.0, pxPerBeat * factor);
         scrollBeats = juce::jmax (0.0, centreBeats - getWidth() * 0.5 / pxPerBeat);
         updateScroll();
+        follow();   // locked: round the play line
         page.refreshAll();
     }
 
@@ -957,6 +1001,11 @@ public:
             for (int c = 0; c < (int) clips.size(); ++c)
                 paintClip (g, clips[(size_t) c], slots[i], laneTop (i) + 4, slots[i] == page.selectedTrack && c == page.selectedClip);
         }
+        // The gap between the MIDI tracks and the tape.
+        g.setColour (pageBg);
+        g.fillRect (0, rulerH + (page.midiOnTop ? page.midiBlockH() : page.tapeBlockH()) - scrollY, w, MidiPage::blockGap);
+        paintTape (g, h);
+        paintAutomation (g, h);
         if (dragNew)
         {
             g.setColour (page.midi.getColour (dragTrack).withAlpha (0.35f));
@@ -972,7 +1021,7 @@ public:
             const float dx = (float) xForTick ((double) dropTick ((float) dropAt.x));
             g.setColour (amber);
             g.fillRect (dx - 1.0f, 0.0f, 2.0f, (float) h);
-            const int row = dropAt.y < rulerH ? 0 : (int) std::floor ((dropAt.y - rulerH + scrollY) / (double) page.laneH);
+            const int row = dropAt.y < rulerH ? 0 : midiRowAtY (dropAt.y);
             const auto where = juce::isPositiveAndBelow (row, slots.size()) ? page.midi.getName (slots[row]) : juce::String ("a new track");
             g.setFont (ConsoleLookAndFeel::uiFont (12.0f, true));
             g.drawText ("Drop onto " + where, juce::Rectangle<float> (dx + 6.0f, (float) rulerH + 4.0f, 240.0f, 16.0f), juce::Justification::centredLeft, false);
@@ -1000,7 +1049,7 @@ public:
         {
             g.setColour (textDim);
             g.setFont (ConsoleLookAndFeel::uiFont (15.0f));
-            g.drawText ("No MIDI tracks yet: click + MIDI track", getLocalBounds().withTrimmedTop (rulerH).withHeight (120), juce::Justification::centred, false);
+            g.drawText ("No MIDI tracks yet: click + MIDI track", juce::Rectangle<int> (0, laneTop (0), w, page.laneH), juce::Justification::centred, false);
         }
     }
 
@@ -1008,15 +1057,22 @@ public:
     {
         if (e.mods.isAltDown())
         {
-            // Zoom round the mouse.
+            // Zoom round the mouse (locked: round the play line).
             const double at = tickForX (e.position.x);
             pxPerBeat = juce::jlimit (4.0, 400.0, pxPerBeat * (wheel.deltaY > 0 ? 1.25 : 0.8));
             scrollBeats = juce::jmax (0.0, at / Tempo::ticksPerQuarter - e.position.x / pxPerBeat);
+            follow();
         }
         else if (e.mods.isCommandDown())
             page.zoomLanes (wheel.deltaY > 0 ? 1 : -1);
         else if (e.mods.isShiftDown() || std::abs (wheel.deltaX) > std::abs (wheel.deltaY))
-            scrollBeats = juce::jmax (0.0, scrollBeats - (wheel.deltaX != 0.0f ? wheel.deltaX : wheel.deltaY) * 200.0 / pxPerBeat);
+        {
+            const double by = (wheel.deltaX != 0.0f ? wheel.deltaX : wheel.deltaY) * 200.0 / pxPerBeat;
+            if (page.scrollLock)   // scrolling across moves the tape under the play line
+                locateCentreTo (scrollBeats + getWidth() * 0.5 / pxPerBeat - by);
+            else
+                scrollBeats = juce::jmax (0.0, scrollBeats - by);
+        }
         else
             page.vScroll.setCurrentRangeStart (page.vScroll.getCurrentRangeStart() - wheel.deltaY * 120.0);
         updateScroll();
@@ -1035,7 +1091,22 @@ public:
             dragMode = locating;
             return;
         }
-        const int row = (int) std::floor ((pos.y - rulerH + scrollY) / page.laneH);
+        if (const auto row = autoRowAtY (pos.y); row.y >= 0)
+        {
+            autoDown (e, row);
+            return;
+        }
+        if (tapeLaneAtY (pos.y) >= 0)
+        {
+            // The tape can't be edited here: a click winds it there, like the ruler.
+            if (! e.mods.isPopupMenu())
+            {
+                locateTo (pos.x);
+                dragMode = locating;
+            }
+            return;
+        }
+        const int row = midiRowAtY (pos.y);
         const auto slots = page.midi.usedSlots();
         if (! juce::isPositiveAndBelow (row, slots.size()))
             return;
@@ -1091,6 +1162,11 @@ public:
             locateTo (e.position.x);
             return;
         }
+        if (dragMode == autoPoint || dragMode == autoDraw || dragMode == autoMute)
+        {
+            autoDrag (e);
+            return;
+        }
         if (dragNew)
         {
             newEnd = juce::jmax (newStart + 1, page.snap (tick));
@@ -1142,6 +1218,14 @@ public:
 
     void mouseUp (const juce::MouseEvent&) override
     {
+        if (dragMode == autoMute)
+        {
+            if (muteTo != muteFrom)
+                page.engine.automation.setMuteRange (autoEdit.strip, juce::jmin (muteFrom, muteTo), juce::jmax (muteFrom, muteTo), muteValue);
+            dragMode = none;
+            repaint();
+            return;
+        }
         if (altCopy)
         {
             altCopy = false;
@@ -1178,7 +1262,7 @@ public:
         // Pointer tool: double-click empty lane space for a one-bar clip.
         if (e.position.y < rulerH || page.tool != Tool::pointer)
             return;
-        const int row = (int) std::floor ((e.position.y - rulerH + scrollY) / page.laneH);
+        const int row = midiRowAtY (e.position.y);
         const auto slots = page.midi.usedSlots();
         if (! juce::isPositiveAndBelow (row, slots.size()) || clipAt (slots[row], e.position.x) >= 0)
             return;
@@ -1239,7 +1323,7 @@ public:
         dropping = false;
         repaint();
         const auto slots = page.midi.usedSlots();
-        const int row = y < rulerH ? 0 : (int) std::floor ((y - rulerH + scrollY) / (double) page.laneH);
+        const int row = y < rulerH ? 0 : midiRowAtY (y);
         const int track = juce::isPositiveAndBelow (row, slots.size()) ? slots[row] : -1;
         const auto start = dropTick ((float) x);
 
@@ -1324,24 +1408,29 @@ public:
             juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "MIDI file", problems.joinIntoString ("\n"));
     }
 
-    /** Keeps the play line in view while the tape runs. */
+    /** Scroll Lock: keeps the play line in the middle (not while a clip is being dragged). Off: the view stays put. */
     void follow()
     {
-        auto& tape = page.engine.tape;
-        if (! tape.isPlaying() || dragMode != none)
+        if (! page.scrollLock || dragNew || dragMode == move || dragMode == trimStart || dragMode == trimEnd)
             return;
-        const double x = xForTick (page.engine.tempo.ticksAt ((double) tape.getPosition(), tape.getSampleRate()));
-        if (x > getWidth() - 40 || x < 0)
-        {
-            scrollBeats = juce::jmax (0.0, scrollBeats + (x - 80.0) / pxPerBeat);
-            updateScroll();
-            page.refreshAll();
-        }
+        auto& tape = page.engine.tape;
+        const double head = page.engine.tempo.ticksAt ((double) tape.getPosition(), tape.getSampleRate()) / Tempo::ticksPerQuarter;
+        const double want = head - getWidth() * 0.5 / pxPerBeat;
+        if (std::abs (want - scrollBeats) * pxPerBeat < 0.25)
+            return;
+        scrollBeats = want;
+        updateScroll();
+        repaint();
     }
 
 private:
     MidiPage& page;
-    enum DragMode { none, locating, move, trimStart, trimEnd } dragMode = none;
+    enum DragMode { none, locating, move, trimStart, trimEnd, autoPoint, autoDraw, autoMute } dragMode = none;
+    MidiPage::AutoRow autoEdit;       // the automation row being edited
+    Automation::Curve autoCurve;      // its curve, as it is being changed
+    int autoIndex = -1;               // the point being dragged
+    juce::int64 lastDrawn = 0, muteFrom = 0, muteTo = 0;
+    bool muteValue = true;
     int dragTrack = -1;
     Midi::Clip original;
     double downTick = 0.0;
@@ -1372,7 +1461,8 @@ private:
     {
         const auto ticks = juce::jmax (0.0, tickForX (x));
         const auto snapped = page.snapOn ? (double) page.snap (ticks) : ticks;
-        page.engine.tape.locate ((juce::int64) std::llround (page.engine.tempo.samplesAt (snapped, page.engine.tape.getSampleRate())));
+        // Winds there, as a locate memory does (Scroll Lock: the view travels with it).
+        page.engine.tape.windTo ((juce::int64) std::llround (page.engine.tempo.samplesAt (snapped, page.engine.tape.getSampleRate())));
         repaint();
     }
 
@@ -1431,10 +1521,367 @@ private:
     std::pair<double, double> secondsGrid() const
     {
         auto& tempo = page.engine.tempo;
-        const double s0 = juce::jmax (0.0, tempo.secondsAt (tickForX (0.0)));
+        const double s0 = juce::jmax (0.0, tempo.secondsAt (juce::jmax (0.0, tickForX (0.0))));
         const double pxPerSecond = xForTick (tempo.ticksAtSeconds (s0 + 1.0)) - xForTick (tempo.ticksAtSeconds (s0));
         const double step = pxPerSecond >= 40.0 ? 1.0 : pxPerSecond >= 8.0 ? 5.0 : 30.0;
         return { std::floor (s0 / step) * step, step };
+    }
+
+    /** The tape: black lanes with grey guard bands between them, each track's whole waveform in its channel's colour. */
+    // Automation lanes ----------------------------------------------------------------------
+    double xForPos (juce::int64 pos) const
+    {
+        return xForTick (page.engine.tempo.ticksAt ((double) pos, page.engine.tape.getSampleRate()));
+    }
+    juce::int64 posForTick (double tick) const
+    {
+        return (juce::int64) std::llround (page.engine.tempo.samplesAt (juce::jmax (0.0, tick), page.engine.tape.getSampleRate()));
+    }
+    /** The open automation row under a y in this component (its y is -1 if none). */
+    MidiPage::AutoRow autoRowAtY (double y) const
+    {
+        if (y >= rulerH)
+        {
+            const double content = y - rulerH + scrollY;
+            for (const auto& r : page.autoRows())
+                if (content >= r.y && content < r.y + AutoLaneHeader::rowH)
+                    return r;
+        }
+        MidiPage::AutoRow none;
+        none.y = -1;
+        return none;
+    }
+    int rowScreenY (const MidiPage::AutoRow& r) const { return rulerH + r.y - scrollY; }
+    float valueForY (const MidiPage::AutoRow& r, double y) const
+    {
+        const double h = AutoLaneHeader::rowH - 9.0;
+        return juce::jlimit (0.0f, 1.0f, (float) (1.0 - (y - rowScreenY (r) - 4.0) / h));
+    }
+    float yForValue (const MidiPage::AutoRow& r, float v) const
+    {
+        return (float) rowScreenY (r) + 4.0f + (1.0f - v) * ((float) AutoLaneHeader::rowH - 9.0f);
+    }
+    int pointAt (const MidiPage::AutoRow& r, juce::Point<float> p) const
+    {
+        const auto& c = page.engine.automation.getCurve (r.strip, r.target);
+        int best = -1;
+        float bestD = 49.0f;
+        for (int i = 0; i < (int) c.size(); ++i)
+        {
+            const float dx = (float) xForPos (c[(size_t) i].pos) - p.x, dy = yForValue (r, c[(size_t) i].value) - p.y;
+            if (dx * dx + dy * dy < bestD)
+            {
+                bestD = dx * dx + dy * dy;
+                best = i;
+            }
+        }
+        return best;
+    }
+
+    void autoDown (const juce::MouseEvent& e, const MidiPage::AutoRow& row)
+    {
+        if (row.strip < 0)
+            return;
+        auto& a = page.engine.automation;
+        autoEdit = row;
+        const auto pos = posForTick (tickForX (e.position.x));
+        if (row.target == Automation::mute)
+        {
+            // Drag across to mute that stretch (or, starting on a muted one, to unmute it).
+            if (e.mods.isPopupMenu())
+                return autoMenu (row);
+            muteFrom = muteTo = pos;
+            muteValue = a.valueAt (row.strip, Automation::mute, pos, a.getParam (row.strip, Automation::mute)->on() ? 1.0f : 0.0f) < 0.5f;
+            dragMode = autoMute;
+            return;
+        }
+        autoCurve = a.getCurve (row.strip, row.target);
+        const int hit = pointAt (row, e.position);
+        if (e.mods.isPopupMenu() || e.mods.isAltDown())
+        {
+            if (hit >= 0)
+            {
+                autoCurve.erase (autoCurve.begin() + hit);
+                a.setCurve (row.strip, row.target, autoCurve);
+            }
+            else if (e.mods.isPopupMenu())
+                autoMenu (row);
+            return;
+        }
+        const float value = valueForY (row, e.position.y);
+        if (page.tool == Tool::pencil)
+        {
+            lastDrawn = pos;
+            autoCurve.push_back ({ pos, value });
+            a.setCurve (row.strip, row.target, autoCurve);
+            autoCurve = a.getCurve (row.strip, row.target);
+            dragMode = autoDraw;
+            return;
+        }
+        if (hit >= 0)
+            autoIndex = hit;
+        else
+        {
+            const auto at = posForTick ((double) page.snap (tickForX (e.position.x)));
+            autoIndex = (int) (std::upper_bound (autoCurve.begin(), autoCurve.end(), at, [] (juce::int64 p, const Automation::Point& q) { return p < q.pos; }) - autoCurve.begin());
+            autoCurve.insert (autoCurve.begin() + autoIndex, { at, value });
+            a.setCurve (row.strip, row.target, autoCurve);
+        }
+        dragMode = autoPoint;
+    }
+
+    void autoDrag (const juce::MouseEvent& e)
+    {
+        auto& a = page.engine.automation;
+        if (dragMode == autoMute)
+        {
+            muteTo = posForTick (tickForX (e.position.x));
+            repaint();
+            return;
+        }
+        const float value = valueForY (autoEdit, e.position.y);
+        if (dragMode == autoDraw)
+        {
+            const auto pos = posForTick (tickForX (e.position.x));
+            const auto lo = juce::jmin (pos, lastDrawn), hi = juce::jmax (pos, lastDrawn);
+            autoCurve.erase (std::remove_if (autoCurve.begin(), autoCurve.end(), [&] (const Automation::Point& p) { return p.pos > lo && p.pos < hi && p.pos != lastDrawn; }), autoCurve.end());
+            autoCurve.push_back ({ pos, value });
+            lastDrawn = pos;
+            a.setCurve (autoEdit.strip, autoEdit.target, autoCurve);
+            autoCurve = a.getCurve (autoEdit.strip, autoEdit.target);
+            return;
+        }
+        if (! juce::isPositiveAndBelow (autoIndex, (int) autoCurve.size()))
+            return;
+        auto pos = posForTick ((double) page.snap (tickForX (e.position.x)));
+        if (autoIndex > 0)
+            pos = juce::jmax (pos, autoCurve[(size_t) autoIndex - 1].pos);
+        if (autoIndex + 1 < (int) autoCurve.size())
+            pos = juce::jmin (pos, autoCurve[(size_t) autoIndex + 1].pos);
+        autoCurve[(size_t) autoIndex] = { pos, value };
+        a.setCurve (autoEdit.strip, autoEdit.target, autoCurve);
+    }
+
+    void autoMenu (const MidiPage::AutoRow& row)
+    {
+        auto& a = page.engine.automation;
+        juce::PopupMenu menu;
+        menu.addItem (1, "Clear " + juce::String (AutoLaneHeader::targetName (row.target)) + " automation", ! a.getCurve (row.strip, row.target).empty());
+        menu.showMenuAsync (juce::PopupMenu::Options(), [&a, row] (int result)
+        {
+            if (result == 1)
+                a.clearCurve (row.strip, row.target);
+        });
+    }
+
+    juce::String autoText (const MidiPage::AutoRow& r, float v) const
+    {
+        auto* p = page.engine.automation.getParam (r.strip, r.target);
+        const float value = p->fromNormalised (v);
+        if (r.target == Automation::pan)
+            return std::abs (value) < 0.005f ? juce::String ("C") : juce::String (std::abs (value) * 100.0f, 0) + (value < 0 ? " L" : " R");
+        return value <= 0.0f ? juce::String (juce::CharPointer_UTF8 ("-\xe2\x88\x9e")) : juce::String (Dsp::faderDb (value), 1) + " dB";
+    }
+
+    void paintAutomation (juce::Graphics& g, int areaBottom)
+    {
+        const auto rows = page.autoRows();
+        if (rows.empty())
+            return;
+        juce::Graphics::ScopedSaveState state (g);
+        const int w = getWidth();
+        g.reduceClipRegion (0, rulerH, w, areaBottom - rulerH);
+        auto& a = page.engine.automation;
+        const auto rowH = AutoLaneHeader::rowH;
+
+        for (const auto& r : rows)
+        {
+            const int y = rowScreenY (r);
+            if (y + rowH <= rulerH || y >= areaBottom)
+                continue;
+            g.setColour (juce::Colour (0xff131517));
+            g.fillRect (0, y, w, rowH);
+            g.beginTransparencyLayer (0.3f);
+            paintGrid (g, y, y + rowH);
+            g.endTransparencyLayer();
+            g.setColour (juce::Colour (0xff35383b));
+            g.fillRect (0, y + rowH - 1, w, 1);
+            if (r.strip < 0)
+                continue;
+
+            const bool active = a.getMode (r.strip) != Automation::Mode::off;
+            const auto colour = (r.target == Automation::fader ? juce::Colour (0xffffb22e) : r.target == Automation::pan ? juce::Colour (0xff5aa8e6) : juce::Colour (0xffe0563a))
+                                    .withAlpha (active ? 1.0f : 0.4f);
+            const auto& curve = a.getCurve (r.strip, r.target);
+            auto* param = a.getParam (r.strip, r.target);
+            const float xEnd = (float) w;
+
+            if (r.target == Automation::mute)
+            {
+                // Muted stretches are filled.
+                const auto fill = [&] (const Automation::Curve& c, juce::Colour col)
+                {
+                    g.setColour (col);
+                    for (size_t i = 0; i < c.size(); ++i)
+                        if (c[i].value >= 0.5f)
+                        {
+                            const float x0 = i == 0 ? 0.0f : (float) xForPos (c[i].pos);
+                            const float x1 = i + 1 < c.size() ? (float) xForPos (c[i + 1].pos) : xEnd;
+                            g.fillRect (x0, (float) y + 6.0f, x1 - x0, (float) rowH - 13.0f);
+                        }
+                };
+                fill (curve, colour.withAlpha (active ? 0.75f : 0.3f));
+                fill (a.getWriting (r.strip, r.target), juce::Colour (0xffff3b2a));
+                if (dragMode == autoMute && autoEdit.strip == r.strip && autoEdit.target == r.target)
+                {
+                    const float x0 = (float) xForPos (juce::jmin (muteFrom, muteTo)), x1 = (float) xForPos (juce::jmax (muteFrom, muteTo));
+                    g.setColour (muteValue ? juce::Colour (0xccff3b2a) : juce::Colour (0xcc2a2d30));
+                    g.fillRect (x0, (float) y + 6.0f, x1 - x0, (float) rowH - 13.0f);
+                }
+                continue;
+            }
+
+            if (r.target == Automation::pan)   // centre
+            {
+                g.setColour (juce::Colours::white.withAlpha (0.1f));
+                g.fillRect (0.0f, yForValue (r, 0.5f), xEnd, 1.0f);
+            }
+            if (curve.empty())
+            {
+                g.setColour (colour.withAlpha (0.3f));
+                g.fillRect (0.0f, yForValue (r, param->toNormalised (param->get())), xEnd, 1.0f);
+            }
+            else
+            {
+                juce::Path line;
+                line.startNewSubPath (0.0f, yForValue (r, curve.front().value));
+                for (const auto& p : curve)
+                {
+                    const float x = (float) xForPos (p.pos);
+                    if (x > xEnd + 200.0f)
+                    {
+                        line.lineTo (x, yForValue (r, p.value));
+                        break;
+                    }
+                    line.lineTo (juce::jmax (-200.0f, x), yForValue (r, p.value));
+                }
+                if ((float) xForPos (curve.back().pos) <= xEnd)
+                    line.lineTo (xEnd, yForValue (r, curve.back().value));
+                g.setColour (colour);
+                g.strokePath (line, juce::PathStrokeType (1.5f));
+                // The points, when they are far enough apart to pick up.
+                if (curve.size() < 400)
+                    for (const auto& p : curve)
+                    {
+                        const float x = (float) xForPos (p.pos);
+                        if (x >= -4.0f && x <= xEnd + 4.0f)
+                            g.fillEllipse (x - 2.5f, yForValue (r, p.value) - 2.5f, 5.0f, 5.0f);
+                    }
+            }
+            const auto& writing = a.getWriting (r.strip, r.target);
+            if (! writing.empty())
+            {
+                juce::Path line;
+                line.startNewSubPath ((float) xForPos (writing.front().pos), yForValue (r, writing.front().value));
+                for (const auto& p : writing)
+                    line.lineTo ((float) xForPos (p.pos), yForValue (r, p.value));
+                g.setColour (juce::Colour (0xffff3b2a));
+                g.strokePath (line, juce::PathStrokeType (2.0f));
+            }
+            // The value under a point being dragged.
+            if (dragMode == autoPoint && autoEdit.strip == r.strip && autoEdit.target == r.target
+                && juce::isPositiveAndBelow (autoIndex, (int) curve.size()))
+            {
+                const auto& p = curve[(size_t) autoIndex];
+                g.setColour (juce::Colours::white);
+                g.setFont (ConsoleLookAndFeel::uiFont (11.0f, true));
+                g.drawText (autoText (r, p.value), juce::Rectangle<int> ((int) xForPos (p.pos) + 8, y, 70, rowH), juce::Justification::centredLeft, false);
+            }
+        }
+    }
+
+    void paintTape (juce::Graphics& g, int areaBottom)
+    {
+        const int w = getWidth();
+        const int top = rulerH + page.tapeTop() - scrollY, bottom = top + page.tapeBlockH();
+        if (bottom <= rulerH || top >= areaBottom)
+            return;
+        juce::Graphics::ScopedSaveState state (g);
+        g.reduceClipRegion (0, juce::jmax (rulerH, top), w, juce::jmin (areaBottom, bottom) - juce::jmax (rulerH, top));
+
+        auto& tape = page.engine.tape;
+        auto& tempo = page.engine.tempo;
+        const double sr = tape.getSampleRate();
+        const float zeroX = (float) xForTick (0.0);
+
+        g.setColour (juce::Colour (0xff070707));
+        g.fillRect (0, top, w, bottom - top);
+        // Before the start of the tape: leader.
+        if (zeroX > 0.0f)
+        {
+            g.setColour (juce::Colour (0xff2b2a27));
+            g.fillRect (0.0f, (float) top, zeroX, (float) (bottom - top));
+        }
+        // The locators: the punch / loop region, faintly across the tape.
+        if (tape.hasRegion())
+        {
+            const float x0 = (float) xForTick (tempo.ticksAt ((double) tape.getInPoint(), sr));
+            const float x1 = (float) xForTick (tempo.ticksAt ((double) tape.getOutPoint(), sr));
+            g.setColour (juce::Colour (0x203a8fd6));
+            g.fillRect (x0, (float) top, x1 - x0, (float) (bottom - top));
+        }
+        g.beginTransparencyLayer (0.3f);
+        paintGrid (g, top, bottom);
+        g.endTransparencyLayer();
+
+        // Where each column of pixels starts on the tape, in tape samples (shared by every lane).
+        const int x0 = juce::jmax (0, (int) std::floor (zeroX));
+        std::vector<juce::int64> columnAt ((size_t) juce::jmax (0, w - x0 + 1));
+        for (size_t i = 0; i < columnAt.size(); ++i)
+            columnAt[i] = (juce::int64) tempo.samplesAt (juce::jmax (0.0, tickForX ((double) x0 + (double) i)), sr);
+        const juce::int64 end = tape.getLength();
+
+        for (int t = 0; t < Config::numTracks; ++t)
+        {
+            const int laneY = rulerH + page.tapeLaneTop (t) - scrollY, laneHt = page.tapeH[(size_t) t];
+            if (laneY + laneHt <= rulerH || laneY >= areaBottom)
+                continue;
+            const auto feed = TapeLanes::feedOf (page.engine, t);
+            const auto colour = TapeLanes::waveColour (feed);
+            if (tape.takesInput (t))   // armed and taking its input: a red tint, as the arm button shows
+            {
+                g.setColour (juce::Colour (0x26d0473c));
+                g.fillRect (0, laneY, w, laneHt - 3);
+            }
+            const float cy = (float) laneY + (float) (laneHt - 3) * 0.5f;
+            const float half = juce::jmax (1.0f, (float) (laneHt - 3) * 0.5f - 3.0f);
+            g.setColour (colour.withAlpha (0.18f));
+            g.fillRect (zeroX, cy - 0.5f, (float) w - zeroX, 1.0f);
+
+            juce::RectangleList<float> wave;
+            for (size_t i = 0; i + 1 < columnAt.size(); ++i)
+            {
+                const auto a = columnAt[i];
+                if (a >= end)
+                    break;
+                const auto b = juce::jmax (a + 1, columnAt[i + 1]);
+                const float p = page.peaks->peak (t, a, b);
+                if (p <= 0.0f)
+                    continue;
+                const float hh = juce::jmax (0.5f, p * half);
+                wave.addWithoutMerging ({ (float) (x0 + (int) i), cy - hh, 1.0f, hh * 2.0f });
+            }
+            g.setColour (colour);
+            g.fillRectList (wave);
+
+            // The guard band between this lane and the next.
+            g.setColour (juce::Colour (0xff3d3f42));
+            g.fillRect (0, laneY + laneHt - 3, w, 3);
+        }
+        // The tape's edges.
+        g.setColour (juce::Colour (0xff55585b));
+        g.fillRect (0, top, w, 2);
+        g.fillRect (0, bottom - 2, w, 2);
     }
 
     void paintGrid (juce::Graphics& g, int top, int bottom)
@@ -1442,7 +1889,7 @@ private:
         const int w = getWidth();
         if (page.barsGrid)
         {
-            page.forEachGridLine (tickForX (0.0), tickForX (w), pxPerBeat / Tempo::ticksPerQuarter, [&] (double t, Line kind, int)
+            page.forEachGridLine (juce::jmax (0.0, tickForX (0.0)), tickForX (w), pxPerBeat / Tempo::ticksPerQuarter, [&] (double t, Line kind, int)
             {
                 g.setColour (kind == Line::bar ? lineBar : kind == Line::beat ? lineBeat : lineFine);
                 g.fillRect ((float) xForTick (t), (float) top, 1.0f, (float) (bottom - top));
@@ -1474,7 +1921,7 @@ private:
         g.setFont (ConsoleLookAndFeel::uiFont (11.0f, true));
         if (page.barsGrid)
         {
-            auto bar = tempo.barAt (tickForX (0.0));
+            auto bar = tempo.barAt (juce::jmax (0.0, tickForX (0.0)));
             const double pxPerBar = bar.length * pxPerBeat / Tempo::ticksPerQuarter;
             const int every = pxPerBar >= 40.0 ? 1 : pxPerBar >= 10.0 ? 4 : 16;
             for (int guard = 0; guard < 100000; ++guard)
@@ -2378,10 +2825,162 @@ MidiPage::MidiPage (AudioEngine& e, PluginContext& c)
     addAndMakeVisible (*editorPanel);
     addAndMakeVisible (vScroll);
     vScroll.setAutoHide (false);
+    collapseEditor.setTooltip ("Fold the editor (piano roll) away to give the tracks and the tape the whole page, or open it again");
+    collapseEditor.onClick = [this] { setEditorCollapsed (! editorCollapsed); };
+    collapseEditor.setButtonText (juce::CharPointer_UTF8 ("Hide \xe2\x96\xbe"));
+    addAndMakeVisible (collapseEditor);
     vWatch.moved = [this] (double start) { timeline->scrollY = (int) start; layoutHeaders(); timeline->repaint(); };
     vScroll.addListener (&vWatch);
+
+    tapeH.fill (TapeLanes::defaultHeight);
+    peaks = std::make_unique<TapePeaks> (engine.tape);
+    for (int t = 0; t < Config::numTracks; ++t)
+    {
+        auto* h = tapeHeaders.add (new TapeLaneHeader (engine, t));
+        h->onResize = [this, t] (int height) { setTapeLaneHeight (t, height); };
+        h->onOpenStrip = [this] (const TapeLanes::Feed& f) { if (onOpenStrip) onOpenStrip (f.isReturn, f.index); };
+        h->onToggleAutomation = [this, t] { setTapeAutomationOpen (t, ! tapeAutoOpen[(size_t) t]); };
+        headerHolder.addAndMakeVisible (h);
+        headerHolder.addChildComponent (tapeAutoHeaders.add (new AutoLaneHeader (engine.automation)));
+    }
+
     setWantsKeyboardFocus (true);
     startTimerHz (30);
+}
+
+int MidiPage::midiBlockH() const
+{
+    const auto slots = midi.usedSlots();
+    int h = juce::jmax (1, slots.size()) * laneH;
+    for (int k : slots)
+        if (midiAutoOpen[(size_t) k])
+            h += AutoLaneHeader::height;
+    return h;
+}
+
+int MidiPage::midiRowTop (int row) const
+{
+    const auto slots = midi.usedSlots();
+    int y = midiTop();
+    for (int i = 0; i < row && i < slots.size(); ++i)
+        y += laneH + (midiAutoOpen[(size_t) slots[i]] ? AutoLaneHeader::height : 0);
+    return y;
+}
+
+int MidiPage::stripOfTape (int track) const
+{
+    return TapeLanes::automationStrip (TapeLanes::feedOf (engine, track));
+}
+
+int MidiPage::stripOfMidi (int slot) const
+{
+    const auto route = engine.getInstrumentRoute (slot);
+    if (route.kind == Midi::Route::input)
+        return Automation::stripIndex (false, route.first);
+    if (route.kind == Midi::Route::tape)
+        return stripOfTape (route.first);
+    return -1;
+}
+
+std::vector<MidiPage::AutoRow> MidiPage::autoRows() const
+{
+    std::vector<AutoRow> rows;
+    const auto add = [&rows] (int y, int strip)
+    {
+        for (int t = 0; t < Automation::numTargets; ++t)
+            rows.push_back ({ y + t * AutoLaneHeader::rowH, strip, (Automation::Target) t });
+    };
+    for (int t = 0; t < Config::numTracks; ++t)
+        if (tapeAutoOpen[(size_t) t])
+            add (tapeLaneTop (t) + tapeH[(size_t) t], stripOfTape (t));
+    const auto slots = midi.usedSlots();
+    for (int i = 0; i < slots.size(); ++i)
+        if (midiAutoOpen[(size_t) slots[i]])
+            add (midiRowTop (i) + laneH, stripOfMidi (slots[i]));
+    return rows;
+}
+
+void MidiPage::setTapeAutomationOpen (int track, bool open)
+{
+    tapeAutoOpen[(size_t) track] = open;
+    tapeHeaders[track]->setAutomationOpen (open);
+    layoutHeaders();
+    timeline->repaint();
+}
+
+void MidiPage::setMidiAutomationOpen (int slot, bool open)
+{
+    midiAutoOpen[(size_t) slot] = open;
+    for (auto* h : headers)
+        h->refresh();
+    layoutHeaders();
+    timeline->repaint();
+}
+
+int MidiPage::tapeBlockH() const
+{
+    int h = 0;
+    for (int t = 0; t < Config::numTracks; ++t)
+        h += tapeH[(size_t) t] + (tapeAutoOpen[(size_t) t] ? AutoLaneHeader::height : 0);
+    return h;
+}
+
+int MidiPage::tapeLaneTop (int track) const
+{
+    int y = tapeTop();
+    for (int t = 0; t < track; ++t)
+        y += tapeH[(size_t) t] + (tapeAutoOpen[(size_t) t] ? AutoLaneHeader::height : 0);
+    return y;
+}
+
+int MidiPage::midiRowAt (double y) const
+{
+    const auto slots = midi.usedSlots();
+    for (int i = 0; i < slots.size(); ++i)
+    {
+        const int top = midiRowTop (i);
+        if (y >= top && y < top + laneH)
+            return i;
+    }
+    return -1;
+}
+
+int MidiPage::tapeLaneAt (double y) const
+{
+    double top = tapeTop();
+    if (y < top)
+        return -1;
+    for (int t = 0; t < Config::numTracks; ++t)
+    {
+        top += tapeH[(size_t) t] + (tapeAutoOpen[(size_t) t] ? AutoLaneHeader::height : 0);
+        if (y < top)
+            return t;
+    }
+    return -1;
+}
+
+void MidiPage::setTapeLaneHeight (int track, int h)
+{
+    tapeH[(size_t) track] = juce::jlimit (TapeLanes::minHeight, TapeLanes::maxHeight, h);
+    layoutHeaders();
+    timeline->repaint();
+}
+
+void MidiPage::setMidiOnTop (bool onTop)
+{
+    midiOnTop = onTop;
+    layoutHeaders();
+    refreshAll();
+}
+
+void MidiPage::setScrollLock (bool on)
+{
+    scrollLock = on;
+    if (! on)
+        timeline->scrollBeats = juce::jmax (0.0, timeline->scrollBeats);   // free scrolling starts at the tape's start at most
+    timeline->follow();
+    timeline->updateScroll();
+    timeline->repaint();
 }
 
 void MidiPage::zoomLanes (int direction)
@@ -2391,6 +2990,9 @@ void MidiPage::zoomLanes (int direction)
     while (i < 5 && heights[i] < laneH)
         ++i;
     laneH = heights[juce::jlimit (0, 5, i + direction)];
+    // The tape lanes grow and shrink with them, each keeping its own size against the others.
+    for (auto& h : tapeH)
+        h = juce::jlimit (TapeLanes::minHeight, TapeLanes::maxHeight, juce::roundToInt (h * (direction > 0 ? 1.25 : 0.8)));
     layoutHeaders();
     refreshAll();
 }
@@ -2422,8 +3024,12 @@ void MidiPage::rebuildHeaders()
 {
     shownSlots = midi.usedSlots();
     headers.clear();
+    midiAutoHeaders.clear();
     for (int k : shownSlots)
+    {
         headerHolder.addAndMakeVisible (headers.add (new TrackHeader (*this, k)));
+        headerHolder.addChildComponent (midiAutoHeaders.add (new AutoLaneHeader (engine.automation)));
+    }
     if (! midi.isUsed (selectedTrack))
     {
         selectedTrack = shownSlots.isEmpty() ? -1 : shownSlots.getFirst();
@@ -2435,22 +3041,65 @@ void MidiPage::rebuildHeaders()
 void MidiPage::layoutHeaders()
 {
     const int lanesH = timeline->areaHeight() - rulerH;
-    const int total = headers.size() * laneH;
+    const int total = contentH();
+    timeline->scrollY = juce::jlimit (0, juce::jmax (0, total - lanesH), timeline->scrollY);
     vScroll.setRangeLimits (0.0, juce::jmax (total, lanesH), juce::dontSendNotification);
     vScroll.setCurrentRange (timeline->scrollY, lanesH, juce::dontSendNotification);
-    timeline->scrollY = juce::jlimit (0, juce::jmax (0, total - lanesH), timeline->scrollY);
+    // The holder starts under the ruler, so scrolled headers never cover its corner.
+    const int top = midiTop() - timeline->scrollY;
+    juce::ignoreUnused (top);
     for (int i = 0; i < headers.size(); ++i)
-        headers[i]->setBounds (0, rulerH + i * laneH - timeline->scrollY, headerW, laneH);
+    {
+        const int y = midiRowTop (i) - timeline->scrollY;
+        headers[i]->setBounds (0, y, headerW, laneH);
+        const bool open = midiAutoOpen[(size_t) headers[i]->slot];
+        midiAutoHeaders[i]->setVisible (open);
+        midiAutoHeaders[i]->setBounds (0, y + laneH, headerW, AutoLaneHeader::height);
+    }
+    for (int t = 0; t < tapeHeaders.size(); ++t)
+    {
+        const int y = tapeLaneTop (t) - timeline->scrollY;
+        tapeHeaders[t]->setBounds (0, y, headerW, tapeH[(size_t) t]);
+        tapeAutoHeaders[t]->setVisible (tapeAutoOpen[(size_t) t]);
+        tapeAutoHeaders[t]->setBounds (0, y + tapeH[(size_t) t], headerW, AutoLaneHeader::height);
+    }
+    refreshAutoHeaders();
+}
+
+void MidiPage::refreshAutoHeaders()
+{
+    const auto stripName = [this] (int strip)
+    {
+        if (strip < 0)
+            return juce::String();
+        auto* s = strip < Config::numInputStrips ? engine.inputStrips[strip] : engine.returnStrips[strip - Config::numInputStrips];
+        return s != nullptr ? s->name : juce::String();
+    };
+    for (int t = 0; t < tapeAutoHeaders.size(); ++t)
+        if (tapeAutoOpen[(size_t) t])
+            tapeAutoHeaders[t]->setStrip (stripOfTape (t), stripName (stripOfTape (t)));
+    for (int i = 0; i < midiAutoHeaders.size(); ++i)
+    {
+        const int slot = headers[i]->slot;
+        if (midiAutoOpen[(size_t) slot])
+            midiAutoHeaders[i]->setStrip (stripOfMidi (slot), stripName (stripOfMidi (slot)));
+    }
 }
 
 void MidiPage::resized()
 {
     auto r = getLocalBounds();
     toolbar->setBounds (r.removeFromTop (toolbarH));
-    auto bottom = r.removeFromBottom (juce::jmin (editorH, r.getHeight() / 2));
-    editorPanel->setBounds (bottom.removeFromLeft (headerW));
-    roll->setBounds (bottom.withTrimmedTop (2));
-    headerHolder.setBounds (r.removeFromLeft (headerW));
+    auto bottom = r.removeFromBottom (editorCollapsed ? collapsedEditorH : juce::jmin (editorH, r.getHeight() / 2));
+    editorTop = bottom.getY();
+    // The fold button sits at the right of the editor's title line (or alone on the folded bar).
+    collapseEditor.setBounds (headerW - 104, editorTop + 4, 96, 20);
+    if (! editorCollapsed)
+    {
+        editorPanel->setBounds (bottom.removeFromLeft (headerW));
+        roll->setBounds (bottom.withTrimmedTop (2));
+    }
+    headerHolder.setBounds (r.removeFromLeft (headerW).withTrimmedTop (rulerH).withTrimmedBottom (26));   // beside the lanes only
     vScroll.setBounds (r.removeFromRight (14));
     timeline->setBounds (r);
     layoutHeaders();
@@ -2469,7 +3118,24 @@ void MidiPage::paint (juce::Graphics& g)
     g.drawText (juce::String (midi.usedSlots().size()) + " / " + juce::String (Config::numMidiTracks),
                 juce::Rectangle<int> (12, toolbarH, headerW - 24, rulerH), juce::Justification::centredRight, false);
     g.setColour (juce::Colour (0xff111111));
-    g.fillRect (0, roll->getY() - 2, getWidth(), 2);
+    g.fillRect (0, editorTop, getWidth(), 2);
+    if (editorCollapsed)
+    {
+        g.setColour (textDim);
+        g.setFont (ConsoleLookAndFeel::uiFont (11.0f, true));
+        g.drawText ("EDITOR (PIANO ROLL)", juce::Rectangle<int> (12, editorTop + 2, headerW - 120, collapsedEditorH - 2), juce::Justification::centredLeft, false);
+    }
+}
+
+void MidiPage::setEditorCollapsed (bool collapsed)
+{
+    editorCollapsed = collapsed;
+    collapseEditor.setButtonText (juce::CharPointer_UTF8 (collapsed ? "Editor \xe2\x96\xb4" : "Hide \xe2\x96\xbe"));
+    roll->setVisible (! collapsed);
+    editorPanel->setVisible (! collapsed);
+    collapseEditor.toFront (false);
+    resized();
+    repaint();
 }
 
 bool MidiPage::keyPressed (const juce::KeyPress& k)
@@ -2482,6 +3148,13 @@ void MidiPage::timerCallback()
     if (! isShowing())
         return;
     toolbar->update();
+    peaks->update();
+    if (++headerTick % 3 == 0)   // the tape lanes' channels (patch, names, colours): 10 times a second
+    {
+        for (auto* h : tapeHeaders)
+            h->refresh();
+        refreshAutoHeaders();
+    }
     if (midi.usedSlots() != shownSlots)
     {
         rebuildHeaders();

@@ -5,7 +5,7 @@
 
 /** The tape machine's meter section, after a 1980s cassette multitrack: for each track a number tab,
     a 15-LED peak bar from -20 to +6 (the input on a track armed red, the tape otherwise), a record LED and a record function switch (arms the track).
-    Two rows of eight: tracks 1-8 above 9-16. Drawn at a fixed design size and scaled to its bounds.
+    Two rows of eight: tracks 1-8 above 9-16, each with a row of ARA slots under it. Drawn at a fixed design size and scaled to its bounds.
     The right-hand part of the Tape machine window.
 
     Meter 0 = -14 dBFS (+4 dBu with 0 dBFS = +18 dBu, as the preamps are calibrated), so +6 = -8 dBFS. */
@@ -16,7 +16,9 @@ class MeterBridge : public juce::Component,
 public:
     explicit MeterBridge (TapeMachine&);
 
-    static constexpr int designW = 572, designH = 690;
+    static constexpr int designW = 572, slotRowH = 30, designH = 690 + 2 * slotRowH;
+    /** Where a track's ARA slot goes (design coordinates): under its meter, in a row between the frames. */
+    static juce::Rectangle<int> slotBounds (int track);
     static constexpr float referenceDbfs = -14.0f;
 
     void paint (juce::Graphics&) override;
